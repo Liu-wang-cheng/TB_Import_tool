@@ -11,7 +11,8 @@ from gui.qt_compat import QThread, pyqtSignal
 logger = logging.getLogger(__name__)
 
 
-def _generate_updater_bat(current_dir: str, new_dir: str, pid: int) -> str:
+def _generate_updater_bat(current_dir: str, new_dir: str, pid: int,
+                          extract_dir: str = "") -> str:
     """生成目录模式的更新 bat：等进程退出 → 复制新文件 → 重启"""
     exe_name = None
     for f in os.listdir(current_dir):
@@ -21,6 +22,7 @@ def _generate_updater_bat(current_dir: str, new_dir: str, pid: int) -> str:
     if not exe_name:
         exe_name = "智能缺陷管理平台.exe"
 
+    cleanup_dir = extract_dir if extract_dir else new_dir
     return f"""@echo off
 chcp 65001 >nul 2>&1
 title 正在更新 智能缺陷管理平台
@@ -65,7 +67,7 @@ start "" "{current_dir}\\{exe_name}"
 
 :cleanup
 REM 清理临时目录
-if exist "{new_dir}" rmdir /s /q "{new_dir}"
+if exist "{cleanup_dir}" rmdir /s /q "{cleanup_dir}"
 (goto) 2>nul & del /f /q "%~f0"
 """
 
@@ -531,7 +533,8 @@ class UpdateDownloadWorker(QThread):
 
                 # 生成替换 bat：覆盖整个目录
                 new_dir = os.path.dirname(new_exe)
-                bat_content = _generate_updater_bat(exe_dir, new_dir, os.getpid())
+                bat_content = _generate_updater_bat(exe_dir, new_dir, os.getpid(),
+                                                    extract_dir=extract_dir)
                 bat_path = os.path.join(exe_dir, "_update_replace.bat")
                 with open(bat_path, "w", encoding="utf-8") as f:
                     f.write(bat_content)

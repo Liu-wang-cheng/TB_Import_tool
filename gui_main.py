@@ -158,6 +158,19 @@ def _install_excepthook():
     sys.excepthook = _hook
 
 
+def _cleanup_update_temp():
+    """清理上次更新残留的临时目录和 bat 脚本"""
+    app_dir = _get_app_dir()
+    for name in ("_update_extracted", "_update_replace.bat", "_update_download.zip"):
+        path = os.path.join(app_dir, name)
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+            logging.info("已清理更新残留目录: %s", name)
+        elif os.path.isfile(path):
+            os.remove(path)
+            logging.info("已清理更新残留文件: %s", name)
+
+
 def main():
     # 先装日志，确保后续异常 / 启动信息都能落盘
     _setup_file_logging()
@@ -171,6 +184,8 @@ def main():
         _ensure_external_configs()
         _ensure_external_qss()
         _ensure_external_data()
+        # 清理上次更新残留的临时目录
+        _cleanup_update_temp()
 
     app = QApplication(sys.argv)
     app.setApplicationName("智能缺陷管理平台")
