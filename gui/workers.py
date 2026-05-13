@@ -13,7 +13,11 @@ logger = logging.getLogger(__name__)
 
 def _generate_updater_bat(current_dir: str, new_dir: str, pid: int,
                           extract_dir: str = "") -> str:
-    """生成目录模式的更新 bat：等进程退出 → 复制新文件 → 重启"""
+    """生成目录模式的更新 bat：等进程退出 → 只更新 _internal/ 和 exe → 重启
+
+    只替换程序文件（exe + _internal/），不碰用户数据（configs/、data/、logs/）。
+    用户数据通过 _ensure_external_*() 函数在启动时按需补充。
+    """
     exe_name = None
     for f in os.listdir(current_dir):
         if f.endswith('.exe'):
@@ -49,29 +53,34 @@ if %errorlevel% equ 0 (
 echo [OK] 原进程已退出
 echo.
 
-REM 复制新文件覆盖旧文件（robocopy 支持重试）
-echo 正在更新文件...
-robocopy "{new_dir}" "{current_dir}" /e /is /r:3 /w:1 /njh /njs /ndl /nc /ns >nul
+REM 更新 _internal 目录（程序运行时 + 内置资源 + VERSION）
+echo 正在更新程序文件...
+robocopy "{new_dir}\\_internal" "{current_dir}\\_internal" /e /r:3 /w:1 /njh /njs /ndl /nc /ns >nul
 if %errorlevel% geq 8 (
-    echo [ERROR] 文件更新失败
+    echo [ERROR] _internal 更新失败
     pause
     goto :cleanup
 )
+echo [OK] _internal 更新成功
 
-REM 验证关键文件已更新
-if not exist "{current_dir}\\_internal\\VERSION" (
-    echo [WARN] _internal\\VERSION 不存在，跳过验证
-    goto :start_app
-)
-findstr /r "^[0-9]" "{current_dir}\\_internal\\VERSION" >nul 2>&1
+REM 更新 exe
+copy /y "{new_dir}\\{exe_name}" "{current_dir}\\{exe_name}" >nul
 if %errorlevel% neq 0 (
-    echo [WARN] VERSION 文件内容异常，跳过验证
-    goto :start_app
+    echo [ERROR] exe 更新失败
+    pause
+    goto :cleanup
 )
-echo [OK] 文件更新成功
+echo [OK] exe 更新成功
 echo.
 
-:start_app
+REM 验证版本号
+findstr /r "^[0-9]" "{current_dir}\\_internal\\VERSION" >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [OK] 更新完成
+) else (
+    echo [WARN] VERSION 文件异常，但更新已执行
+)
+echo.
 
 REM 启动新版本
 echo 正在启动新版本...
