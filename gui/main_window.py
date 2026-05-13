@@ -1142,6 +1142,7 @@ class MainWindow(QMainWindow):
 
     def _start_download_update(self, version_info, best_mirror, sorted_mirrors):
         """开始下载更新"""
+        self._set_busy(True)
         self.status_label.setText("正在下载更新...")
         self.progress_bar.setRange(0, 0)
 
@@ -1170,12 +1171,15 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
         self._update_worker = None
+        self._set_busy(False)
         self._update_bat_path = bat_path
 
         reply = QMessageBox.information(
             self, "下载完成",
             "新版本已下载并校验通过。\n"
-            "点击「确定」将重启应用以完成更新。",
+            "点击「确定」将重启应用以完成更新。\n\n"
+            "提示：如果重启后报 DLL 加载失败，请将本程序\n"
+            "加入杀毒软件白名单后重试。",
             QMessageBox.Ok | QMessageBox.Cancel,
             QMessageBox.Ok,
         )
@@ -1184,6 +1188,7 @@ class MainWindow(QMainWindow):
 
     def _on_update_download_error(self, msg, detail):
         self._update_worker = None
+        self._set_busy(False)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("%p%")
