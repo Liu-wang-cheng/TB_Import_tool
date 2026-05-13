@@ -1,8 +1,8 @@
 {
   "version": "1.5",
-  "sha256": "42434d07e7c4e1adc4f60e8c6c1468b96e7207861c07ad0b8df1a6782ffd5999",
+  "sha256": "c8ea5a14ebda51483fba803b8de085af87ba66be2cb52f315f45f33290bea25f",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.5/SmartDefectPlatform.exe",
   "release_date": "2026-05-13",
-  "release_notes": "v1.5 测试版本：验证OTA自动更新功能",
+  "release_notes": "v1.5 更新：修复OTA自动更新配置同步；下载更新时禁用操作按钮防止误操作；增加杀毒白名单提示",
   "min_version": "1.0"
 }
