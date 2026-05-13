@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from urllib.parse import quote
 import time
 
 import requests
@@ -115,7 +116,7 @@ def upload_asset(repo: str, token: str, release_id: int,
     with open(filepath, "rb") as f:
         r = requests.post(
             f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets"
-            f"?name={asset_name}",
+            f"?name={quote(asset_name)}",
             headers=upload_headers,
             data=f,
         )
