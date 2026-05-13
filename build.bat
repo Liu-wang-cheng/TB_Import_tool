@@ -4,10 +4,9 @@ title Build ^& Release
 REM 从 VERSION 文件读取版本号（唯一版本源）
 set /p VERSION=<VERSION
 set EXE_NAME=智能缺陷管理平台
-set RELEASE_EXE_NAME=智能缺陷管理平台.exe
 
 echo ============================================
-echo   Build %EXE_NAME%.exe
+echo   Build %EXE_NAME% (onedir mode)
 echo ============================================
 echo.
 
@@ -74,10 +73,21 @@ if %BUILD_RESULT% neq 0 (
 echo.
 echo ============================================
 echo   Build success!
-echo   Output: dist\%EXE_NAME%.exe
+echo   Output: dist\%EXE_NAME%\
 echo ============================================
 echo.
-dir "dist\%EXE_NAME%.exe" 2>nul
+dir "dist\%EXE_NAME%\%EXE_NAME%.exe" 2>nul
+echo.
+
+REM Zip the onedir output
+echo [ZIP] Creating release package...
+if exist "dist\%EXE_NAME%.zip" del "dist\%EXE_NAME%.zip"
+powershell -Command "Compress-Archive -Path 'dist\%EXE_NAME%\*' -DestinationPath 'dist\%EXE_NAME%.zip' -Force"
+if %errorlevel% neq 0 (
+    echo [ERROR] Zip failed
+    goto :fail
+)
+echo [OK] Created dist\%EXE_NAME%.zip
 echo.
 
 REM Auto Release to GitHub Release
@@ -87,7 +97,7 @@ echo   Auto Release to GitHub
 echo ============================================
 echo.
 
-python release.py %VERSION% "%EXE_NAME%.exe" "%RELEASE_EXE_NAME%"
+python release.py %VERSION% "dist\%EXE_NAME%.zip" "SmartDefectPlatform.zip"
 if %errorlevel% neq 0 (
     echo.
     echo [WARN] Release failed. Files are ready in dist\
