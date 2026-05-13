@@ -51,4 +51,4 @@ python tools/query_ids.py
 
 ## 版本历史
 
-详见 [Releases](https://github.com/Liu-wang-cheng/Auto_test/releases)
+详见 [Releases](https://github.com/Liu-wang-cheng/TB_Import_tool/releases)
