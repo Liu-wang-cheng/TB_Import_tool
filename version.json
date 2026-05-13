@@ -1,9 +1,8 @@
 {
   "version": "1.5",
-  "sha256": "55ac8c54bddc5403ba4eecebee8a610c10bba6a0851682f679b4d07c9eee7b10",
+  "sha256": "dcb0aa981e73890105ea426b5e8673c0b48b249410542bb2cede1f058c22e144",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.5/SmartDefectPlatform.zip",
   "release_date": "2026-05-13",
-  "release_notes": "v1.5 目录模式：彻底解决DLL加载失败问题；修复OTA自动更新",
-  "min_version": "1.0",
-  "packaging": "zip"
+  "release_notes": "v1.5 release",
+  "min_version": "1.0"
 }
