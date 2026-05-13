@@ -51,15 +51,27 @@ echo.
 
 REM 复制新文件覆盖旧文件（robocopy 支持重试）
 echo 正在更新文件...
-robocopy "{new_dir}" "{current_dir}" /e /xo /r:3 /w:1 /njh /njs /ndl /nc /ns >nul
+robocopy "{new_dir}" "{current_dir}" /e /is /r:3 /w:1 /njh /njs /ndl /nc /ns >nul
 if %errorlevel% geq 8 (
     echo [ERROR] 文件更新失败
     pause
     goto :cleanup
 )
 
+REM 验证关键文件已更新
+if not exist "{current_dir}\\_internal\\VERSION" (
+    echo [WARN] _internal\\VERSION 不存在，跳过验证
+    goto :start_app
+)
+findstr /r "^[0-9]" "{current_dir}\\_internal\\VERSION" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [WARN] VERSION 文件内容异常，跳过验证
+    goto :start_app
+)
 echo [OK] 文件更新成功
 echo.
+
+:start_app
 
 REM 启动新版本
 echo 正在启动新版本...
