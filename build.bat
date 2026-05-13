@@ -3,8 +3,8 @@ title Build ^& Release
 
 REM 从 VERSION 文件读取版本号（唯一版本源）
 set /p VERSION=<VERSION
-set EXE_NAME=TB导入工具v%VERSION%
-set RELEASE_EXE_NAME=TB_Import_Tool_v%VERSION%.exe
+set EXE_NAME=智能缺陷管理平台
+set RELEASE_EXE_NAME=智能缺陷管理平台.exe
 
 echo ============================================
 echo   Build %EXE_NAME%.exe

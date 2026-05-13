@@ -9,7 +9,7 @@ block_cipher = None
 _version_file = os.path.join(SPECPATH, 'VERSION')
 with open(_version_file, 'r') as _f:
     VERSION = _f.read().strip()
-EXE_NAME = f'TB导入工具v{VERSION}'
+EXE_NAME = '智能缺陷管理平台'
 
 # 收集 data/ 目录下的 TF-IDF 训练模型（如果存在）
 extra_datas = []

@@ -2,7 +2,7 @@
 
 用法：
     python release.py <version> <exe_filename> <release_exe_name>
-    python release.py 1.4 "TB导入工具v1.4.exe" "TB_Import_Tool_v1.4.exe"
+    python release.py 1.4 "智能缺陷管理平台.exe" "智能缺陷管理平台.exe"
 
 或由 build.bat 自动调用。
 
@@ -126,7 +126,7 @@ def upload_asset(repo: str, token: str, release_id: int,
 def update_version_json(repo: str, token: str, version: str,
                         sha256: str, download_url: str, notes: str):
     """克隆仓库 → 更新 version.json + README.md → 推送"""
-    version_file_path = "TB_Import_tool/version.json"
+    version_file_path = "version.json"
     readme_src = os.path.join(os.path.dirname(__file__), "README.md")
     version_data = {
         "version": version,
@@ -195,7 +195,7 @@ def update_version_json(repo: str, token: str, version: str,
 def main():
     if len(sys.argv) < 4:
         print("用法: python release.py <version> <exe_filename> <release_exe_name>")
-        print('示例: python release.py 1.4 "TB导入工具v1.4.exe" "TB_Import_Tool_v1.4.exe"')
+        print('示例: python release.py 1.4 "智能缺陷管理平台.exe" "智能缺陷管理平台.exe"')
         sys.exit(1)
 
     version = sys.argv[1]
