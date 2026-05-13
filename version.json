@@ -1,0 +1,8 @@
+{
+  "version": "1.4",
+  "sha256": "f4e7c2c2e9425d6e840a3f39f6539b7ef3caf80a874c30b661bc911cbf86f8e5",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.4/default.exe",
+  "release_date": "2026-05-13",
+  "release_notes": "v1.4 更新：添加自定义应用图标，exe和窗口标题栏显示蓝色盾牌同步图标；重命名为智能缺陷管理平台；新增Git协作教程和使用教程",
+  "min_version": "1.0"
+}
