@@ -145,40 +145,12 @@
 
 <div class="step">
   <span class="step-num">1</span>
-  <span class="step-head">获取工具</span>
+  <span class="step-head">启动程序</span>
   <div class="step-desc">
-    <p>有两种方式获取工具：</p>
-    <p><strong>方式一：直接使用 exe</strong>（推荐新手）</p>
-    <p>从 <a href="https://github.com/Liu-wang-cheng/TB_Import_tool/releases" style="color:var(--primary)">Releases 页面</a> 下载最新版 <code>智能缺陷管理平台.exe</code>，双击即可运行，无需安装 Python。</p>
-
-    <p style="margin-top:16px"><strong>方式二：从源码运行</strong></p>
-    <div class="code-block">
-      <span class="comment"># 1. 克隆代码</span><br>
-      <span class="prompt">$</span> git clone https://github.com/Liu-wang-cheng/TB_Import_tool.git<br>
-      <span class="prompt">$</span> cd TB_Import_tool<br><br>
-      <span class="comment"># 2. 安装依赖</span><br>
-      <span class="prompt">$</span> pip install -r requirements.txt<br><br>
-      <span class="comment"># 3. 启动界面</span><br>
-      <span class="prompt">$</span> python gui_main.py
+    <p>双击 <code>智能缺陷管理平台.exe</code> 启动程序。首次启动后，直接在界面上填写配置即可，所有设置会自动保存。</p>
+    <div class="note">
+      <strong>无需额外安装：</strong>程序是独立 exe，不需要安装 Python 或其他依赖。所有配置在界面填写后自动保存到 <code>configs/</code> 目录，下次打开自动加载。
     </div>
-  </div>
-</div>
-
-<div class="step">
-  <span class="step-num">2</span>
-  <span class="step-head">准备配置文件</span>
-  <div class="step-desc">
-    <p>首次使用需要创建配置文件。项目已提供模板，只需复制并填写：</p>
-    <div class="code-block">
-      <span class="comment"># 进入 configs 目录，复制模板</span><br>
-      <span class="prompt">$</span> cd configs<br>
-      <span class="prompt">$</span> copy zentao.yaml.example zentao.yaml<span class="comment">    # 禅道配置</span><br>
-      <span class="prompt">$</span> copy teambition.yaml.example teambition.yaml<span class="comment"> # TB配置</span><br>
-      <span class="prompt">$</span> copy dingtalk.yaml.example dingtalk.yaml<span class="comment">   # 钉钉（可选）</span><br>
-      <span class="prompt">$</span> copy classifier.yaml.example classifier.yaml<span class="comment"> # 分类器（可选）</span><br>
-      <span class="prompt">$</span> copy source.yaml.example source.yaml<span class="comment">     # 平台选择</span>
-    </div>
-    <p>如果使用 exe，启动后在界面上直接填写配置即可，无需手动创建文件。</p>
   </div>
 </div>
 
