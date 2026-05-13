@@ -49,10 +49,10 @@ if %errorlevel% equ 0 (
 echo [OK] 原进程已退出
 echo.
 
-REM 复制新文件覆盖旧文件
+REM 复制新文件覆盖旧文件（robocopy 支持重试）
 echo 正在更新文件...
-xcopy /e /y /q "{new_dir}\\*" "{current_dir}\\"
-if %errorlevel% neq 0 (
+robocopy "{new_dir}" "{current_dir}" /e /xo /r:3 /w:1 /njh /njs /ndl /nc /ns >nul
+if %errorlevel% geq 8 (
     echo [ERROR] 文件更新失败
     pause
     goto :cleanup
@@ -395,9 +395,14 @@ class UpdateCheckWorker(QThread):
                     "download_prefix": m.get("download_prefix", ""),
                 })
             if not resolved:
-                resolved = list(DEFAULT_MIRRORS)
-                for m in resolved:
-                    m["base_url"] = m["base_url"].replace("{repo}", repo)
+                resolved = [
+                    {
+                        "name": m.get("name", ""),
+                        "base_url": m.get("base_url", "").replace("{repo}", repo),
+                        "download_prefix": m.get("download_prefix", ""),
+                    }
+                    for m in DEFAULT_MIRRORS
+                ]
 
             self.progress.emit("正在测试镜像速度...")
             results = race_mirrors(resolved, version_file)

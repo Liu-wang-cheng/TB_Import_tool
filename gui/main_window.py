@@ -101,8 +101,10 @@ class MainWindow(QMainWindow):
         self._worker = None
         self._log_handler = None
         self._module_thread = None
-        self._update_worker = None
+        self._update_check_worker = None
+        self._update_download_worker = None
         self._update_bat_path = None
+        self._manual_check_pending = False
         # 必须在 _build_ui 之前初始化，_on_platform_changed 会读取此值
         self._last_platform = None
 
@@ -118,8 +120,10 @@ class MainWindow(QMainWindow):
         """窗口关闭时清理后台线程"""
         if self._module_thread and self._module_thread.isRunning():
             self._module_thread.wait(2000)
-        if self._update_worker and self._update_worker.isRunning():
-            self._update_worker.wait(3000)
+        if self._update_download_worker and self._update_download_worker.isRunning():
+            self._update_download_worker.wait(3000)
+        if self._update_check_worker and self._update_check_worker.isRunning():
+            self._update_check_worker.wait(3000)
         if self._worker and self._worker.isRunning():
             self._worker.wait(3000)
         event.accept()
@@ -1074,41 +1078,62 @@ class MainWindow(QMainWindow):
 
     # ── 自动更新 ──────────────────────────────────────
 
-    def _check_for_updates(self):
+    def _check_for_updates(self, manual=False):
         """后台检查更新（非阻塞）"""
         if self._worker and self._worker.isRunning():
+            if manual:
+                QMessageBox.information(self, "提示", "有任务正在执行，请稍后再检查更新")
             return
-        if self._update_worker and self._update_worker.isRunning():
+        if self._update_download_worker and self._update_download_worker.isRunning():
+            if manual:
+                QMessageBox.information(self, "提示", "正在下载更新，请等待完成")
+            return
+        if self._update_check_worker and self._update_check_worker.isRunning():
+            if manual:
+                self._manual_check_pending = True
+                self.status_label.setText("正在检查更新，请稍候...")
             return
         update_cfg = self.config.get("update", {})
         if not update_cfg.get("enabled", True):
+            if manual:
+                QMessageBox.information(self, "提示", "更新功能已禁用")
             return
         repo = update_cfg.get("repository", "")
         if not repo:
+            if manual:
+                QMessageBox.information(self, "提示", "未配置更新仓库地址")
             return
 
-        self._update_worker = UpdateCheckWorker(self.config, parent=self)
-        self._update_worker.progress.connect(self._on_update_check_progress)
-        self._update_worker.finished.connect(self._on_update_check_result)
-        self._update_worker.error.connect(self._on_update_check_error)
-        self._update_worker.start()
+        self._manual_check_pending = manual
+        self._update_check_worker = UpdateCheckWorker(self.config, parent=self)
+        self._update_check_worker.progress.connect(self._on_update_check_progress)
+        self._update_check_worker.finished.connect(self._on_update_check_result)
+        self._update_check_worker.error.connect(self._on_update_check_error)
+        self._update_check_worker.start()
 
     def _on_update_check_progress(self, msg):
         self.status_label.setText(msg)
 
     def _on_update_check_error(self, msg, detail):
-        logger.warning("更新检查失败: %s", msg)
-        self.status_label.setText("更新检查失败")
-        self._update_worker = None
+        logger.warning("更新检查失败: %s\n%s", msg, detail)
+        self.status_label.setText(f"更新检查失败: {msg}")
+        if self._manual_check_pending:
+            self._manual_check_pending = False
+            QMessageBox.warning(self, "更新检查失败", f"检查更新时出错:\n{msg}")
+        self._update_check_worker = None
 
     def _on_update_check_result(self, result):
         """更新检查完成"""
-        self._update_worker = None
+        self._update_check_worker = None
         msg = result.get("message", "")
         if not result.get("has_update"):
-            if "已是最新" in msg:
+            if self._manual_check_pending:
+                self._manual_check_pending = False
+                QMessageBox.information(self, "检查更新", msg or "未发现新版本")
+            elif "已是最新" in msg:
                 self.status_label.setText(msg)
             return
+        self._manual_check_pending = False
 
         info = result.get("info")
         if not info:
@@ -1146,13 +1171,13 @@ class MainWindow(QMainWindow):
         self.status_label.setText("正在下载更新...")
         self.progress_bar.setRange(0, 0)
 
-        self._update_worker = UpdateDownloadWorker(
+        self._update_download_worker = UpdateDownloadWorker(
             self.config, version_info, best_mirror, sorted_mirrors, parent=self
         )
-        self._update_worker.progress.connect(self._on_update_download_progress)
-        self._update_worker.finished.connect(self._on_update_download_result)
-        self._update_worker.error.connect(self._on_update_download_error)
-        self._update_worker.start()
+        self._update_download_worker.progress.connect(self._on_update_download_progress)
+        self._update_download_worker.finished.connect(self._on_update_download_result)
+        self._update_download_worker.error.connect(self._on_update_download_error)
+        self._update_download_worker.start()
 
     def _on_update_download_progress(self, downloaded, total, speed_msg):
         if total > 0:
@@ -1170,16 +1195,15 @@ class MainWindow(QMainWindow):
         """下载完成，提示重启"""
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
-        self._update_worker = None
+        self.progress_bar.setFormat("%p%")
+        self._update_download_worker = None
         self._set_busy(False)
         self._update_bat_path = bat_path
 
         reply = QMessageBox.information(
             self, "下载完成",
             "新版本已下载并校验通过。\n"
-            "点击「确定」将重启应用以完成更新。\n\n"
-            "提示：如果重启后报 DLL 加载失败，请将本程序\n"
-            "加入杀毒软件白名单后重试。",
+            "点击「确定」将重启应用以完成更新。",
             QMessageBox.Ok | QMessageBox.Cancel,
             QMessageBox.Ok,
         )
@@ -1187,7 +1211,7 @@ class MainWindow(QMainWindow):
             self._apply_update_and_restart()
 
     def _on_update_download_error(self, msg, detail):
-        self._update_worker = None
+        self._update_download_worker = None
         self._set_busy(False)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
@@ -1203,13 +1227,12 @@ class MainWindow(QMainWindow):
             return
 
         subprocess.Popen(
-            f'cmd /c "{bat_path}"',
-            shell=True,
+            [bat_path],
             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
             cwd=os.path.dirname(bat_path),
         )
-        os._exit(0)
+        QApplication.quit()
 
     def _on_manual_check_update(self):
         """手动检查更新"""
-        self._check_for_updates()
+        self._check_for_updates(manual=True)

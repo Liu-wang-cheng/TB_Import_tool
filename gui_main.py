@@ -85,7 +85,7 @@ def _ensure_external_configs():
 
     PyInstaller 打包后 configs/ 是内置只读资源。
     首次运行时自动释放到 exe 同级目录，供 GUI 修改保存。
-    已存在时，补充缺失的配置文件并同步非敏感配置项。
+    已存在时，只补充缺失的配置文件（不覆盖用户已编辑的文件）。
     """
     app_dir = _get_app_dir()
     ext_configs = os.path.join(app_dir, "configs")
@@ -100,18 +100,15 @@ def _ensure_external_configs():
         logging.info("已释放配置文件到: %s", ext_configs)
         return
 
-    # 已有外部 configs：补充缺失文件 + 同步非敏感配置
-    _SYNC_FILES = ("update.yaml", "source.yaml", "jira.yaml")
-    for fname in _SYNC_FILES:
+    # 已有外部 configs：只补充缺失的文件（不覆盖已有文件，保护用户编辑）
+    for fname in os.listdir(int_configs):
+        if not fname.endswith(('.yaml', '.yml')):
+            continue
         int_path = os.path.join(int_configs, fname)
         ext_path = os.path.join(ext_configs, fname)
-        if os.path.isfile(int_path):
-            if not os.path.isfile(ext_path):
-                shutil.copy2(int_path, ext_path)
-                logging.info("已补充缺失配置: %s", fname)
-            else:
-                shutil.copy2(int_path, ext_path)
-                logging.info("已同步配置: %s", fname)
+        if os.path.isfile(int_path) and not os.path.isfile(ext_path):
+            shutil.copy2(int_path, ext_path)
+            logging.info("已补充缺失配置: %s", fname)
 
 
 def _ensure_external_qss():
@@ -163,12 +160,15 @@ def _cleanup_update_temp():
     app_dir = _get_app_dir()
     for name in ("_update_extracted", "_update_replace.bat", "_update_download.zip"):
         path = os.path.join(app_dir, name)
-        if os.path.isdir(path):
-            shutil.rmtree(path, ignore_errors=True)
-            logging.info("已清理更新残留目录: %s", name)
-        elif os.path.isfile(path):
-            os.remove(path)
-            logging.info("已清理更新残留文件: %s", name)
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+                logging.info("已清理更新残留目录: %s", name)
+            elif os.path.isfile(path):
+                os.remove(path)
+                logging.info("已清理更新残留文件: %s", name)
+        except OSError:
+            pass
 
 
 def main():
