@@ -114,7 +114,7 @@ def build_download_url(release_url: str, download_prefix: str) -> str:
 def _test_one_mirror(mirror: dict, version_file: str,
                      timeout: float = 5.0) -> MirrorResult:
     """测试单个镜像的响应速度"""
-    url = f"{mirror['base_url']}/{version_file}"
+    url = f"{mirror['base_url']}/{version_file}?_t={int(time.time())}"
     prefix = mirror.get("download_prefix", "")
     try:
         t0 = time.monotonic()
@@ -158,10 +158,11 @@ def race_mirrors(mirrors: list, version_file: str,
 def fetch_version_info(sorted_mirrors: List[MirrorResult],
                        version_file: str) -> Optional[Tuple[VersionInfo, MirrorResult]]:
     """按镜像速度顺序尝试获取 version.json。返回 (VersionInfo, MirrorResult) 或 None"""
+    cache_buster = f"?_t={int(time.time())}"
     for mirror in sorted_mirrors:
         if not mirror.success:
             continue
-        url = f"{mirror.base_url}/{version_file}"
+        url = f"{mirror.base_url}/{version_file}{cache_buster}"
         try:
             resp = requests.get(url, timeout=10, allow_redirects=True)
             if resp.status_code == 200:
