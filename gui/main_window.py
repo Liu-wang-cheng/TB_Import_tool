@@ -1227,8 +1227,8 @@ class MainWindow(QMainWindow):
             return
 
         subprocess.Popen(
-            [bat_path],
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            ['cmd', '/c', bat_path],
+            creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
             cwd=os.path.dirname(bat_path),
         )
         QApplication.quit()
