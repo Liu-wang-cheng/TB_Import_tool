@@ -11,6 +11,65 @@ from gui.qt_compat import QThread, pyqtSignal
 logger = logging.getLogger(__name__)
 
 
+def _generate_updater_bat(current_dir: str, new_dir: str, pid: int) -> str:
+    """生成目录模式的更新 bat：等进程退出 → 复制新文件 → 重启"""
+    exe_name = None
+    for f in os.listdir(current_dir):
+        if f.endswith('.exe'):
+            exe_name = f
+            break
+    if not exe_name:
+        exe_name = "智能缺陷管理平台.exe"
+
+    return f"""@echo off
+chcp 65001 >nul 2>&1
+title 正在更新 智能缺陷管理平台
+
+echo ============================================
+echo   正在更新，请勿关闭此窗口
+echo ============================================
+echo.
+
+REM 等待原进程退出（最多 30 秒）
+set WAITED=0
+:wait_loop
+tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
+if %errorlevel% equ 0 (
+    set /a WAITED+=1
+    if %WAITED% geq 30 (
+        echo [ERROR] 原进程未能退出，更新取消
+        goto :cleanup
+    )
+    timeout /t 1 /nobreak >nul
+    goto wait_loop
+)
+
+echo [OK] 原进程已退出
+echo.
+
+REM 复制新文件覆盖旧文件
+echo 正在更新文件...
+xcopy /e /y /q "{new_dir}\\*" "{current_dir}\\"
+if %errorlevel% neq 0 (
+    echo [ERROR] 文件更新失败
+    pause
+    goto :cleanup
+)
+
+echo [OK] 文件更新成功
+echo.
+
+REM 启动新版本
+echo 正在启动新版本...
+start "" "{current_dir}\\{exe_name}"
+
+:cleanup
+REM 清理临时目录
+if exist "{new_dir}" rmdir /s /q "{new_dir}"
+(goto) 2>nul & del /f /q "%~f0"
+"""
+
+
 def _init_clients(config):
     """根据 config 创建源平台和 Teambition 客户端（供 worker 复用）"""
     from src.source_factory import create_source_client
@@ -392,8 +451,9 @@ class UpdateDownloadWorker(QThread):
     def run(self):
         try:
             from gui.updater import (download_exe, verify_sha256,
-                                      generate_updater_bat,
                                       build_download_url)
+            import zipfile
+            import shutil
 
             info = self.version_info
 
@@ -402,8 +462,13 @@ class UpdateDownloadWorker(QThread):
                 return
 
             exe_dir = os.path.dirname(sys.executable)
-            filename = info.download_url.rsplit("/", 1)[-1] if "/" in info.download_url else info.download_url
-            dest_path = os.path.join(exe_dir, filename)
+            is_zip = info.download_url.endswith('.zip')
+
+            if is_zip:
+                dest_path = os.path.join(exe_dir, "_update_download.zip")
+            else:
+                filename = info.download_url.rsplit("/", 1)[-1]
+                dest_path = os.path.join(exe_dir, filename)
 
             # 按镜像速度顺序构建下载 URL 列表
             download_urls = []
@@ -425,7 +490,6 @@ class UpdateDownloadWorker(QThread):
                         dl_url, dest_path,
                         progress_callback=lambda d, t, s: self.progress.emit(d, t, s),
                     )
-                    # 下载成功后立即校验，失败则尝试下一个镜像
                     self.progress.emit(0, 0, "正在校验文件完整性...")
                     if verify_sha256(dest_path, info.sha256):
                         downloaded = True
@@ -442,14 +506,48 @@ class UpdateDownloadWorker(QThread):
                 self.error.emit(f"下载失败: {last_error}", "")
                 return
 
-            # 生成替换 bat
-            pid = os.getpid()
-            bat_content = generate_updater_bat(sys.executable, dest_path, pid)
-            bat_path = os.path.join(exe_dir, "_update_replace.bat")
-            with open(bat_path, "w", encoding="utf-8") as f:
-                f.write(bat_content)
+            if is_zip:
+                # 解压 zip 到临时目录
+                self.progress.emit(0, 0, "正在解压更新包...")
+                extract_dir = os.path.join(exe_dir, "_update_extracted")
+                if os.path.isdir(extract_dir):
+                    shutil.rmtree(extract_dir)
+                with zipfile.ZipFile(dest_path, 'r') as zf:
+                    zf.extractall(extract_dir)
 
-            self.finished.emit(bat_path)
+                # 找到解压后的 exe（可能在子目录中）
+                new_exe = None
+                for root, dirs, files in os.walk(extract_dir):
+                    for f in files:
+                        if f.endswith('.exe'):
+                            new_exe = os.path.join(root, f)
+                            break
+                    if new_exe:
+                        break
+
+                if not new_exe:
+                    self.error.emit("更新包中未找到 exe 文件", "")
+                    return
+
+                # 生成替换 bat：覆盖整个目录
+                new_dir = os.path.dirname(new_exe)
+                bat_content = _generate_updater_bat(exe_dir, new_dir, os.getpid())
+                bat_path = os.path.join(exe_dir, "_update_replace.bat")
+                with open(bat_path, "w", encoding="utf-8") as f:
+                    f.write(bat_content)
+
+                # 清理 zip
+                os.remove(dest_path)
+                self.finished.emit(bat_path)
+            else:
+                # 旧模式：单文件 exe
+                from gui.updater import generate_updater_bat
+                pid = os.getpid()
+                bat_content = generate_updater_bat(sys.executable, dest_path, pid)
+                bat_path = os.path.join(exe_dir, "_update_replace.bat")
+                with open(bat_path, "w", encoding="utf-8") as f:
+                    f.write(bat_content)
+                self.finished.emit(bat_path)
         except Exception as e:
             logger.exception("下载更新失败")
             self.error.emit(str(e), traceback.format_exc())
