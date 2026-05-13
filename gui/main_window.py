@@ -11,7 +11,7 @@ from gui.qt_compat import (  # noqa: F401
     QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton,
     QSpinBox, QStatusBar, QTextEdit, QVBoxLayout, QWidget, QDialog,
     pyqtSignal, QThread, QDate, Qt, QColor, QFont,
-    exec_dialog, QT_VERSION,
+    exec_dialog, QT_VERSION, QIcon,
 )
 
 from src.config_loader import load_configs
@@ -83,6 +83,11 @@ class MainWindow(QMainWindow):
             _ver = "?"
         self.setWindowTitle(f"智能缺陷管理平台 v{_ver}")
         self.setMinimumSize(780, 550)
+
+        # 设置窗口图标
+        _icon_path = os.path.join(_base, "gui", "resources", "icon.ico")
+        if os.path.exists(_icon_path):
+            self.setWindowIcon(QIcon(_icon_path))
         self.resize(880, 680)
 
         # 窗口居中

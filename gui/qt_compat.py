@@ -6,7 +6,7 @@ QT_VERSION = 5
 
 try:
     from PyQt6.QtCore import pyqtSignal, QThread, QObject, QDate, Qt, QTimer
-    from PyQt6.QtGui import QAction, QColor, QFont
+    from PyQt6.QtGui import QAction, QColor, QFont, QIcon
     from PyQt6.QtWidgets import (  # noqa: F401
         QApplication, QAbstractItemView, QCheckBox, QComboBox,
         QDateEdit, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
@@ -94,7 +94,7 @@ try:
 
 except ImportError:
     from PyQt5.QtCore import pyqtSignal, QThread, QObject, QDate, Qt, QTimer  # noqa: F401
-    from PyQt5.QtGui import QAction, QColor, QFont  # noqa: F401
+    from PyQt5.QtGui import QAction, QColor, QFont, QIcon  # noqa: F401
     from PyQt5.QtWidgets import (  # noqa: F401
         QApplication, QAbstractItemView, QCheckBox, QComboBox,
         QDateEdit, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,

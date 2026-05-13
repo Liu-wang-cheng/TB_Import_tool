@@ -24,6 +24,7 @@ a = Analysis(
     datas=[
         ('configs', 'configs'),
         ('gui/resources/style.qss', 'gui/resources'),
+        ('gui/resources/icon.ico', 'gui/resources'),
         ('VERSION', '.'),
     ] + extra_datas,
     hiddenimports=[
@@ -90,6 +91,7 @@ exe = EXE(
     a.datas,
     [],
     name=EXE_NAME,
+    icon=os.path.join(SPECPATH, 'gui', 'resources', 'icon.ico'),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
