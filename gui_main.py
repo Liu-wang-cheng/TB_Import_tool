@@ -85,20 +85,29 @@ def _ensure_external_configs():
 
     PyInstaller 打包后 configs/ 是内置只读资源。
     首次运行时自动释放到 exe 同级目录，供 GUI 修改保存。
+    已存在时，用内置的 .example 文件补充缺失配置，并同步非敏感配置项。
     """
     app_dir = _get_app_dir()
     ext_configs = os.path.join(app_dir, "configs")
-
-    if os.path.isdir(ext_configs):
-        return
-
-    # 从内置资源复制
     res_dir = _get_resource_dir()
     int_configs = os.path.join(res_dir, "configs")
 
-    if os.path.isdir(int_configs):
+    if not os.path.isdir(int_configs):
+        return
+
+    if not os.path.isdir(ext_configs):
         shutil.copytree(int_configs, ext_configs)
         logging.info("已释放配置文件到: %s", ext_configs)
+        return
+
+    # 已有外部 configs：同步内置的非敏感配置（update.yaml 等）
+    _SYNC_FILES = ("update.yaml",)
+    for fname in _SYNC_FILES:
+        int_path = os.path.join(int_configs, fname)
+        ext_path = os.path.join(ext_configs, fname)
+        if os.path.isfile(int_path):
+            shutil.copy2(int_path, ext_path)
+            logging.info("已同步配置: %s", fname)
 
 
 def _ensure_external_qss():
