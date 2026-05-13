@@ -6,8 +6,10 @@ data/
 
 # 构建产物
 dist/
+dist_v*/
 build/
 *.exe
+*.zip
 *.bak
 
 # 运行产物
@@ -27,6 +29,9 @@ __pycache__/
 # 临时文件
 build.log
 _update_replace.bat
+_update_extracted/
+_update_download.zip
+_run_build.bat
 
 # Claude Code
 .claude/
