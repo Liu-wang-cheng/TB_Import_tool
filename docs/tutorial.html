@@ -293,7 +293,35 @@
     <p style="margin-top:8px; font-size:13px; color:var(--success);">✓ 绿色边框 = 已填写</p>
 
     <div class="tip">
-      <em>快捷方式：</em>直接从浏览器复制禅道的 Bug 列表页地址，粘贴到「禅道Bug页面地址」输入框，点「解析」按钮，会自动填入产品ID和模块信息。
+      <em>推荐方式 — URL 自动解析：</em>打开禅道网站，进入你要同步的 Bug 列表页面，复制浏览器地址栏的 URL，粘贴到界面上的「禅道Bug页面地址」输入框，点「解析」按钮。产品ID、项目ID、模块信息会自动填好，不用手动输入。
+    </div>
+  </div>
+</div>
+
+<!-- Step 1.5: URL解析 -->
+<div class="step">
+  <span class="step-num" style="background:var(--success);">✓</span>
+  <span class="step-head">URL 自动解析（推荐）</span>
+  <div class="step-desc">
+    <p>这是最简单的填写筛选条件的方式，只需要三步：</p>
+    <ol>
+      <li>在浏览器打开禅道，进入你要同步的 Bug 列表页</li>
+      <li>复制浏览器地址栏的 URL</li>
+      <li>粘贴到界面的「禅道Bug页面地址」输入框，点「解析」</li>
+    </ol>
+
+    <div class="gui-group" style="max-width:680px;">
+      <div class="gui-row" style="margin-top:8px;">
+        <span class="gui-label">禅道Bug页面地址:</span>
+        <span class="gui-input wide" style="background:#eef2ff; border-color:var(--primary); font-size:12px;">https://zentao.company.com/zentao/bug-browse-11--byModule-122.html</span>
+        <span class="gui-btn gui-btn-blue" style="padding:4px 12px; font-size:12px;">解析</span>
+      </div>
+    </div>
+
+    <p style="margin-top:8px; color:var(--primary);">→ 自动填入 产品ID=11, 模块ID=122 ✓</p>
+
+    <div class="note">
+      <strong>手动填写也可以：</strong>如果知道产品ID和项目名称，可以直接在筛选条件区域手动填入。但推荐用 URL 解析，不容易出错。
     </div>
   </div>
 </div>
@@ -333,11 +361,11 @@
   <span class="step-num">3</span>
   <span class="step-head">设置筛选条件</span>
   <div class="step-desc">
-    <p>在「筛选条件」区域选择你要同步哪些 Bug：</p>
+    <p>在「筛选条件」区域微调你要同步的 Bug 范围（产品ID 等已通过 URL 解析自动填好）：</p>
 
     <table class="info-table">
       <tr><th>筛选项</th><th>说明</th><th>建议</th></tr>
-      <tr><td>产品ID</td><td>禅道中的产品编号</td><td>从URL解析或手动填入</td></tr>
+      <tr><td>产品ID</td><td>已通过 URL 解析自动填入</td><td>无需手动填写</td></tr>
       <tr><td>项目名称</td><td>禅道项目名称（如 HS341）</td><td>可留空，不限制</td></tr>
       <tr><td>状态</td><td>Bug 状态筛选</td><td><span class="tag tag-red">活跃+已确认</span> 最常用</td></tr>
       <tr><td>指派人</td><td>按处理人筛选</td><td>点「添加」输入姓名，如"IOT-陈斌"</td></tr>
@@ -345,7 +373,7 @@
     </table>
 
     <div class="tip">
-      <em>小技巧：</em>最简单的筛选方式 — 只填产品ID + 状态选「活跃+已确认」，就能获取当前未处理的所有 Bug。
+      <em>最简单的用法：</em>URL 解析填好产品ID后，状态选「活跃+已确认」，其他不用动，直接点「列出Bug」即可。
     </div>
   </div>
 </div>
@@ -452,16 +480,7 @@
 <p>这些配置一般由管理员设置好后通过配置文件分发，普通用户不需要修改。</p>
 
 <h3>URL 自动解析</h3>
-<p>在浏览器打开禅道的 Bug 列表页，复制地址栏的 URL，粘贴到「禅道Bug页面地址」输入框：</p>
-
-<div class="gui-group" style="max-width:680px;">
-  <div class="gui-row" style="margin-top:8px;">
-    <span class="gui-label">禅道Bug页面地址:</span>
-    <span class="gui-input wide" style="background:#eef2ff; border-color:var(--primary); font-size:12px;">https://zentao.company.com/zentao/bug-browse-11--byModule-122.html</span>
-    <span class="gui-btn gui-btn-blue" style="padding:4px 12px; font-size:12px;">解析</span>
-  </div>
-</div>
-<p style="margin-top:8px; font-size:13px; color:var(--primary);">→ 自动填入 产品ID=11, 模块ID=122</p>
+<p>已在上方步骤中详细介绍。打开禅道 Bug 列表页 → 复制 URL → 粘贴到界面 → 点「解析」，产品ID和模块自动填好。</p>
 
 <h3>自动更新</h3>
 <p>工具启动时会自动检测新版本。如果发现新版本，会弹出提示框：</p>
