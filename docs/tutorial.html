@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智能缺陷管理平台 — 使用教程</title>
+<style>
+  :root { --primary: #3742fa; --danger: #e74c3c; --success: #2ed573; --gray: #57606f; --bg: #f5f6fa; --card: #fff; --border: #dcdde1; --text: #2f3542; --muted: #636e72; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "Noto Sans SC", "PingFang SC", sans-serif; background: var(--bg); color: var(--text); line-height: 1.8; }
+  .container { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+
+  h1 { font-size: 2.2em; text-align: center; margin-bottom: 8px; }
+  .subtitle { text-align: center; color: var(--muted); margin-bottom: 48px; font-size: 1.1em; }
+  h2 { font-size: 1.4em; margin: 48px 0 16px; padding: 12px 0 8px; border-bottom: 2px solid var(--primary); display: inline-block; }
+  h3 { font-size: 1.15em; margin: 24px 0 10px; color: var(--text); }
+
+  p, li { margin-bottom: 10px; }
+  ul, ol { padding-left: 24px; margin-bottom: 16px; }
+
+  /* Step number */
+  .step { margin: 36px 0; }
+  .step-num { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; background: var(--primary); color: #fff; border-radius: 50%; font-weight: 700; font-size: 1.1em; margin-right: 10px; vertical-align: middle; }
+  .step-head { font-size: 1.3em; font-weight: 600; vertical-align: middle; }
+  .step-desc { margin: 10px 0 0 46px; }
+
+  /* Tip / Warning boxes */
+  .tip { background: #eef2ff; border-left: 4px solid var(--primary); padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 14px 0; }
+  .tip em { color: var(--primary); font-style: normal; font-weight: 600; }
+  .warn { background: #fff8e1; border-left: 4px solid #ffa502; padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 14px 0; }
+  .warn em { color: #e67e22; font-style: normal; font-weight: 600; }
+  .note { background: #e8f5e9; border-left: 4px solid var(--success); padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 14px 0; }
+
+  /* Code */
+  code { background: #f1f2f6; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; font-family: "Cascadia Code", Consolas, monospace; }
+  .code-block { background: #1e1e2e; color: #cdd6f4; border-radius: 8px; padding: 16px 20px; margin: 12px 0 20px; font-family: "Cascadia Code", Consolas, monospace; font-size: 13.5px; line-height: 1.8; overflow-x: auto; }
+  .code-block .comment { color: #6c7086; }
+  .code-block .prompt { color: #a6e3a1; }
+
+  /* ========== GUI Mockup ========== */
+  .gui-window { background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.08); margin: 16px 0; }
+  .gui-titlebar { background: #2f3542; color: #dfe4ea; padding: 8px 16px; display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  .gui-dots { display: flex; gap: 6px; }
+  .gui-dot { width: 12px; height: 12px; border-radius: 50%; }
+  .gui-dot.r { background: #ff5f57; } .gui-dot.y { background: #febc2e; } .gui-dot.g { background: #28c840; }
+  .gui-title { flex: 1; text-align: center; font-size: 12px; color: #a4b0be; }
+
+  .gui-body { padding: 12px; }
+
+  /* GroupBox mockup */
+  .gui-group { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 10px; position: relative; }
+  .gui-group-title { position: absolute; top: -10px; left: 12px; background: var(--card); padding: 0 6px; font-weight: 600; font-size: 13px; color: var(--text); }
+
+  /* Form row */
+  .gui-row { display: flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 13px; flex-wrap: wrap; }
+  .gui-label { color: var(--text); font-weight: 500; white-space: nowrap; min-width: fit-content; }
+  .gui-input { background: #fff; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-size: 13px; color: var(--text); min-width: 80px; }
+  .gui-input.wide { flex: 1; }
+  .gui-input.ph { color: #a4b0be; }
+  .gui-combo { background: #fff; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-size: 13px; min-width: 80px; }
+
+  /* Buttons */
+  .gui-btn { display: inline-block; padding: 6px 18px; border-radius: 4px; font-size: 13px; font-weight: 500; color: #fff; }
+  .gui-btn-blue { background: var(--primary); }
+  .gui-btn-red { background: var(--danger); }
+  .gui-btn-green { background: var(--success); }
+  .gui-btn-gray { background: var(--gray); }
+  .gui-btn-row { display: flex; gap: 8px; padding: 8px 10px; flex-wrap: wrap; }
+
+  /* Log area */
+  .gui-log { background: #fff; border: 1px solid var(--border); border-radius: 4px; padding: 8px; font-family: Consolas, monospace; font-size: 12px; min-height: 100px; line-height: 1.6; }
+  .log-time { color: #a4b0be; }
+  .log-info { color: var(--primary); }
+  .log-success { color: var(--success); }
+  .log-warn { color: #ffa502; }
+  .log-error { color: var(--danger); }
+
+  /* Progress bar */
+  .gui-progress-track { background: #dfe4ea; border-radius: 4px; height: 18px; position: relative; margin: 4px 10px; }
+  .gui-progress-bar { background: var(--primary); border-radius: 4px; height: 100%; width: 0%; transition: width 0.3s; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; }
+  .gui-progress-bar.p65 { width: 65%; }
+  .gui-progress-bar.p100 { width: 100%; background: var(--success); }
+
+  /* Status bar */
+  .gui-status { background: #fff; border-top: 1px solid var(--border); padding: 4px 12px; font-size: 12px; color: var(--muted); display: flex; justify-content: flex-end; }
+
+  /* Arrow */
+  .arrow { text-align: center; color: var(--muted); font-size: 24px; margin: 8px 0; }
+
+  /* Annotation */
+  .anno { position: relative; }
+  .anno::after { content: attr(data-tip); position: absolute; background: #ff6b6b; color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 3px; white-space: nowrap; pointer-events: none; }
+  .anno.tr::after { top: -8px; right: 10px; }
+  .anno.br::after { bottom: -8px; right: 10px; }
+  .anno.tl::after { top: -8px; left: 10px; }
+
+  /* Tags */
+  .tag { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+  .tag-blue { background: #eef2ff; color: var(--primary); }
+  .tag-green { background: #e8f5e9; color: #2e7d32; }
+  .tag-red { background: #fde8e8; color: #c62828; }
+  .tag-orange { background: #fff3e0; color: #e65100; }
+
+  /* Table */
+  .info-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  .info-table th { background: #f1f2f6; padding: 10px 14px; text-align: left; border: 1px solid var(--border); font-weight: 600; }
+  .info-table td { padding: 10px 14px; border: 1px solid var(--border); }
+
+  /* Flow */
+  .flow-h { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; margin: 24px 0; }
+  .flow-card { background: var(--card); border: 2px solid var(--border); border-radius: 10px; padding: 14px 20px; text-align: center; }
+  .flow-card strong { display: block; }
+  .flow-arrow { color: var(--muted); font-size: 20px; }
+
+  @media (max-width: 640px) {
+    .container { padding: 20px 16px; }
+    .gui-row { font-size: 12px; }
+    .flow-h { flex-direction: column; }
+    .flow-arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>智能缺陷管理平台</h1>
+<p class="subtitle">从安装到同步 — 图文教程</p>
+
+<!-- ===== 整体流程 ===== -->
+<h2>整体流程</h2>
+<div class="flow-h">
+  <div class="flow-card"><strong>① 安装配置</strong><br>填写账号密码</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-card"><strong>② 连接测试</strong><br>验证能否连通</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-card"><strong>③ 列出Bug</strong><br>查看要同步的数据</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-card"><strong>④ 试运行</strong><br>预览不实际创建</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-card"><strong>⑤ 正式同步</strong><br>一键导入到TB</div>
+</div>
+
+<!-- ===== 准备工作 ===== -->
+<h2>准备工作</h2>
+
+<div class="step">
+  <span class="step-num">1</span>
+  <span class="step-head">获取工具</span>
+  <div class="step-desc">
+    <p>有两种方式获取工具：</p>
+    <p><strong>方式一：直接使用 exe</strong>（推荐新手）</p>
+    <p>从 <a href="https://github.com/Liu-wang-cheng/TB_Import_tool/releases" style="color:var(--primary)">Releases 页面</a> 下载最新版 <code>智能缺陷管理平台.exe</code>，双击即可运行，无需安装 Python。</p>
+
+    <p style="margin-top:16px"><strong>方式二：从源码运行</strong></p>
+    <div class="code-block">
+      <span class="comment"># 1. 克隆代码</span><br>
+      <span class="prompt">$</span> git clone https://github.com/Liu-wang-cheng/TB_Import_tool.git<br>
+      <span class="prompt">$</span> cd TB_Import_tool<br><br>
+      <span class="comment"># 2. 安装依赖</span><br>
+      <span class="prompt">$</span> pip install -r requirements.txt<br><br>
+      <span class="comment"># 3. 启动界面</span><br>
+      <span class="prompt">$</span> python gui_main.py
+    </div>
+  </div>
+</div>
+
+<div class="step">
+  <span class="step-num">2</span>
+  <span class="step-head">准备配置文件</span>
+  <div class="step-desc">
+    <p>首次使用需要创建配置文件。项目已提供模板，只需复制并填写：</p>
+    <div class="code-block">
+      <span class="comment"># 进入 configs 目录，复制模板</span><br>
+      <span class="prompt">$</span> cd configs<br>
+      <span class="prompt">$</span> copy zentao.yaml.example zentao.yaml<span class="comment">    # 禅道配置</span><br>
+      <span class="prompt">$</span> copy teambition.yaml.example teambition.yaml<span class="comment"> # TB配置</span><br>
+      <span class="prompt">$</span> copy dingtalk.yaml.example dingtalk.yaml<span class="comment">   # 钉钉（可选）</span><br>
+      <span class="prompt">$</span> copy classifier.yaml.example classifier.yaml<span class="comment"> # 分类器（可选）</span><br>
+      <span class="prompt">$</span> copy source.yaml.example source.yaml<span class="comment">     # 平台选择</span>
+    </div>
+    <p>如果使用 exe，启动后在界面上直接填写配置即可，无需手动创建文件。</p>
+  </div>
+</div>
+
+<!-- ===== 界面总览 ===== -->
+<h2>界面总览</h2>
+<p>启动后你会看到如下界面（模拟截图）：</p>
+
+<div class="gui-window">
+  <div class="gui-titlebar">
+    <div class="gui-dots"><span class="gui-dot r"></span><span class="gui-dot y"></span><span class="gui-dot g"></span></div>
+    <span class="gui-title">智能缺陷管理平台 v1.3</span>
+  </div>
+  <div class="gui-body">
+    <!-- 筛选条件 -->
+    <div class="gui-group" style="margin-top:10px;">
+      <span class="gui-group-title">筛选条件</span>
+      <div style="padding:16px 10px 8px;">
+        <!-- 源平台 -->
+        <div class="gui-row">
+          <span class="gui-label">源平台:</span>
+          <span class="gui-combo" style="border:2px solid var(--primary);">禅道 ▾</span>
+          <span style="color:#666; font-weight:600; margin:0 8px;">→ Teambition</span>
+        </div>
+        <!-- URL -->
+        <div class="gui-row">
+          <span class="gui-label">禅道Bug页面地址:</span>
+          <span class="gui-input wide ph">粘贴禅道Bug列表页地址，自动解析产品ID和模块</span>
+          <span class="gui-btn gui-btn-blue" style="padding:4px 12px; font-size:12px;">解析</span>
+        </div>
+        <!-- 产品ID / 状态 -->
+        <div class="gui-row">
+          <span class="gui-label">产品ID:</span>
+          <span class="gui-input" style="width:80px;">11</span>
+          <span class="gui-label">项目ID:</span>
+          <span class="gui-input" style="width:80px;"></span>
+          <span class="gui-label">禅道项目名称:</span>
+          <span class="gui-input" style="width:70px;">HS341</span>
+          <span class="gui-label">状态:</span>
+          <span class="gui-combo">活跃+已确认 ▾</span>
+        </div>
+        <!-- 指派人 -->
+        <div class="gui-row">
+          <span class="gui-label">指派人:</span>
+          <span style="background:#eef2ff; color:var(--primary); padding:3px 10px; border-radius:4px; font-size:12px; margin:2px;">IOT-陈斌 ✓</span>
+          <span style="background:#eef2ff; color:var(--primary); padding:3px 10px; border-radius:4px; font-size:12px; margin:2px;">算法-张三 ✓</span>
+          <span style="background:#eef2ff; color:var(--primary); padding:3px 10px; border-radius:4px; font-size:12px; margin:2px;">嵌入式-李四 ✓</span>
+          <span class="gui-btn gui-btn-blue" style="padding:2px 10px; font-size:11px;">添加</span>
+          <span class="gui-btn gui-btn-blue" style="padding:2px 10px; font-size:11px;">删除</span>
+          <span class="gui-btn gui-btn-blue" style="padding:2px 10px; font-size:11px;">全选</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 禅道配置 -->
+    <div class="gui-group">
+      <span class="gui-group-title">禅道配置</span>
+      <div class="gui-row" style="margin-top:8px;">
+        <span class="gui-label">服务器地址:</span>
+        <span class="gui-input wide">https://zentao.xxx.com/zentao</span>
+        <span class="gui-label">账号:</span>
+        <span class="gui-input" style="width:90px;">zhangsan</span>
+        <span class="gui-label">密码:</span>
+        <span class="gui-input" style="width:80px;">••••••</span>
+      </div>
+    </div>
+
+    <!-- TB配置 -->
+    <div class="gui-group">
+      <span class="gui-group-title">Teambition 配置</span>
+      <div class="gui-row" style="margin-top:8px;">
+        <span class="gui-label">创建人:</span>
+        <span class="gui-input" style="width:90px;">王五</span>
+        <span class="gui-label">备用创建人:</span>
+        <span class="gui-input" style="width:90px;">赵六</span>
+        <span class="gui-label">所属项目:</span>
+        <span class="gui-input" style="width:90px;">扫地机</span>
+      </div>
+    </div>
+
+    <!-- 日期筛选 -->
+    <div class="gui-row">
+      <span class="gui-label">日期筛选:</span>
+      <span class="gui-combo">全部 ▾</span>
+    </div>
+
+    <!-- 操作按钮 -->
+    <div class="gui-btn-row" style="margin-top:8px;">
+      <span class="gui-btn gui-btn-blue">列出Bug</span>
+      <span class="gui-btn gui-btn-blue">试运行</span>
+      <span class="gui-btn gui-btn-red" style="font-weight:600;">正式同步</span>
+      <span class="gui-btn gui-btn-green">连接测试</span>
+      <span class="gui-btn gui-btn-gray">配置</span>
+    </div>
+
+    <!-- 日志区 -->
+    <div class="gui-log" style="margin-top:8px;">
+      <span class="log-time">10:30:15</span> <span class="log-info">[INFO]</span> 操作日志将显示在此处...<br>
+      <span style="color:#b2bec3;">等待操作...</span>
+    </div>
+
+    <!-- 进度条 -->
+    <div class="gui-progress-track">
+      <div class="gui-progress-bar" style="width:0%;">0%</div>
+    </div>
+  </div>
+  <div class="gui-status">就绪</div>
+</div>
+
+<!-- ===== 详细步骤 ===== -->
+<h2>操作步骤</h2>
+
+<!-- Step 1: 配置 -->
+<div class="step">
+  <span class="step-num">1</span>
+  <span class="step-head">填写源平台配置（禅道）</span>
+  <div class="step-desc">
+    <p>在界面上方的 <strong>「禅道配置」</strong> 区域，填写三项信息：</p>
+    <table class="info-table">
+      <tr><th>字段</th><th>填什么</th><th>示例</th></tr>
+      <tr><td>服务器地址</td><td>你们公司禅道的网址（到 /zentao 为止）</td><td><code>https://zentao.company.com/zentao</code></td></tr>
+      <tr><td>账号</td><td>你登录禅道的用户名</td><td><code>zhangsan</code></td></tr>
+      <tr><td>密码</td><td>你登录禅道的密码</td><td><code>••••••</code></td></tr>
+    </table>
+
+    <p style="margin-top:16px">如果你们用 Jira，把 <strong>「源平台」</strong> 下拉框切换到「Jira」，界面会自动切换为 Jira 的配置项。</p>
+
+    <div class="gui-group" style="max-width:600px;">
+      <span class="gui-group-title">禅道配置</span>
+      <div class="gui-row" style="margin-top:8px;">
+        <span class="gui-label">服务器地址:</span>
+        <span class="gui-input wide" style="background:#e8f5e9; border-color:var(--success);">https://zentao.company.com/zentao</span>
+      </div>
+      <div class="gui-row">
+        <span class="gui-label">账号:</span>
+        <span class="gui-input" style="width:120px; background:#e8f5e9; border-color:var(--success);">zhangsan</span>
+        <span class="gui-label">密码:</span>
+        <span class="gui-input" style="width:100px; background:#e8f5e9; border-color:var(--success);">••••••</span>
+      </div>
+    </div>
+    <p style="margin-top:8px; font-size:13px; color:var(--success);">✓ 绿色边框 = 已填写</p>
+
+    <div class="tip">
+      <em>快捷方式：</em>直接从浏览器复制禅道的 Bug 列表页地址，粘贴到「禅道Bug页面地址」输入框，点「解析」按钮，会自动填入产品ID和模块信息。
+    </div>
+  </div>
+</div>
+
+<!-- Step 2: 连接测试 -->
+<div class="step">
+  <span class="step-num">2</span>
+  <span class="step-head">点击「连接测试」</span>
+  <div class="step-desc">
+    <p>填写完配置后，先点<strong>「连接测试」</strong>按钮，确认能连上禅道和 Teambition：</p>
+
+    <div class="gui-btn-row" style="margin:12px 0;">
+      <span class="gui-btn gui-btn-blue">列出Bug</span>
+      <span class="gui-btn gui-btn-blue">试运行</span>
+      <span class="gui-btn gui-btn-red">正式同步</span>
+      <span class="gui-btn gui-btn-green" style="border:3px solid #1e8449; box-shadow:0 0 8px rgba(46,213,115,0.5);">连接测试</span>
+      <span class="gui-btn gui-btn-gray">配置</span>
+    </div>
+
+    <p>测试成功后日志区会显示：</p>
+    <div class="gui-log">
+      <span class="log-time">10:30:18</span> <span class="log-info">[INFO]</span> 正在测试禅道连接...<br>
+      <span class="log-time">10:30:19</span> <span class="log-success">[OK]</span> 禅道连接成功，账号: zhangsan<br>
+      <span class="log-time">10:30:19</span> <span class="log-info">[INFO]</span> 正在测试Teambition连接...<br>
+      <span class="log-time">10:30:20</span> <span class="log-success">[OK]</span> Teambition连接成功，项目: 扫地机固件<br>
+      <span class="log-time">10:30:20</span> <span class="log-success">[INFO]</span> 全部连接测试通过 ✓
+    </div>
+
+    <div class="warn">
+      <em>如果测试失败：</em>检查服务器地址是否正确（不要多加空格）、账号密码是否正确、网络是否能访问禅道服务器。
+    </div>
+  </div>
+</div>
+
+<!-- Step 3: 筛选条件 -->
+<div class="step">
+  <span class="step-num">3</span>
+  <span class="step-head">设置筛选条件</span>
+  <div class="step-desc">
+    <p>在「筛选条件」区域选择你要同步哪些 Bug：</p>
+
+    <table class="info-table">
+      <tr><th>筛选项</th><th>说明</th><th>建议</th></tr>
+      <tr><td>产品ID</td><td>禅道中的产品编号</td><td>从URL解析或手动填入</td></tr>
+      <tr><td>项目名称</td><td>禅道项目名称（如 HS341）</td><td>可留空，不限制</td></tr>
+      <tr><td>状态</td><td>Bug 状态筛选</td><td><span class="tag tag-red">活跃+已确认</span> 最常用</td></tr>
+      <tr><td>指派人</td><td>按处理人筛选</td><td>点「添加」输入姓名，如"IOT-陈斌"</td></tr>
+      <tr><td>日期筛选</td><td>按时间段筛选</td><td>选「全部」不限制日期</td></tr>
+    </table>
+
+    <div class="tip">
+      <em>小技巧：</em>最简单的筛选方式 — 只填产品ID + 状态选「活跃+已确认」，就能获取当前未处理的所有 Bug。
+    </div>
+  </div>
+</div>
+
+<!-- Step 4: 列出Bug -->
+<div class="step">
+  <span class="step-num">4</span>
+  <span class="step-head">点击「列出Bug」预览数据</span>
+  <div class="step-desc">
+    <p>点<strong>「列出Bug」</strong>按钮，会从禅道拉取符合条件的 Bug 列表并显示在日志区。这一步不会修改任何数据。</p>
+
+    <div class="gui-log">
+      <span class="log-time">10:32:01</span> <span class="log-info">[INFO]</span> 正在获取禅道Bug列表...<br>
+      <span class="log-time">10:32:03</span> <span class="log-info">[INFO]</span> 共找到 <strong>15</strong> 条Bug<br>
+      <span class="log-time">10:32:03</span> <span class="log-info">[INFO]</span> ─────────────────────────<br>
+      <span class="log-time">10:32:03</span> <span class="log-info">[INFO]</span> #6680 &nbsp;[活跃] &nbsp;[S-致命] &nbsp;@IOT-陈斌<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;扫地机建图时出现花屏现象<br>
+      <span class="log-time">10:32:03</span> <span class="log-info">[INFO]</span> #6685 &nbsp;[活跃] &nbsp;[B-一般] &nbsp;@算法-张三<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;避障识别精度不足导致频繁碰撞<br>
+      <span class="log-time">10:32:03</span> <span class="log-info">[INFO]</span> #6706 &nbsp;[已确认] &nbsp;[A-严重] &nbsp;@嵌入式-李四<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;固件升级后设备无法连接WiFi<br>
+      <span class="log-time">10:32:03</span> <span class="log-info">[INFO]</span> ─────────────────────────<br>
+      <span class="log-time">10:32:03</span> <span class="log-success">[完成]</span> 列出完毕，共 15 条Bug
+    </div>
+  </div>
+</div>
+
+<!-- Step 5: 试运行 -->
+<div class="step">
+  <span class="step-num">5</span>
+  <span class="step-head">点击「试运行」预览同步结果</span>
+  <div class="step-desc">
+    <p>点<strong>「试运行」</strong>，工具会模拟完整的同步流程，但<strong>不会实际创建任务</strong>。你可以看到哪些 Bug 会被新建、哪些会被跳过。</p>
+
+    <div class="gui-log">
+      <span class="log-time">10:33:01</span> <span class="log-info">[INFO]</span> ====== 试运行开始 ======<br>
+      <span class="log-time">10:33:02</span> <span class="log-info">[INFO]</span> [新建] Bug#6680 → TB任务: 扫地机建图时出现花屏现象<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;严重程度: S-致命 | 分类: IOT问题 | 指派人: 陈斌<br>
+      <span class="log-time">10:33:02</span> <span class="log-warn">[跳过-重复]</span> Bug#6685 已存在于TB: VLNS-62810<br>
+      <span class="log-time">10:33:03</span> <span class="log-info">[INFO]</span> [新建] Bug#6706 → TB任务: 固件升级后设备无法连接WiFi<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;严重程度: A-严重 | 分类: 嵌入式问题 | 指派人: 李四<br>
+      <span class="log-time">10:33:03</span> <span class="log-success">[完成]</span> ─────────────────────────<br>
+      <span class="log-time">10:33:03</span> <span class="log-success">[统计]</span> 新建: 2 | 跳过: 1 | 失败: 0<br>
+      <span class="log-time">10:33:03</span> <span class="log-success">[INFO]</span> ====== 试运行完成（未实际创建任务）======
+    </div>
+
+    <div class="note">
+      <strong>试运行是安全的</strong> — 不会改动禅道或 Teambition 的任何数据。建议每次正式同步前都先试运行一次。
+    </div>
+  </div>
+</div>
+
+<!-- Step 6: 正式同步 -->
+<div class="step">
+  <span class="step-num">6</span>
+  <span class="step-head">点击「正式同步」</span>
+  <div class="step-desc">
+    <p>确认试运行结果无误后，点红色的<strong>「正式同步」</strong>按钮：</p>
+
+    <div class="gui-btn-row" style="margin:12px 0;">
+      <span class="gui-btn gui-btn-blue">列出Bug</span>
+      <span class="gui-btn gui-btn-blue">试运行</span>
+      <span class="gui-btn gui-btn-red" style="border:3px solid #c0392b; box-shadow:0 0 10px rgba(231,76,60,0.5); font-weight:700;">正式同步</span>
+      <span class="gui-btn gui-btn-green">连接测试</span>
+      <span class="gui-btn gui-btn-gray">配置</span>
+    </div>
+
+    <p>同步过程中进度条会实时更新：</p>
+
+    <div class="gui-progress-track">
+      <div class="gui-progress-bar p65">65% — 正在同步 Bug 10/15...</div>
+    </div>
+
+    <p style="margin-top:12px">同步完成后：</p>
+
+    <div class="gui-progress-track">
+      <div class="gui-progress-bar p100">✓ 同步完成</div>
+    </div>
+
+    <div class="gui-log">
+      <span class="log-time">10:35:20</span> <span class="log-success">[完成]</span> ====== 同步完成 ======<br>
+      <span class="log-time">10:35:20</span> <span class="log-success">[统计]</span> 新建: 12 | 跳过-重复: 2 | 失败: 0<br>
+      <span class="log-time">10:35:20</span> <span class="log-success">[统计]</span> 附件上传: 8 | 评论同步: 5<br>
+      <span class="log-time">10:35:20</span> <span class="log-info">[INFO]</span> 耗时: 25.3 秒
+    </div>
+
+    <div class="warn">
+      <em>注意：</em>正式同步会真实创建 Teambition 任务。如果不确定，先用「试运行」确认。
+    </div>
+  </div>
+</div>
+
+<!-- ===== 高级功能 ===== -->
+<h2>其他功能说明</h2>
+
+<h3>「配置」按钮</h3>
+<p>点击界面底部的<strong>「配置」</strong>按钮，打开高级配置对话框。可以编辑：</p>
+<ul>
+  <li><strong>Teambition 凭证</strong> — app_id、app_secret、org_id 等应用信息</li>
+  <li><strong>同步规则</strong> — 去重阈值、标题格式、附件大小限制等</li>
+  <li><strong>分类器</strong> — TF-IDF 相似度阈值、LLM 大模型配置</li>
+  <li><strong>钉钉通知</strong> — Webhook 地址、消息模板</li>
+</ul>
+<p>这些配置一般由管理员设置好后通过配置文件分发，普通用户不需要修改。</p>
+
+<h3>URL 自动解析</h3>
+<p>在浏览器打开禅道的 Bug 列表页，复制地址栏的 URL，粘贴到「禅道Bug页面地址」输入框：</p>
+
+<div class="gui-group" style="max-width:680px;">
+  <div class="gui-row" style="margin-top:8px;">
+    <span class="gui-label">禅道Bug页面地址:</span>
+    <span class="gui-input wide" style="background:#eef2ff; border-color:var(--primary); font-size:12px;">https://zentao.company.com/zentao/bug-browse-11--byModule-122.html</span>
+    <span class="gui-btn gui-btn-blue" style="padding:4px 12px; font-size:12px;">解析</span>
+  </div>
+</div>
+<p style="margin-top:8px; font-size:13px; color:var(--primary);">→ 自动填入 产品ID=11, 模块ID=122</p>
+
+<h3>自动更新</h3>
+<p>工具启动时会自动检测新版本。如果发现新版本，会弹出提示框：</p>
+
+<div style="background:#fff; border:1px solid var(--border); border-radius:8px; padding:20px; max-width:400px; margin:12px 0; box-shadow:0 2px 12px rgba(0,0,0,0.06);">
+  <div style="font-weight:600; margin-bottom:12px;">发现新版本 v1.4</div>
+  <div style="color:var(--muted); font-size:13px; margin-bottom:16px;">
+    更新内容：修复分类器精度问题、新增导出功能<br>
+    当前版本：v1.3
+  </div>
+  <div style="display:flex; gap:8px;">
+    <span class="gui-btn gui-btn-blue">立即更新</span>
+    <span class="gui-btn gui-btn-gray">跳过</span>
+  </div>
+</div>
+
+<h3>平台切换</h3>
+<p>在界面顶部「源平台」下拉框可以切换禅道/Jira。切换后：</p>
+<ul>
+  <li>配置区域自动变为对应平台的输入项</li>
+  <li>之前填写的禅道配置会保留，切回来还在</li>
+  <li>筛选条件独立保存，互不影响</li>
+</ul>
+
+<!-- ===== 常见问题 ===== -->
+<h2>常见问题</h2>
+
+<h3>Q: 连接测试失败怎么办？</h3>
+<p><strong>A:</strong> 按顺序检查：</p>
+<ol>
+  <li>服务器地址是否正确 — 不要有空格、末尾不要加斜杠</li>
+  <li>账号密码是否正确 — 用浏览器登录禅道确认</li>
+  <li>网络是否通畅 — 在浏览器里能否打开禅道页面</li>
+  <li>公司 VPN — 如果禅道在内网，先连 VPN</li>
+</ol>
+
+<h3>Q: 同步后 Bug 没有出现在 TB 里？</h3>
+<p><strong>A:</strong> 检查日志区：</p>
+<ul>
+  <li>如果显示「跳过-重复」— 说明这条 Bug 之前已经同步过了，不会重复创建</li>
+  <li>如果显示「失败」— 查看错误信息，通常是 TB 权限或配置问题</li>
+</ul>
+
+<h3>Q: 指派人怎么填写？</h3>
+<p><strong>A:</strong> 点击「添加」按钮，输入禅道中的指派人名称。格式和禅道一致，例如：</p>
+<ul>
+  <li><code>IOT-陈斌</code> — IOT 部门的陈斌</li>
+  <li><code>算法-张三</code> — 算法部门的张三</li>
+  <li>多个指派人就添加多条，支持勾选/取消勾选</li>
+</ul>
+
+<h3>Q: 配置填错了想重新来？</h3>
+<p><strong>A:</strong> 点「配置」按钮可以修改所有配置项。界面上的配置修改后会自动保存到配置文件，下次打开不用重新填。</p>
+
+<h3>Q: 同步过的 Bug 禅道那边能看到吗？</h3>
+<p><strong>A:</strong> 可以。同步后工具会自动在禅道 Bug 标题前加上 <code>【VLNS-xxxxx】</code> 标签（TB的任务编号），方便在两个平台之间对应查找。</p>
+
+<!-- ===== 键盘快捷键 ===== -->
+<h2>快速参考卡片</h2>
+
+<table class="info-table">
+  <tr><th>按钮</th><th>颜色</th><th>作用</th><th>会改动数据吗？</th></tr>
+  <tr><td><strong>连接测试</strong></td><td><span class="tag tag-green">绿色</span></td><td>验证账号密码是否正确</td><td style="color:#2e7d32;">不会</td></tr>
+  <tr><td><strong>列出Bug</strong></td><td><span class="tag tag-blue">蓝色</span></td><td>预览符合条件的Bug列表</td><td style="color:#2e7d32;">不会</td></tr>
+  <tr><td><strong>试运行</strong></td><td><span class="tag tag-blue">蓝色</span></td><td>模拟同步，显示会新建/跳过哪些</td><td style="color:#2e7d32;">不会</td></tr>
+  <tr><td><strong>正式同步</strong></td><td><span class="tag tag-red">红色</span></td><td>真实创建TB任务、上传附件</td><td style="color:#c62828; font-weight:600;">会！</td></tr>
+  <tr><td><strong>配置</strong></td><td><span class="tag tag-orange">灰色</span></td><td>编辑高级配置</td><td style="color:#2e7d32;">不会</td></tr>
+</table>
+
+<p style="text-align:center; color:var(--muted); margin-top:48px; font-size:13px;">智能缺陷管理平台 v1.3 · 使用教程 · 2026</p>
+
+</div>
+</body>
+</html>
