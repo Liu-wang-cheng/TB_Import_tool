@@ -1,0 +1,32 @@
+# 凭证和配置（含敏感信息，不提交）
+configs/*.yaml
+
+# 训练数据和模型（二进制大文件）
+data/
+
+# 构建产物
+dist/
+build/
+*.exe
+*.bak
+
+# 运行产物
+logs/
+exports/
+tools/exports/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# 临时文件
+build.log
+_update_replace.bat
+
+# Claude Code
+.claude/

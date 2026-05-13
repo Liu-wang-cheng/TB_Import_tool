@@ -1,0 +1,25 @@
+# 自动更新配置
+# 镜像站按响应速度自动选择，无需手动调整
+
+# 是否启用自动更新检查
+enabled: true
+
+# GitHub 仓库（owner/repo 格式）
+repository: ""
+
+# 镜像站列表（{repo} 替换为 repository 值）
+# base_url: 用于获取仓库文件（version.json）
+# download_prefix: 用于加速 GitHub Release 下载（留空=直连）
+mirrors:
+  - name: "ghfast"
+    base_url: "https://ghfast.top/https://raw.githubusercontent.com/{repo}/main"
+    download_prefix: "https://ghfast.top/"
+  - name: "jsdelivr"
+    base_url: "https://cdn.jsdelivr.net/gh/{repo}@main"
+    download_prefix: ""
+  - name: "github"
+    base_url: "https://raw.githubusercontent.com/{repo}/main"
+    download_prefix: ""
+
+# 版本文件路径（相对于仓库根目录）
+version_file: "TB_Import_tool/version.json"

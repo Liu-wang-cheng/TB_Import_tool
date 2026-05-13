@@ -1,0 +1,25 @@
+# 核心依赖
+pyyaml>=5.0
+requests>=2.20
+pyjwt>=2.0
+beautifulsoup4>=4.8
+
+# GUI
+PyQt6>=6.0
+
+# 缺陷分类器 (TF-IDF + jieba 分词)
+scikit-learn>=0.24
+jieba>=0.42
+numpy>=1.20
+scipy>=1.6
+joblib>=1.0
+pypinyin>=0.49
+
+# 附件上传 (OSS)
+oss2>=2.0
+
+# 钉钉回调服务 (可选，仅 dingtalk/server.py 使用)
+flask>=2.0
+
+# 工具脚本 (可选，仅 tools/export_bugs.py 使用)
+# openpyxl>=3.0

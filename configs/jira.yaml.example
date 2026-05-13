@@ -1,0 +1,23 @@
+# Jira 源平台配置（platform=jira 时生效）
+
+# Jira 服务器凭证
+base_url: ""
+username: ""
+api_token: ""
+
+# 筛选条件
+project_key: ""
+jql: ""
+
+# 英文用户名 → 部门 + TB 中文用户名 映射
+# 用于 Jira 经办人（英文名）对应到 Teambition 执行者（中文名）
+# department: 用于缺陷分类的部门前缀（对应 assignee_category_map）
+# tb_user: Teambition 中的中文用户名，用于搜索匹配
+user_map:
+  # 示例:
+  # "jiansen shi":
+  #   department: "IOT"
+  #   tb_user: "石建森"
+  # "Weijia Zhang":
+  #   department: "应用"
+  #   tb_user: "张伟嘉"
