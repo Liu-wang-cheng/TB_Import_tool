@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Git 协作流程教程 — TB Import Tool</title>
+<style>
+  :root { --gh-bg: #0d1117; --gh-border: #30363d; --gh-text: #c9d1d9; --gh-green: #238636; --gh-blue: #1f6feb; --gh-link: #58a6ff; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; background: #f6f8fa; color: #1f2328; line-height: 1.7; }
+  .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+
+  h1 { font-size: 2em; margin-bottom: 8px; }
+  h1 + p { color: #656d76; margin-bottom: 40px; }
+  h2 { font-size: 1.5em; margin: 48px 0 16px; padding-bottom: 8px; border-bottom: 1px solid #d0d7de; }
+  h3 { font-size: 1.15em; margin: 24px 0 10px; }
+
+  .step-badge { display: inline-block; background: var(--gh-green); color: #fff; width: 32px; height: 32px; border-radius: 50%; text-align: center; line-height: 32px; font-weight: 700; margin-right: 8px; vertical-align: middle; }
+  .step-title { font-size: 1.3em; font-weight: 600; vertical-align: middle; }
+
+  p, li { margin-bottom: 10px; }
+  ul, ol { padding-left: 24px; margin-bottom: 16px; }
+
+  /* Code blocks */
+  .code-block { background: var(--gh-bg); color: var(--gh-text); border-radius: 8px; padding: 16px 20px; margin: 12px 0 20px; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; font-size: 14px; line-height: 1.8; overflow-x: auto; position: relative; }
+  .code-block .prompt { color: #7ee787; user-select: none; }
+  .code-block .comment { color: #8b949e; }
+  .code-block .cmd { color: #d2a8ff; }
+  .code-block .label { position: absolute; top: 8px; right: 12px; background: #30363d; color: #8b949e; font-size: 11px; padding: 2px 8px; border-radius: 4px; }
+
+  /* GitHub UI mockup */
+  .mock { border: 1px solid var(--gh-border); border-radius: 8px; overflow: hidden; margin: 16px 0 24px; font-size: 14px; }
+  .mock-bar { background: var(--gh-bg); padding: 8px 16px; display: flex; align-items: center; gap: 8px; }
+  .mock-dot { width: 12px; height: 12px; border-radius: 50%; }
+  .mock-dot.r { background: #ff5f57; } .mock-dot.y { background: #febc2e; } .mock-dot.g { background: #28c840; }
+  .mock-url { background: #161b22; border-radius: 4px; padding: 4px 12px; color: #8b949e; font-family: monospace; font-size: 13px; margin-left: 12px; flex: 1; }
+  .mock-body { background: #fff; padding: 20px; color: #1f2328; }
+  .mock-dark .mock-body { background: var(--gh-bg); color: var(--gh-text); }
+
+  /* Mock buttons */
+  .btn { display: inline-block; padding: 5px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; border: 1px solid var(--gh-border); cursor: default; }
+  .btn-green { background: var(--gh-green); color: #fff; border-color: rgba(240,246,252,0.1); }
+  .btn-outline { background: #f6f8fa; color: #24292f; }
+  .btn-blue { background: var(--gh-blue); color: #fff; border-color: rgba(240,246,252,0.1); }
+
+  /* Mock repo header */
+  .repo-header { display: flex; align-items: center; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid #d0d7de; margin-bottom: 16px; }
+  .repo-icon { width: 20px; height: 20px; background: #8b949e; border-radius: 3px; }
+  .repo-name { font-weight: 600; color: var(--gh-link); font-size: 16px; }
+  .repo-visibility { border: 1px solid #d0d7de; border-radius: 12px; padding: 0 8px; font-size: 12px; color: #656d76; }
+
+  /* Mock file list */
+  .file-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #d1d9e0; font-size: 13px; }
+  .file-icon { color: #656d76; width: 16px; text-align: center; }
+  .file-name { color: var(--gh-link); }
+  .file-msg { color: #656d76; flex: 1; }
+
+  /* Mock PR card */
+  .pr-card { border: 1px solid var(--gh-border); border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+  .pr-title { font-weight: 600; color: var(--gh-link); margin-bottom: 4px; }
+  .pr-meta { color: #656d76; font-size: 13px; }
+  .pr-badge { display: inline-block; padding: 1px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+  .badge-open { background: #dafbe1; color: #116329; }
+  .badge-merged { background: #ddf4ff; color: #0550ae; }
+
+  /* Mock diff */
+  .diff-header { background: #f6f8fa; padding: 8px 12px; border-bottom: 1px solid #d0d7de; font-family: monospace; font-size: 13px; }
+  .diff-add { background: #dafbe1; padding: 2px 12px; font-family: monospace; font-size: 13px; }
+  .diff-del { background: #ffebe9; padding: 2px 12px; font-family: monospace; font-size: 13px; }
+  .diff-ctx { padding: 2px 12px; font-family: monospace; font-size: 13px; color: #656d76; }
+
+  /* Flow diagram */
+  .flow { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin: 24px 0; }
+  .flow-step { background: #fff; border: 2px solid #d0d7de; border-radius: 10px; padding: 14px 18px; text-align: center; min-width: 120px; }
+  .flow-step.active { border-color: var(--gh-green); background: #dafbe1; }
+  .flow-arrow { display: flex; align-items: center; color: #656d76; font-size: 24px; }
+
+  /* Tip box */
+  .tip { background: #ddf4ff; border-left: 4px solid var(--gh-blue); padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  .tip strong { color: #0550ae; }
+  .warn { background: #fff8c5; border-left: 4px solid #d29922; padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  .warn strong { color: #9a6700; }
+
+  /* Tab mockup */
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid #d0d7de; margin-bottom: 16px; }
+  .tab { padding: 8px 16px; font-size: 14px; color: #656d76; border-bottom: 2px solid transparent; }
+  .tab.active { color: #1f2328; font-weight: 600; border-bottom-color: #fd8c73; }
+
+  /* Review mockup */
+  .review-box { border: 1px solid #d0d7de; border-radius: 8px; padding: 16px; background: #fff; }
+  .review-radio { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
+  .review-option { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+  .radio-circle { width: 18px; height: 18px; border: 2px solid #656d76; border-radius: 50%; }
+  .radio-circle.selected { border-color: var(--gh-green); background: var(--gh-green); box-shadow: inset 0 0 0 3px #fff; }
+
+  /* Clone box */
+  .clone-box { background: var(--gh-bg); border-radius: 8px; padding: 16px; margin: 12px 0; }
+  .clone-tabs { display: flex; gap: 0; margin-bottom: 12px; }
+  .clone-tab { padding: 6px 14px; font-size: 13px; color: #8b949e; border-bottom: 2px solid transparent; }
+  .clone-tab.active { color: #c9d1d9; border-bottom-color: #f78166; }
+  .clone-url-box { display: flex; gap: 8px; }
+  .clone-url-input { flex: 1; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 6px 12px; color: #c9d1d9; font-family: monospace; font-size: 13px; }
+
+  @media (max-width: 640px) {
+    .container { padding: 20px 16px; }
+    .flow { flex-direction: column; align-items: center; }
+    .flow-arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Git 协作流程教程</h1>
+<p>从拉取代码到提交修改的完整流程 — 面向 TB Import Tool 团队成员</p>
+
+<!-- 总览流程图 -->
+<h2>整体流程概览</h2>
+<div class="flow">
+  <div class="flow-step active"><strong>1. 克隆仓库</strong><br><small>git clone</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step active"><strong>2. 创建分支</strong><br><small>git checkout -b</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step active"><strong>3. 修改代码</strong><br><small>编辑文件</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step active"><strong>4. 提交推送</strong><br><small>git push</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step active"><strong>5. 创建 PR</strong><br><small>GitHub 网页</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step"><strong>6. 审核合并</strong><br><small>团队 Lead</small></div>
+</div>
+
+<!-- ========== Step 1 ========== -->
+<h2><span class="step-badge">1</span><span class="step-title">克隆仓库到本地</span></h2>
+
+<h3>方式一：通过 GitHub 网页复制地址</h3>
+<p>打开仓库页面，点击绿色的 <strong>Code</strong> 按钮：</p>
+
+<div class="mock mock-dark">
+  <div class="mock-bar">
+    <span class="mock-dot r"></span><span class="mock-dot y"></span><span class="mock-dot g"></span>
+    <span class="mock-url">https://github.com/Liu-wang-cheng/TB_Import_tool</span>
+  </div>
+  <div class="mock-body">
+    <div class="repo-header">
+      <div class="repo-icon"></div>
+      <span class="repo-name">Liu-wang-cheng / TB_Import_tool</span>
+      <span class="repo-visibility">Public</span>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <span class="btn btn-green">⬇ Code ▾</span>
+      <span class="btn btn-outline">Add file ▾</span>
+    </div>
+    <div class="clone-box" style="margin-top:12px;">
+      <div class="clone-tabs">
+        <span class="clone-tab active">HTTPS</span>
+        <span class="clone-tab">SSH</span>
+        <span class="clone-tab">GitHub CLI</span>
+      </div>
+      <div class="clone-url-box">
+        <span class="clone-url-input">https://github.com/Liu-wang-cheng/TB_Import_tool.git</span>
+        <span class="btn btn-outline" style="padding:6px 10px;">📋</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h3>方式二：直接在终端执行</h3>
+<div class="code-block">
+  <span class="label">Terminal</span>
+  <span class="comment"># 克隆仓库到本地（会在当前目录创建 TB_Import_tool 文件夹）</span><br>
+  <span class="prompt">$</span> <span class="cmd">git clone</span> https://github.com/Liu-wang-cheng/TB_Import_tool.git<br><br>
+  <span class="comment"># 进入项目目录</span><br>
+  <span class="prompt">$</span> <span class="cmd">cd</span> TB_Import_tool<br><br>
+  <span class="comment"># 安装依赖</span><br>
+  <span class="prompt">$</span> <span class="cmd">pip install</span> -r requirements.txt
+</div>
+
+<div class="tip">
+  <strong>提示：</strong>如果还没有安装 Git，去 <a href="https://git-scm.com/downloads" style="color:#0550ae">git-scm.com</a> 下载安装。Windows 用户安装时一路 Next 即可。
+</div>
+
+<!-- ========== Step 2 ========== -->
+<h2><span class="step-badge">2</span><span class="step-title">创建自己的分支</span></h2>
+
+<p>不要直接修改 main 分支。每次修改前，创建一个新分支：</p>
+
+<div class="code-block">
+  <span class="label">Terminal</span>
+  <span class="comment"># 先拉取最新代码（养成好习惯，每次开始前都拉一下）</span><br>
+  <span class="prompt">$</span> <span class="cmd">git pull origin main</span><br><br>
+  <span class="comment"># 创建并切换到新分支</span><br>
+  <span class="comment"># 分支名建议用 英文描述-你的名字，例如：</span><br>
+  <span class="prompt">$</span> <span class="cmd">git checkout -b</span> fix-login-bug-zhangsan<br>
+  <span class="prompt">$</span> <span class="cmd">git checkout -b</span> add-export-feature-lisi<br><br>
+  <span class="comment"># 确认当前分支（星号 * 标记的就是当前分支）</span><br>
+  <span class="prompt">$</span> <span class="cmd">git branch</span><br>
+  <span style="color:#7ee787;">* fix-login-bug-zhangsan</span><br>
+  &nbsp;&nbsp;main
+</div>
+
+<!-- ========== Step 3 ========== -->
+<h2><span class="step-badge">3</span><span class="step-title">修改代码</span></h2>
+
+<p>用你习惯的编辑器（VS Code、PyCharm、记事本等）修改代码。</p>
+
+<div class="tip">
+  <strong>注意：</strong>配置文件 <code>configs/*.yaml</code> 包含敏感凭证，已在 <code>.gitignore</code> 中排除。<br>
+  首次使用请复制模板：<br>
+  <code>cp configs/zentao.yaml.example configs/zentao.yaml</code>，然后填写实际值。
+</div>
+
+<p>修改完成后，查看改动状态：</p>
+
+<div class="code-block">
+  <span class="label">Terminal</span>
+  <span class="comment"># 查看哪些文件被修改了</span><br>
+  <span class="prompt">$</span> <span class="cmd">git status</span><br>
+  <span style="color:#f85149;">Changes not staged for commit:</span><br>
+  &nbsp;&nbsp;<span style="color:#f85149;">modified:   src/sync_engine.py</span><br>
+  &nbsp;&nbsp;<span style="color:#f85149;">modified:   gui/main_window.py</span><br><br>
+  <span class="comment"># 查看具体改了什么</span><br>
+  <span class="prompt">$</span> <span class="cmd">git diff</span>
+</div>
+
+<!-- ========== Step 4 ========== -->
+<h2><span class="step-badge">4</span><span class="step-title">提交并推送</span></h2>
+
+<div class="code-block">
+  <span class="label">Terminal</span>
+  <span class="comment"># 将修改的文件加入暂存区</span><br>
+  <span class="prompt">$</span> <span class="cmd">git add</span> src/sync_engine.py gui/main_window.py<br><br>
+  <span class="comment"># 或者一次添加所有修改的文件（注意不要误添加不需要的文件）</span><br>
+  <span class="prompt">$</span> <span class="cmd">git add</span> .<br><br>
+  <span class="comment"># 提交，附带说明信息</span><br>
+  <span class="prompt">$</span> <span class="cmd">git commit -m</span> "fix: 修复同步时标题截断的问题"<br><br>
+  <span class="comment"># 推送到 GitHub（首次推送新分支需要 -u）</span><br>
+  <span class="prompt">$</span> <span class="cmd">git push -u origin</span> fix-login-bug-zhangsan
+</div>
+
+<div class="warn">
+  <strong>提交信息规范：</strong><br>
+  - <code>fix: 修复了什么问题</code> — 修复 Bug<br>
+  - <code>feat: 新增了什么功能</code> — 新功能<br>
+  - <code>docs: 更新了什么文档</code> — 文档变更<br>
+  用中文或英文都可以，关键是说清楚改了什么。
+</div>
+
+<!-- ========== Step 5 ========== -->
+<h2><span class="step-badge">5</span><span class="step-title">创建 Pull Request</span></h2>
+
+<p>推送完成后，打开 GitHub 仓库页面，会自动出现提示：</p>
+
+<div class="mock">
+  <div class="mock-bar">
+    <span class="mock-dot r"></span><span class="mock-dot y"></span><span class="mock-dot g"></span>
+    <span class="mock-url">https://github.com/Liu-wang-cheng/TB_Import_tool</span>
+  </div>
+  <div class="mock-body">
+    <div style="background:#dafbe1; border:1px solid #238636; border-radius:8px; padding:12px 16px; margin-bottom:16px;">
+      <strong>fix-login-bug-zhangsan</strong> had recent pushes less than a minute ago
+      <span class="btn btn-green" style="float:right;">Compare &amp; pull request</span>
+    </div>
+    <p style="color:#656d76; text-align:center; margin-top:20px;">↑ 点击绿色按钮创建 PR</p>
+  </div>
+</div>
+
+<p>点击后进入 PR 创建页面：</p>
+
+<div class="mock">
+  <div class="mock-bar">
+    <span class="mock-dot r"></span><span class="mock-dot y"></span><span class="mock-dot g"></span>
+    <span class="mock-url">Open a pull request</span>
+  </div>
+  <div class="mock-body">
+    <div style="font-weight:600; margin-bottom:8px;">Open a pull request</div>
+    <div style="color:#656d76; font-size:13px; margin-bottom:16px;">
+      Create a new pull request by comparing changes across two branches.
+    </div>
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:16px; font-size:14px;">
+      <span style="background:#f6f8fa; border:1px solid #d0d7de; padding:4px 12px; border-radius:6px;">base: <strong>main</strong></span>
+      <span>←</span>
+      <span style="background:#f6f8fa; border:1px solid #d0d7de; padding:4px 12px; border-radius:6px;">compare: <strong>fix-login-bug-zhangsan</strong></span>
+      <span style="color:#656d76;"> Able to merge.</span>
+    </div>
+
+    <div style="border:1px solid #d0d7de; border-radius:6px; padding:12px; margin-bottom:12px;">
+      <div style="font-size:13px; color:#656d76; margin-bottom:6px;">Title</div>
+      <div style="border:1px solid #d0d7de; border-radius:6px; padding:6px 12px; font-size:14px;">fix: 修复同步时标题截断的问题</div>
+    </div>
+
+    <div style="border:1px solid #d0d7de; border-radius:6px; padding:12px; margin-bottom:16px;">
+      <div style="font-size:13px; color:#656d76; margin-bottom:6px;">Write</div>
+      <div style="min-height:80px; color:#656d76; font-size:14px;">
+        ## 修改说明<br>
+        - 修复了 sync_engine.py 中标题截断的问题<br>
+        - 移除了 [:60] 的截断限制<br><br>
+        ## 测试<br>
+        - [x] 本地试运行通过
+      </div>
+    </div>
+
+    <span class="btn btn-green">Create pull request</span>
+  </div>
+</div>
+
+<div class="tip">
+  <strong>PR 说明怎么写：</strong>简单描述改了什么、为什么改、怎么测试的。不用很长，几句话就行。让审核人能快速理解你的改动。
+</div>
+
+<!-- ========== Step 6 ========== -->
+<h2><span class="step-badge">6</span><span class="step-title">审核与合并</span></h2>
+
+<h3>审核人（仓库管理员）看到的界面</h3>
+
+<p>打开 <strong>Pull requests</strong> 标签页：</p>
+
+<div class="mock">
+  <div class="mock-bar">
+    <span class="mock-dot r"></span><span class="mock-dot y"></span><span class="mock-dot g"></span>
+    <span class="mock-url">Pull requests · Liu-wang-cheng/TB_Import_tool</span>
+  </div>
+  <div class="mock-body">
+    <div class="tabs">
+      <span class="tab">Conversation</span>
+      <span class="tab">Commits</span>
+      <span class="tab">Checks</span>
+      <span class="tab active">Files changed</span>
+    </div>
+
+    <div style="border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
+      <div class="diff-header">src/sync_engine.py</div>
+      <div class="diff-ctx">&nbsp;&nbsp;existing.content[:60]</div>
+      <div class="diff-del">- log_msg = f"已存在: {existing.content[:60]}"</div>
+      <div class="diff-add">+ log_msg = f"已存在: {existing.content}"</div>
+    </div>
+
+    <div style="margin-top:12px; text-align:right;">
+      <span class="btn btn-green">✓ Review changes</span>
+    </div>
+  </div>
+</div>
+
+<h3>审核操作</h3>
+
+<p>点击 <strong>Review changes</strong> 按钮，出现审核选项：</p>
+
+<div class="review-box">
+  <div style="font-weight:600; margin-bottom:12px;">Review changes</div>
+  <div class="review-radio">
+    <div class="review-option">
+      <span class="radio-circle"></span>
+      <span>Comment — 仅评论，不做审核决定</span>
+    </div>
+    <div class="review-option">
+      <span class="radio-circle"></span>
+      <span>Approve — 审核通过，同意合并</span>
+    </div>
+    <div class="review-option">
+      <span class="radio-circle"></span>
+      <span>Request changes — 要求修改后再审核</span>
+    </div>
+  </div>
+  <div style="border:1px solid #d0d7de; border-radius:6px; padding:8px; margin:12px 0; min-height:40px; color:#656d76;">写你的审核意见...</div>
+  <span class="btn btn-green">Submit review</span>
+</div>
+
+<h3>审核通过后合并</h3>
+
+<div class="mock">
+  <div class="mock-body">
+    <div style="border:1px solid #d0d7de; border-radius:8px; padding:16px; background:#fff;">
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <div>
+          <div style="font-weight:600;">Merging into main from fix-login-bug-zhangsan</div>
+          <div style="color:#656d76; font-size:13px; margin-top:4px;">
+            <span style="color:#238636;">✓</span> zhangsan approved these changes
+          </div>
+        </div>
+        <span class="btn btn-green">Merge pull request</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 常见问题 ========== -->
+<h2>常见问题</h2>
+
+<h3>别人已经合并了代码，我怎么同步？</h3>
+<div class="code-block">
+  <span class="label">Terminal</span>
+  <span class="comment"># 先切回 main</span><br>
+  <span class="prompt">$</span> <span class="cmd">git checkout main</span><br><br>
+  <span class="comment"># 拉取最新代码</span><br>
+  <span class="prompt">$</span> <span class="cmd">git pull origin main</span><br><br>
+  <span class="comment"># 再创建新分支继续工作</span><br>
+  <span class="prompt">$</span> <span class="cmd">git checkout -b</span> your-new-branch
+</div>
+
+<h3>改着改着发现需要从 main 拉最新代码？</h3>
+<div class="code-block">
+  <span class="label">Terminal</span>
+  <span class="comment"># 在你的分支上，合并 main 的最新代码</span><br>
+  <span class="prompt">$</span> <span class="cmd">git fetch origin</span><br>
+  <span class="prompt">$</span> <span class="cmd">git merge origin/main</span>
+</div>
+
+<h3>不小心改错了，想放弃修改？</h3>
+<div class="code-block">
+  <span class="label">Terminal</span>
+  <span class="comment"># 还没 add — 恢复单个文件</span><br>
+  <span class="prompt">$</span> <span class="cmd">git checkout --</span> src/sync_engine.py<br><br>
+  <span class="comment"># 还没 add — 恢复所有文件</span><br>
+  <span class="prompt">$</span> <span class="cmd">git checkout --</span> .<br><br>
+  <span class="comment"># 已经 add 了但还没 commit</span><br>
+  <span class="prompt">$</span> <span class="cmd">git reset HEAD</span> src/sync_engine.py
+</div>
+
+<h3>不会用命令行，能用工具操作吗？</h3>
+<p>可以。以下工具都有图形界面，操作更直观：</p>
+<ul>
+  <li><strong>VS Code</strong> — 左侧源代码管理面板，点击 + 暂存、写消息、点 ✓ 提交、点 ↑ 推送</li>
+  <li><strong>GitHub Desktop</strong> — 专门为 GitHub 设计的桌面客户端，<a href="https://desktop.github.com" style="color:#0550ae">desktop.github.com</a> 下载</li>
+  <li><strong>PyCharm / IDEA</strong> — 底部 Git 面板，可视化 diff、commit、push</li>
+  <li><strong>TortoiseGit</strong> — 右键菜单集成，Windows 老牌工具</li>
+</ul>
+
+<!-- ========== 速查表 ========== -->
+<h2>命令速查表</h2>
+
+<table style="width:100%; border-collapse:collapse; font-size:14px; margin:16px 0;">
+  <thead>
+    <tr style="background:#f6f8fa;">
+      <th style="padding:10px 12px; border:1px solid #d0d7de; text-align:left;">操作</th>
+      <th style="padding:10px 12px; border:1px solid #d0d7de; text-align:left;">命令</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td style="padding:8px 12px; border:1px solid #d0d7de;">克隆仓库</td><td style="padding:8px 12px; border:1px solid #d0d7de; font-family:monospace;">git clone &lt;地址&gt;</td></tr>
+    <tr><td style="padding:8px 12px; border:1px solid #d0d7de;">拉取最新</td><td style="padding:8px 12px; border:1px solid #d0d7de; font-family:monospace;">git pull origin main</td></tr>
+    <tr><td style="padding:8px 12px; border:1px solid #d0d7de;">创建分支</td><td style="padding:8px 12px; border:1px solid #d0d7de; font-family:monospace;">git checkout -b &lt;分支名&gt;</td></tr>
+    <tr><td style="padding:8px 12px; border:1px solid #d0d7de;">查看状态</td><td style="padding:8px 12px; border:1px solid #d0d7de; font-family:monospace;">git status</td></tr>
+    <tr><td style="padding:8px 12px; border:1px solid #d0d7de;">添加文件</td><td style="padding:8px 12px; border:1px solid #d0d7de; font-family:monospace;">git add &lt;文件&gt;</td></tr>
+    <tr><td style="padding:8px 12px; border:1px solid #d0d7de;">提交</td><td style="padding:8px 12px; border:1px solid #d0d7de; font-family:monospace;">git commit -m "说明"</td></tr>
+    <tr><td style="padding:8px 12px; border:1px solid #d0d7de;">推送</td><td style="padding:8px 12px; border:1px solid #d0d7de; font-family:monospace;">git push -u origin &lt;分支名&gt;</td></tr>
+    <tr><td style="padding:8px 12px; border:1px solid #d0d7de;">切换分支</td><td style="padding:8px 12px; border:1px solid #d0d7de; font-family:monospace;">git checkout &lt;分支名&gt;</td></tr>
+    <tr><td style="padding:8px 12px; border:1px solid #d0d7de;">查看改动</td><td style="padding:8px 12px; border:1px solid #d0d7de; font-family:monospace;">git diff</td></tr>
+  </tbody>
+</table>
+
+<p style="text-align:center; color:#656d76; margin-top:40px;">TB Import Tool Team · 2026</p>
+
+</div>
+</body>
+</html>
