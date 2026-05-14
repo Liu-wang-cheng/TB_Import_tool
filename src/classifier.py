@@ -382,6 +382,15 @@ class BugClassifier:
         elif provider == "qwen" and not self._base_url:
             self._base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
+        # 兜底 LLM（主 LLM 全部重试失败后使用）
+        fb_cfg = llm_cfg.get("fallback", {})
+        self._fb_enabled: bool = fb_cfg.get("enabled", False)
+        self._fb_api_key: str = fb_cfg.get("api_key", "")
+        self._fb_base_url: str = fb_cfg.get("base_url",
+                                             "https://open.bigmodel.cn/api/paas/v4")
+        self._fb_model: str = fb_cfg.get("model", "glm-4-flash")
+        self._fb_timeout: int = fb_cfg.get("timeout", 60)
+
         self._fallback_enabled = cfg.get("fallback_enabled", True)
 
         # TF-IDF 相似度分类器
@@ -974,6 +983,18 @@ class BugClassifier:
         if not self._http:
             return None
 
+        result = self._call_primary_llm(prompt, max_tokens)
+        if result is not None:
+            return result
+
+        # 主 LLM 全部重试失败，尝试兜底 LLM
+        if self._fb_enabled and self._fb_api_key:
+            logger.info("主 LLM 失败，切换到兜底模型 %s", self._fb_model)
+            return self._call_fallback_llm(prompt, max_tokens)
+
+        return None
+
+    def _call_primary_llm(self, prompt: str, max_tokens: int) -> Optional[str]:
         url = f"{self._base_url.rstrip('/')}/chat/completions"
         messages = [
             {"role": "system", "content": (
@@ -1016,7 +1037,6 @@ class BugClassifier:
                     if reasoning and finish_reason == "length":
                         logger.debug("LLM 推理耗尽 token (reasoning %d 字符), "
                                      "finish_reason=length", len(reasoning))
-                        # token 不够，增加重试的 max_tokens
                         payload["max_tokens"] = min(
                             payload.get("max_tokens", 400) * 2, 8000)
                         continue
@@ -1035,6 +1055,47 @@ class BugClassifier:
             if attempt < self._max_retries:
                 time.sleep(2 ** attempt)
 
+        return None
+
+    def _call_fallback_llm(self, prompt: str, max_tokens: int) -> Optional[str]:
+        url = f"{self._fb_base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self._fb_api_key}",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        payload = {
+            "model": self._fb_model,
+            "messages": [
+                {"role": "system", "content": (
+                    "You are a helpful assistant for robot vacuum defect classification. "
+                    "Follow the user's format exactly. "
+                    "When categories are in Chinese, output the exact Chinese category name."
+                )},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.1,
+            "max_tokens": max_tokens,
+        }
+        try:
+            resp = self._http.post(
+                url, headers=headers,
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                timeout=self._fb_timeout,
+            )
+            if resp.status_code != 200:
+                logger.warning("兜底 LLM 返回 HTTP %d: %s",
+                               resp.status_code, resp.text[:200])
+                return None
+            data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if content:
+                logger.info("兜底 LLM (%s) 调用成功", self._fb_model)
+                return content
+            logger.warning("兜底 LLM 返回空内容")
+        except requests.exceptions.Timeout:
+            logger.warning("兜底 LLM 也超时 (%ds)", self._fb_timeout)
+        except Exception as e:
+            logger.warning("兜底 LLM 调用失败: %s", e)
         return None
 
     # ── 工具方法 ──────────────────────────────────────────
