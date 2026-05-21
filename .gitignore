@@ -1,0 +1,32 @@
+# AI Defect Analyzer - .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Generated output
+batch_report_*.html
+*.html
+
+# Downloaded / cached data
+cache/
+
+# Old reference tool
+Cp3LogTool*/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Claude
+.claude/
