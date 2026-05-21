@@ -1,0 +1,804 @@
+{
+  // 用于节点筛选
+  "node_id": {
+    "未知": 0,
+    "底盘控制": 1,
+    "EVENT_HUB": 2,
+    "定位建图": 3,
+    "CLEANPACK_MANAGER": 4,
+    "调试上位机": 5,
+    "导航": 6,
+    "UI交互": 7,
+    "IOT交互": 8,
+    "时间服务": 9,
+    "CONFIG_NODE": 10,
+    "任务调度": 11,
+    "待机任务": 12,
+    "清扫任务": 13,
+    "回充任务": 14,
+    "充电任务": 15,
+    "ERROR_TASK": 16,
+    "遥控任务": 17,
+    "RELOCALIZATION_TESTER": 18,
+    "SLAM_REF_TESTER": 19,
+    "升级服务": 20,
+    "SLAM_CONF_TESTER": 21,
+    "视频任务": 22,
+    "沿墙任务": 23,
+    "自检任务": 24,
+    "外设控制": 25,
+    "产测交互": 26,
+    "WEB_SERVER": 27,
+    "基站交互": 28,
+    "系统监控": 29
+  },
+  // 用于回放日志中节点名称匹配
+  "node_name": {
+    "Carrier": 1,
+    "sensor_node_carrier": 1,
+    "Event Hub": 2,
+    "Slam Pose Provider": 3,
+    "slam_manager": 3,
+    "Cleanpack Manager": 4,
+    "Debugger": 5,
+    "debug_proxy": 5,
+    "Navigator": 6,
+    "motion_manager": 6,
+    "navigator_lds": 6,
+    "Onboard UI": 7,
+    "onboard_ui": 7,
+    "Network Proxy": 8,
+    "network": 8,
+    "Time Server Tactics": 9,
+    "timer_server": 9,
+    "Config Node": 10,
+    "Task Manager": 11,
+    "Idle Task": 12,
+    "Clean Task": 13,
+    "app_sweeper": 13,
+    "Find Charger Task": 14,
+    "Charge Task": 15,
+    "Error Task": 16,
+    "Remote Control Task": 17,
+    "Relocaliz Tester": 18,
+    "Slam Tester": 19,
+    "Updater": 20,
+    "Slam conf tester": 21,
+    "AV Task": 22,
+    "Along Wall Task": 23,
+    "Check Task": 24,
+    "Controller": 25,
+    "CheckAll": 26,
+    "WebServer": 27,
+    "Work Station Proxy": 28,
+    "system_monitor": 29
+  },
+  // 用于回放日志中事件描述，由于CP3事件是枚举值，所以不同版本相同时间id值不同，但描述可以匹配
+  "event_desc": {
+    "EID_DEBUG": "调试日志",
+    "D": "调试日志",
+    "EID_INFO": "信息日志",
+    "I": "信息日志",
+    "EID_WARN": "警告日志",
+    "W": "警告日志",
+    "EID_ERROR": "错误日志",
+    "E": "错误日志",
+
+    "EID_I_START": "程序加载完成",
+    "EID_I_WHEEL_ERROR_RESUME": "主轮异常恢复",
+    "EID_I_SIDE_BRUSH_ERROR_RESUME": "边刷异常恢复",
+    "EID_I_MIDDLE_BRUSH_ERROR_RESUME": "中刷异常恢复",
+    "EID_I_FAN_SPEED_ERROR_RESUME": "风机转速异常恢复",
+    "EID_I_DROP_RESUME": "地检触发恢复",
+    "EID_I_LIDAR_COVER_RESUME": "雷达上盖触发恢复",
+    "EID_I_COLLISION_RESUME": "碰撞恢复",
+    "EID_I_PICK_UP_RESUME": "抱起恢复",
+    "EID_I_GARBAGE_BOX_IN": "尘盒插入",
+    "EID_I_WATER_PUMP_RESUME": "水泵异常恢复",
+    "EID_I_WATER_BOX_IN": "水箱插入",
+    "EID_I_MOP_PLUG_IN": "拖布插入",
+    "EID_I_MOP_PLUG_OUT": "拖布拔出",
+    "EID_I_MOP_PLUG_OUT_PAUSE_TASK": "工作中拖布拔出",
+    "EID_I_RESTART_WORK_AND_BUILDMAP": "重启清扫任务并建图",
+    "EID_I_WALK_IN_RUG": "进入地毯",
+    "EID_I_WALK_OUT_RUG": "离开地毯",
+    "EID_I_FIRMWARE_UPGRADE_PROGRESS": "固件升级进度",
+    "EID_I_MCU_UPGRADE_PROGRESS": "MCU升级进度",
+    "EID_I_CHARGE": "充电",
+    "EID_I_CHARGE_FULL": "充满电",
+    "EID_I_CHARGE_END_CLEANSELF": "自清洁完成充电",
+    "EID_I_POWER_KEY_CLICK": "电源按键点击",
+    "EID_I_POWER_KEY_PRESS": "电源按键长按",
+    "EID_I_HOME_KEY_CLICK": "回充按键点击",
+    "EID_I_HOME_KEY_PRESS": "回充按键长按",
+    "EID_I_DOUBLE_KEY_PRESS": "双键长按",
+    "EID_I_THREE_KEY_PRESS": "三键长按",
+    "EID_I_AREA_KEY_CLICK": "区域按键点击",
+    "EID_I_AREA_KEY_PRESS": "区域按键长按",
+    "EID_I_ENTER_CEC_MODE": "进入CEC模式",
+    "EID_I_CMD_TO_RESET_WIFI": "遥控指令重置WiFi",
+    "EID_I_HOME_KEY_DOUBLE_CLICK": "回充按键双击",
+    "EID_I_POWER_PRESS_COLLISION": "电源按键及碰撞触发",
+    "EID_I_MOP_KEY_CLICK": "拖地按键点击",
+
+    "EID_I_APP_CURPOINT_CLEAN": "APP触发局部清扫",
+    "EID_I_APP_APPOINT_CLEAN": "APP触发定点扫",
+    "EID_I_APP_REAPPOINT_CLEAN": "APP触发重开清扫",
+
+    // network_proxy
+    "EID_I_APP_SET_CMD": "APP设置指令",
+    "EID_I_APP_START_CLEAN": "开始清扫",
+    "EID_I_STOP_CLEAN": "停止清扫",
+    "EID_I_APP_PAUSE_CLEAN": "暂停清扫",
+    "EID_I_APP_CONTINUE_CLEAN": "继续清扫",
+    "EID_I_APP_START_FIND_CHG": "开始回充",
+    "EID_I_APP_PAUSE_FIND_CHG": "暂停回充",
+    "EID_I_APP_STOP_FIND_CHG": "停止回充",
+    "EID_I_APP_SET_FORBID_AREA": "设置禁区",
+    "EID_I_ACTIVE_REGIONS": "激活区域",
+    "EID_I_APP_START_FIND_CHG_AND_WASH": "开始回洗",
+    "EID_I_APP_PAUSE_FIND_CHG_AND_WASH": "暂停回洗",
+    "EID_I_APP_RESUME_FIND_CHG_AND_WASH": "继续回洗",
+    "EID_I_APP_STOP_FIND_CHG_AND_WASH": "停止回洗",
+    "EID_I_APP_START_EXPLORE_MAP_CLEAN": "开始探索建图",
+
+    // Time && Ntp EID
+    "EID_I_TIME_TO_WORK": "预约清扫时间到",
+    "EID_I_TIMETACTICS_CHANGE": "预约策略变化",
+    "EID_I_ENTER_SILENT_MODE": "进入勿扰模式",
+    "EID_I_EXIT_SILENT_MODE": "退出勿扰模式",
+    "EID_I_NET_TIME_UPDATED": "网络时间同步",
+    "EID_I_SYSTEM_TIME_UPDATED": "系统时间更新",
+    "EID_I_APP_SET_TIME": "设置系统时间",
+    "EID_I_SET_TIMETACTICS": "设置定时策略",
+    "EID_I_GET_TIMETACTICS": "获取定时策略",
+    "EID_I_GET_NEXT_CLEAN_TIME": "获取下次预约清扫时间",
+    "EID_I_TIMETACTICS_WILL_START": "预约清扫即将开始",
+
+    // tasks
+    "EID_I_IDLE_TASK_START": "待机任务开始",
+    "EID_I_IDLE_TASK_PAUSED": "待机任务暂停",
+    "EID_I_IDLE_TASK_RESUME": "待机任务继续",
+    "EID_I_IDLE_TASK_STOPPED": "待机任务停止",
+    "EID_I_CLEAN_TASK_START": "清扫任务开始",
+    "EID_I_POINT_CLEAN_TASK_START": "定点清扫开始",
+    "EID_I_CUR_POINT_CLEAN_TASK_START": "布局清扫开始",
+    "EID_I_AREA_CLEAN_TASK_START": "区域清扫开始",
+    "EID_I_ROOM_CLEAN_TASK_START": "房间清扫开始",
+    "EID_I_SMART_CLEAN_TASK_START": "全局房间清扫开始",
+    "EID_I_GENERAL_CLEAN_TASK_START": "大扫除清扫开始",
+    "EID_I_SPIRAL_CLEAN_TASK_START": "螺旋清扫开始",
+    "EID_I_SMART_AREA_CLEAN_TASK_START": "分区清扫开始",
+    "EID_I_CLEAN_TASK_PAUSED": "清扫暂停",
+    "EID_I_CLEAN_TASK_RESUME": "清扫继续",
+    "EID_I_CLEAN_TASK_STOPPED": "清扫停止",
+    "EID_I_CLEAN_TASK_END": "清扫任务结束",
+    "EID_I_CUR_POINT_CLEAN_TASK_STOPPED": "局部清扫结束",
+    "EID_I_CLEAN_TASK_FINISHED": "清扫完成",
+    "EID_I_CLEAN_TASK_LOW_BATTERY_PAUSE": "清扫低电暂停",
+    "EID_I_FIND_CHARGER_TASK_START": "回充开始",
+    "EID_I_FIND_CHARGER_TASK_PAUSED": "回充暂停",
+    "EID_I_FIND_CHARGER_TASK_RESUME": "回充继续",
+    "EID_I_FIND_CHARGER_TASK_STOPPED": "回充停止",
+    "EID_I_FIND_CHARGER_TASK_FINISHED": "回充结束",
+    "EID_I_FIND_CHARGER_TASK_FAILED": "回充失败",
+    "EID_I_MOVE_OBST_NEAR_CHARGER": "移除回充座周边障碍物",
+    "EID_I_DUST_CENTER_CONNECTION_FAILED": "集尘连接异常",
+    "EID_I_CHARGE_TIME_TOO_LONG": "充电时间过长",
+    "EID_I_LOST_CHG_POWER_IDLE": "掉电进入待机",
+    "EID_I_LOST_CHG_POWER_FIND_CHG": "掉电进入回充",
+    "EID_I_CHARGE_FULL_RESUME_TASK": "充电恢复清扫",
+    "EID_I_LOW_POWER_TO_CLEAN": "电量不足无法启动清扫",
+    "EID_I_CHARGE_TASK_START": "充电任务开始",
+    "EID_I_CHARGE_TASK_PAUSED": "充电任务暂停",
+    "EID_I_CHARGE_TASK_RESUME": "充电任务恢复",
+    "EID_I_CHARGE_TASK_STOPPED": "充电任务结束",
+    "EID_I_REMOTE_CONTROL_TASK_START": "遥控任务开始",
+    "EID_I_REMOTE_CONTROL_TASK_PAUSED": "遥控任务暂停",
+    "EID_I_REMOTE_CONTROL_TASK_RESUME": "遥控任务继续",
+    "EID_I_REMOTE_CONTROL_TASK_STOPPED": "遥控任务结束",
+    "EID_I_FIND_CHARGER_AND_WASH_TASK_START": "回洗任务开始",
+    "EID_I_FIND_CHARGER_AND_WASH_TASK_PAUSE": "回洗任务暂停",
+    "EID_I_FIND_CHARGER_AND_DUST_TASK_START": "集尘任务开始",
+    "EID_I_FIND_CHARGER_AND_DUST_TASK_PAUSE": "集尘任务暂停",
+    "EID_I_TRACE_TASK_START": "跟随任务开始",
+    "EID_I_TRACE_TASK_STOPPED": "跟随任务结束",
+    "EID_I_TRACE_PATH_START": "开始循迹",
+
+    "EID_I_CLEAN_INFO_UPDATED": "清扫信息更新",
+    "EID_I_GET_CLEANPACK_STATUS": "获取状态",
+    "EID_I_CHANGE_WORK_MODE": "改变风机档位",
+    "EID_I_CHANGE_WORK_MODE_PROMPT_VOICE": "改变风机档位语音提示", // 触发播报风机挡位切换语音
+    "EID_I_CHANGE_CLEAN_MODE": "改变清扫模式",
+    "EID_I_CHANGE_WASH_MOP_CLEAN_AREA": "改变拖地区域",
+    "EID_I_RECOVERY_FAN_SPEED": "恢复风机档位",
+    "EID_I_GET_NODES_CONFIG": "获取配置",
+    "EID_I_SET_NODES_CONFIG": "设置配置",
+
+    "EID_I_WIFI_RESET": "WiFi重置",
+    "EID_I_WIFI_RESET_SMART_MODE": "WiFi重置为快联模式", // play music
+    "EID_I_WIFI_RESET_QRCODE_MODE": "WiFi重置为二维码模式", // play music
+    "EID_I_WIFI_RESET_EXIT": "退出配网模式",
+    "EID_I_CONFIG_WIFI_BEGIN": "开始配网",
+    "EID_I_CONFIG_WIFI_SUCCESS": "配网成功",
+    "EID_I_CONFIG_WIFI_FAILED": "配网失败",
+    "EID_I_CONFIG_WIFI_AP_MODE": "AP配网模式",
+    "EID_I_CONFIG_WIFI_SMART_MODE": "快联配网模式",
+    "EID_I_WIFI_AP_MODE_OVERTIME": "AP模式超时",
+    "EID_I_GET_MCU_VER": "获取MCU版本",
+    "EID_I_GET_MCU_RTC": "获取RTC时间",
+    "EID_I_NET_CONN": "设备上线",
+    "EID_I_NET_DISCONN": "设备离线",
+    "EID_I_BLE_CLOSE": "蓝牙关闭",
+
+    "EID_I_REMOTE_CTRL_START": "开始遥控",
+    "EID_I_REMOTE_CTRL_END": "结束遥控",
+
+    "EID_I_LOW_BATTERY_FIND_CHARGER": "低电回充",
+
+    "EID_I_LOW_BAT_WARN": "低电警告",
+    "EID_I_LOW_BAT_NEED_POWEROFF": "低电关机",
+
+    "EID_I_ENTER_DORMANT": "进入休眠",
+    "EID_I_EXIT_DORMANT": "退出休眠",
+    "EID_I_SYSTEM_WAKEUP": "系统唤醒",
+    "EID_I_CLEAN_TASK_PAUSED_MANUALLY": "人为暂停清扫",
+    "EID_I_IMU_SHAKEN": "机器震动",
+
+    "EID_I_REBUILD_MAP_DONE": "建图完成",
+    "EID_I_SLAM_LOCATION_SUCCESS": "定位成功",
+    "EID_I_CAN_PROVIDE_SHOW_POSE": "开始提供位姿",
+
+    "EID_I_SLAM_LOCATION_START": "开始定位", // 开始定位，用于播报提示语音 “定位中”
+
+    "EID_I_SAVE_CARPET_MAP": "保存毛毯地图", ///< 保存毛毯地图
+    "EID_I_LOAD_CARPET_MAP": "载入毛毯地图", ///< 载入毛毯地图
+    "EID_I_CLEAN_CARPET_MAP": "清除毛毯地图", ///< 清除毛毯地图
+
+    "EID_I_CHARGER_POSE_UPDATED": "充电桩位姿更新",
+    "EID_I_APPOINTMENT_TASK_DISABLE": "预约清扫不启动", // have clean task, disable
+    "EID_I_APPOINTMENT_TASK_DISABLE_IN_SILENT_MODE": "勿扰中不启动预约", // in silent mode, disable (first check than above)
+    "EID_I_FIND_CHARGER_APPOINTMENT_TASK_DISABLE": "回充中不启动预约", //回充中不能启动预约清扫
+    "EID_I_PAUSE_ON_CHARGER_APPOINTMENT_TASK_DISABLE": "有断点续扫不启动预约", //即将断点续扫不能启动预约清扫
+    "EID_I_WATER_EMPTY_PAUSE_APPOINTMENT_TASK_DISABLE": "水箱空不启动预约", //水箱问题不能启动预约
+    "EID_I_SEWAGE_BOX_FULL_APPOINTMENT_TASK_DISABLE": "污水箱满不启动预约", //污水箱满不能启动预约
+    "EID_I_TIME_TO_WORK_AND_LOW_BATTERY": "低电不启动预约", //低电中触发预约清扫
+    "EID_I_FULL_CHARGE_RESUME_TASK_DISABLE_IN_SILENT_MODE": "勿扰不启动续扫任务", // in silent mode, disable
+    "EID_I_FIND_WASH_MOP_CLEAN_TASK_DISABLE": "回洗中不启动清扫", //回洗拖布过程中不启动清扫
+    "EID_I_TIME_TO_WORK_START": "预约清扫开始",
+    "EID_I_ACTIVE_REGIONS_AT_WORK": "清扫中激活区域",
+    "EID_I_MAP_AND_REGION_CHANGED": "地图及区域变化",
+
+    "EID_I_NODE_EXIT": "程序崩溃",
+
+    "EID_I_WATER_PUMP_CHANGE": "出水档位变化",
+    "EID_I_WATER_PUMP_CHANGE_PROMPT_VOICE": "出水档位变化语音提示", // APP切换水泵挡位时播报题韬是语音
+    "EID_I_FIND_ROBOT": "查找机器人",
+    "EID_I_FIND_ROBOT_STOP": "停止查找机器人",
+    "EID_I_FIND_ROBOT_STOPPED": "查找机器人技术",
+    "EID_I_UPDATE_CLEAN_REGIONS": "更新清扫区域",
+
+    "EID_I_ONE_KEY_ALONGWALL": "一键沿墙", //一键沿墙
+
+    "EID_I_SILENT_UPGRADE_DOWNLOAD": "开始静默升级",
+
+    "EID_I_AUTO_FORBID_AREA_UPDATED": "自动禁区更新", // auto forbid updated
+    "EID_I_START_CONNECT_TO_REMOTE": "开始连接IOT服务器", // tell network_proxy start to connect remote ..
+    "EID_I_GET_CONNECT_TO_REMOTE_RESULT": "获取IOT连接结果", // check connect to remote result ..
+    "EID_I_SKIDDING": "打滑", // skidding
+    "EID_I_FORBID_REGIONS_CHANGED": "禁区更新",
+
+    "EID_I_LOCATION_START": "开始定位",
+    "EID_I_LOCATION_DONE": "定位结束",
+    "EID_I_QUICK_BUILD_MAP_START": "开始探索建图",
+    "EID_I_QUICK_BUILD_MAP_DONE": "探索建图完成",
+    // CPS event
+    "EID_I_CPS_IDLE": "待机状态",
+    "EID_I_CPS_DORMANT": "休眠状态",
+    "EID_I_CPS_CLEAN": "清扫状态",
+    "EID_I_CPS_PAUSE": "暂停状态",
+    "EID_I_CPS_FIND_CHARGER": "回充状态",
+    "EID_I_CPS_CHARGING": "充电状态",
+    "EID_I_CPS_ERROR": "异常状态",
+    "EID_I_CPS_REMOTE_CONTROL": "遥控状态",
+    "EID_I_CPS_FULL_CHARGE": "满电状态",
+    "EID_I_CPS_SHUTDOWN": "关机状态",
+    "EID_I_CPS_FIND_CHARGER_PAUSE": "回充暂停状态",
+    "EID_I_CPS_FIND_CHARGER_AND_WASH": "回洗状态",
+    "EID_I_CPS_DUST_CENTER_WORKING": "集尘状态",
+    "EID_I_CPS_RUNNING_MODE": "跑机模式",
+    "EID_I_CPS_CHECK_MODE": "自检模式",
+    "EID_I_CPS_SELF_CLEAN_MODE": "自清洁模式",
+    "EID_I_CPS_DRYING": "风干模式",
+    "EID_I_CPS_FIND_CHARGER_AND_WASH_PAUSE": "回洗暂停",
+    "EID_I_WIFI_AP_MODE": "AP模式",
+
+    "EID_I_OPEN_CAMERA": "开启摄像头",
+    "EID_I_CLOSE_CAMERA": "关闭摄像头",
+    "EID_I_ENABLE_AUTO_BOOST": "开启自动增压",
+    "EID_I_DISABLE_AUTO_BOOST": "关闭自动增压",
+    "EID_I_ENABLE_RUG_AVOID": "开启地毯避让",
+    "EID_I_DISABLE_RUG_AVOID": "关闭地毯避让",
+    "EID_I_CHANGE_VOLUMN": "改变音量",
+    "EID_I_SLIP_PROCESS_START": "溜坡处理开始",
+    "EID_I_SLIP_PROCESS_END": "溜坡处理结束",
+    "EID_I_CHARGE_FULL_EXIT": "满电退出", //充满后电量低于100%发出该事件
+    "EID_I_CHG_BAT_LEVEL_OK": "电量高于低电电量",
+    "EID_I_ENTER_MUTE": "静音",
+    "EID_I_EXIT_MUTE": "退出静音",
+
+    "EID_I_MCU_RESET": "MCU重启",
+    "EID_I_POLE_DUST_DETECTED": "检测到集尘极片",
+    "EID_I_COLLECT_DUST_START": "集尘开始",
+    "EID_I_COLLECT_DUST_FINISH": "集尘结束",
+    "EID_I_COLLECT_DUST_DONE": "集尘完成",
+    "EID_I_ENTER_DEEP_DORMANT": "进入深度休眠",
+    "EID_I_RESET_USER_DATA": "重置用户设置数据",
+    "EID_I_NODE_CONFIG_RESETED": "配置数据重置",
+    "EID_I_CUR_POINT_CLEAN_DONE_AND_RELOAD_MAP": "局部清扫完成恢复地图",
+    "EID_I_MOP_NEED_CLEAN": "拖布需要清洁",
+    "EID_I_MOP_PAUSE_CLEAN": "暂停回洗", //暂停回洗
+    "EID_I_TAKE_OFF_WATER_BOX": "水箱取出",
+
+    "EID_I_DUST_CENTER_WORK_START": "开始集尘",
+    "EID_I_DUST_CENTER_WORK_DONE": "集尘结束",
+    "EID_I_DUST_CENTER_WORK_FAILED": "集尘失败",
+    "EID_I_DUST_CENTER_FREQ_CHANGE": "更改集尘频率",
+    "EID_I_START_DUST_CENTER_WORK": "收到基站指令开始集尘",
+    "EID_I_OPEN_CLEAN_COMPONENT": "开启清扫组件",
+    "EID_I_CLOSE_CLEAN_COMPONENT": "关闭清扫组件",
+    "EID_I_BKMAP_SWITCH": "还原地图开关",
+    "EID_I_MOP_START": "开始拖地",
+    "EID_I_RF_START_FIND_CHG": "遥控开始回充",
+    "EID_I_LOW_BAT_PAUSE_CLEAN_SWITCH": "断点续扫功能开关",
+    "EID_I_MAP_AND_REGION_DELETED": "地图及区域删除",
+    "EID_I_REPLACE_MOP_WORK_DONE": "拖布更换完成",
+    "EID_I_PATH_TYPE_CHANGE": "路径类型变化",
+    "EID_I_UV_MODE_CHANGE": "UV模式变化",
+    "EID_I_OPEN_UV_MODE": "开启UV模式",
+    "EID_I_OPEN_UV_MODE_WITH_WATER_BOX": "带水箱开启UV模式",
+    "EID_I_CLOSE_UV_MODE": "关闭UV模式",
+    "EID_I_OPEN_ST_MODE": "开启ST模式",
+    "EID_I_OPEN_ST_MODE_WITH_WATER_BOX": "带水箱开启ST模式",
+    "EID_I_CLOSE_ST_MODE": "关闭ST模式",
+
+    "EID_I_LINE_LASER_UPGRADE_PROGRESS": "线激光升级进度",
+    "EID_I_CHANGE_DEEP_CLEAN_MODE": "二次清扫开关变化",
+    "EID_I_CHANGE_ALONG_WALL_MODE": "沿墙模式开关变化",
+    "EID_I_CHECK_TASK_START": "自检任务开始",
+    "EID_I_CHECK_TASK_PAUSED": "自检任务暂停",
+    "EID_I_CHECK_TASK_RESUME": "自检任务继续",
+    "EID_I_CHECK_TASK_STOPPED": "自检任务停止",
+    "EID_I_CHECK_MODE_START": "进入自检模式",
+    "EID_I_CHECK_MODE_END": "自检任务结束",
+    "EID_I_CHECK_STEP_PASS": "检测步骤通过",
+    "EID_I_CHECK_STEP_FAILED": "检测步骤失败",
+    "EID_I_CHECK_WIFI": "检测WiFi",
+    "EID_I_CHECK_START": "检测开始",
+    "EID_I_CHECK_RIGHT_COLLISION": "检测右碰撞",
+    "EID_I_CHECK_LEFT_COLLISION": "检测左碰撞",
+    "EID_I_CHECK_WATER_TANK": "检测水箱",
+    "EID_I_CHECK_MOP": "检测拖布",
+    "EID_I_CHECK_PUMP": "检测水泵",
+    "EID_I_CHECK_CLIFF_LF": "检测左前地检",
+    "EID_I_CHECK_CLIFF_LB": "检测左后地检",
+    "EID_I_CHECK_CLIFF_RF": "检测右前地检",
+    "EID_I_CHECK_CLIFF_RB": "检测右后地检",
+    "EID_I_CHECK_ALONG_WALL": "检测沿墙",
+    "EID_I_CHECK_MIDDLE_BROOM": "检测中间碰撞",
+    "EID_I_CHECK_LEFT_WHEEL": "检测左轮",
+    "EID_I_CHECK_RIGHT_WHEEL": "检测右轮",
+    "EID_I_CHECK_FAN": "检测风机",
+    "EID_I_CHECK_SIDE_BROOM": "检测边刷",
+    "EID_I_CHECK_LEFT_WHEEL_OVER_CURRENT": "左轮过流检测",
+    "EID_I_CHECK_RIGHT_WHEEL_OVER_CURRENT": "右轮过流检测",
+    "EID_I_CHECK_MIDDLE_BROOM_OVER_CURRENT": "中扫过流检测",
+    "EID_I_CHECK_SIDE_BROOM_OVER_CURRENT": "边扫过流检测",
+    "EID_I_CHECK_IMU": "检测陀螺仪",
+    "EID_I_CHECK_LIDAR": "检测雷达",
+    "EID_I_CHECK_CHARGE": "检测充电",
+    "EID_I_CHECK_BATTERY_LEVEL": "检测电量",
+    "EID_I_CHECK_FRONT_FIND_CHARGER": "检测前回充",
+    "EID_I_CHECK_BEHIND_FIND_CHARGER": "检测后回充",
+    "EID_I_CHECK_ENCODER_POS": "检测编码器",
+    "EID_I_CHECK_SEWAGE_BOX_FULL": "检测污水箱满",
+    "EID_I_CHECK_WATER_EMPTY": "检测水箱空",
+    "EID_I_CHECK_PICK_UP_ROBOT": "检测离地",
+    "EID_I_ADD_CUR_MAP_TO_MULTI_MAPS": "添加当前地图到多地图列表",
+    "EID_I_LOCAL_MULTI_MAP_SWITCH": "本地多地图切换", // switch map by cleantask for multimap relocation,continue
+    // cleaning after this event
+    "EID_I_LOCAL_MULTI_MAP_SWITCH_DONE": "本地多地图切换完成",
+    "EID_I_433_PAIR_MODE_KEY_ACTIVED": "触发433配对",
+    "EID_I_433_ENTER_PAIR_MODE": "433开始配对",
+    "EID_I_433_EXIT_PAIR_MODE": "433退出配对",
+    "EID_I_433_PAIR_SUCCESS": "433配对成功",
+    "EID_I_433_PAIR_TIMEOUT": "433配对超时",
+    "EID_I_FACTORY_RESET_SUCCESS": "恢复出厂设置成功",
+    "EID_I_APP_REQ_SAVE_BK_MAP": "APP请求保存地图",
+    "EID_I_LOCAL_MULTI_MAP_SWITCH_BY_CUSTOMER": "用户执行本地地图切换", // switch map by user
+    "EID_I_LOCAL_MULTI_MAP_CHANGE": "本地地图切换",
+    "EID_I_USE_AUTO_AERA_VALUE": "定制模式开关切换",
+    "EID_I_APP_FACTORY_RESET_SUCCESS": "APP恢复出厂设置成功",
+    "EID_I_NEW_MAP_FIRST_CLEAN_DONE": "新地图首次清扫完成",
+    "EID_I_WORKSTATION_TYPE_CHANGE": "充电桩类型变化",
+    "EID_I_WORKSTATION_VERSION_CHANGE": "基站版本变化",
+    "EID_I_WORKSTATION_AIRDRYING_TIME_CHANGE": "风干时间变化",
+    "EID_I_APP_START_CLEAN_SELF": "app触发开始自清洁", // app触发开始自清洁
+    "EID_I_START_CLEAN_SELF": "开始自清洁", ///< 开始自清洁
+    "EID_I_END_CLEAN_SELF": "完成自清洁", ///< 完成自清洁
+    "EID_I_ENABLE_CLEAN_SELF": "清扫完自动清洁功能使能", ///< 清扫完自动清洁功能使能
+    "EID_I_DISABLE_CLEAN_SELF": "清扫完自清洁功能使关闭", ///< 清扫完自清洁功能使关闭
+    "EID_I_REPLACE_MOP_AND_RESTART_CLEAN": "更换拖布并重新开始清扫", ///< 更换拖布并重新开始清扫
+    "EID_I_EXPLORE_BUILD_MAP_START": "开始探索建图", ///< 开始探索建图
+    "EID_I_EXPLORE_BUILD_MAP_DONE": "探索建图完成", ///< 探索建图完成
+    "EID_I_EXPLORE_BUILD_MAP_STATE_CHANGE": "探索建图状态变化", ///< 探索建图状态改变，用于建图完成后自动开始清洁功能
+
+    "EID_I_TRANSFORM_MAP_START": "启动地图对正", ///< 启动地图对正
+    "EID_I_GET_RUGBOOST_STATE": "获取地毯检测状态",
+    "EID_I_LINE_LASER_VERSION_INFO": "线激光版本信息", ///< 线激光软硬件版本等信息
+
+    "EID_I_CHANGE_MOP_BRUSH": "设置边刷档位", ///边刷电机
+    "EID_I_START_WASH_MOP": "开始清洗拖布",
+    "EID_I_PAUSE_WASH_MOP": "暂停清洗拖布",
+    "EID_I_START_STATION_INTEGRATION_WORK": "开始基站一体化工作", //开始基站加水+自清洁+加水一体化工作
+    "EID_I_START_WET_MAP": "开始润湿拖布", ///开始润湿拖布
+    "EID_I_WET_MOP_DONE": "润湿拖布完成", ///润湿拖布完成
+    "EID_I_CANNOT_WET_MOP": "无法润湿拖布", ///无法润湿拖布
+    "EID_I_CONTINUE_WASH_MOP": "继续清洗拖布",
+    "EID_I_STOP_WASH_MOP": "停止清洗拖布",
+    "EID_I_WASH_MOP_DONE": "清洗拖布完成",
+    "EID_I_WASH_MOP_FINISH": "清洗拖布结束",
+    "EID_I_COLLECT_DUST_IN": "尘袋装入",
+    "EID_I_CANNOT_WASH_MOP": "无法清洗拖布", ///无法清洗拖布
+    "EID_I_TOP_MATERIAL_UP": "基站顶杆抬起", ///基站顶杆抬起
+    "EID_I_TOP_MATERIAL_DOWN": "基站顶杆放下", ///基站顶杆放下
+    "EID_I_START_WASH_BOTTOM_SHELL": "开始清洗底壳", ///开始清洗底壳
+    "EID_I_REQUEST_IF_RETURN_TO_WORKSTATION": "请求是否可以返回基站", ///请求是否可以返回基站,某些场景下机器可能不能返回基站进行相关操作
+    "EID_I_CANNOT_RETURN_TO_WORKSTATION": "无法返回基站", //无法返回基站
+    "EID_I_WORKSTATION_STATE_CHANGE": "基站状态发生改变", ///基站状态发生改变
+    "EID_I_WORKSTATION_WASH_MOP_CANNOT_START_WORK": "机器洗拖布中无法启动清扫", //机器洗拖布中无法启动清扫
+    "EID_I_WORKSTATION_MOTOR_STATE_CHANGE": "基站电机状态切换", //基站电机状态切换
+    "EID_I_CHANGE_VOICE_PACKAGE_DOWN": "切换语音成功", ///< 切换语音成功
+    "EID_I_FIND_CHARGER_AND_EXIST_MOP": "回充请取下拖布", ///< 回充时若已安装拖布，则语音提示用户取下拖布
+    "EID_I_FILTER_OVERDUE_SOON": "滤网即将过期", //滤网即将过期
+    "EID_I_FILTER_OVERDUE": "滤网已过期", //滤网已过期
+    "EID_I_MAINBRUSH_OVERDUE_SOON": "主刷即将过期", //主刷即将过期
+    "EID_I_MAINBRUSH_OVERDUE": "主刷已过期", //主刷已过期
+    "EID_I_SIDEBRUSH_OVERDUE_SOON": "边刷即将过期", //边刷即将过期
+    "EID_I_SIDEBRUSH_OVERDUE": "边刷已过期", //边刷已过期
+    "EID_I_SENSOR_OVERDUE_SOON": "传感器即将过期", //传感器即将过期
+    "EID_I_SENSOR_OVERDUE": "传感器已过期", //传感器已过期
+    "EID_I_MID_BROOM_SELF_CLEAN": "滚刷自清洁", //滚刷自清洁
+    "EID_I_MID_BRUSH_CHANGE_LEVEL": "主刷档位变化", //主刷档位变化
+    "EID_I_ENTER_DRYINGT_MODE": "进入风干模式", //进入风干模式
+    "EID_I_EXIT_DRYINGT_MODE": "退出风干模式", //退出风干模式
+    "EID_I_CHANGE_CLEANING_MODE": "清洁模式变化", //清洁模式
+    "EID_I_CHANGE_SWEEP_TO_MOP": "干扫状态下自动切换到湿拖", //干扫状态下自动切换到湿拖
+    "EID_I_CHANGE_MOP_TO_SWEEP": "湿拖状态下自动切换到干扫", //湿拖状态下自动切换到干扫
+    "EID_I_START_COLLECT_DUST": "通知基站开始集尘", //通知基站开始集尘
+    "EID_I_START_COLLECT_DUST_AND_WASH_MOP": "通知基站开始集尘和洗拖布", //通知基站开始集尘和洗拖布
+    "EID_I_RECALL_WASH_MOP": "召回扫地机清洗拖布", //召回扫地机清洗拖布
+    "EID_I_SEWAGE_BOX_IN": "污水箱箱在位", //RM66L污水箱箱在位
+    "EID_I_DUST_BOX_IN": "尘袋在位", //RM66L尘袋在位
+    "EID_I_TRAY_IN": "托盘在位", //RM66L托盘在位
+    "EID_I_CLEAR_TANK_IN": "净水箱在位", //RM66L净水箱在位
+    "EID_I_CLEAR_BOX_EMPTY": "基站清水箱空", //< RM66L基站清水箱空
+    "EID_I_SEWAGE_BOX_FULL": "基站污水箱满", //< RM66L基站污水箱满
+    "EID_I_CLEANNING_TIME": "处于清扫的次数", //< RM66L处于清扫的次数
+    "EID_I_START_DRY": "开始风干", //< RM66L开始风干
+    "EID_I_STOP_DRY": "停止风干",
+    "EID_I_START_DRY_START": "开始烘干", //开始烘干
+    "EID_I_START_DRY_DONE": "结束烘干", //结束烘干
+    "EID_I_CHANGE_BASESTATION_CONTROL": "控制基站参数", //控制基站参数
+    "EID_I_BASESTATION_DUST_BOX_CLEAR": "基站尘盒已更换事件", //基站尘盒已更换事件
+    "EID_I_CLEAN_MOP_START": "清洗拖布开始", //< RM66L清洗拖布开始
+    "EID_I_CLEAN_MOP_DONE": "清洗拖布结束", //< RM66L清洗拖布结束
+    "EID_I_CLEAN_MOP_DONE_FOR_ERROR": "清洗拖布错误结束", //< RM66L清洗拖布错误结束
+    "EID_I_CLEAN_MOP_FIRST": "清洗首次拖布", //< RM66L清洗首次拖布
+    "EID_I_CHANGE_FINDWASH_TIME": "回洗时间", //RM66L回洗时间
+    "EID_I_CHANGE_MOP_WASH_MODE": "拖布清洗方式变化", //拖布清洗方式
+    "EID_I_CONTINUE_CLEAN_DUST_CENTER_WORK_DONE": "集尘完成续扫", // 集尘完成续扫
+    "EID_I_CANCEL_SELF_CLEAN": "取消自清洁", //取消自清洁
+    "EID_I_ENABLE_Y_PATH": "使用Y字拖", //使用Y字拖
+    "EID_I_DISABLE_Y_PATH": "禁用Y字拖", //禁用Y字拖
+    "EID_I_AUTO_DOUBLE_CLEAN": "自动二次清扫", //小面积或者短时间内自动扫两次
+    "EID_I_SWEEP_MODE_SELF_CLEAN_DONE": "干扫自清洁结束", //干扫自清洁结束
+    "EID_I_SELF_CLEAN_WATER_EMPTY": "自清洁时清水箱空", //自清洁时清水箱空
+    "EID_I_EXIT_SILENT_MODE_CONTINUE_CLEAN": "退出勿扰时自动继续清洁", //推出勿扰时自动继续清洁
+    "EID_I_PAUSE_DRYING": "暂停烘干", //暂停烘干
+    "EID_I_CONTINUE_DRYING": "继续烘干", //继续烘干
+    "EID_I_WATER_WASH_MOP": "自清洁时水箱加水", //R100项目，自清洁时水箱加水
+    "EID_I_CARRIER_ERROR_MASK_SWITCH": "底盘报错事件屏蔽开关", //Carrier报错事件屏蔽开关
+    "EID_I_START_WETTING_MOP": "开始润湿滚刷", //开始润湿滚刷
+    "EID_I_WATER_EMPTY_FIND_CHARGER": "清水箱空回充", //清水箱空回充
+    "EID_I_SEWAGE_BOX_FULL_FIND_CHARGER": "污水箱满回充", //污水箱满回充
+    "EID_I_TURN_ROBOT": "翻转机器报警", //翻转机器报警
+    "EID_I_SILENT_CHARGING": "静默充电", //静默充电
+    "EID_I_SET_RUG_AVOID_MODE": "设置地毯避让模式",
+    "EID_I_PATH_TYPE": "设置清扫路径类型", //清扫路径
+    "EID_I_SINGLE_WATER_INJECTION": "单次注清水", // 单次注清水
+    "EID_I_SINGLE_COLLECT_DUST": "单次集尘", // 单次集尘
+    "EID_I_SINGLE_WASH_MOP": "单次洗拖布", // 单次洗拖布
+    "EID_I_SINGLE_DRY_MOP": "单次烘干", // 单次烘干
+    "EID_I_APP_DUST_AND_WASH": "一键全维护", // 一键全维护
+    "EID_I_STATION_WATER_INJECTION": "请求基站注清水", // 请求基站注清水
+    "EID_I_STATION_WATER_INJECT_START": "基站注水开始", // 基站注水开始
+    "EID_I_STATION_WATER_INJECT_DONE": "基站注清水完成", // 基站注清水完成
+    "EID_I_STATION_WATER_INJECT_FINISH": "基站注清水完成", // 基站注清水完成
+    "EID_I_STATION_INTEGRATION_WORK_DONE": "基站集成维护工作完成", // 基站集成维护工作完成
+    "EID_I_STATION_INTEGRATION_WORK_FINISH": "基站集成维护工作结束", // 基站集成维护工作结束
+    "EID_I_APP_REQUEST_DRY_MOP": "APP请求烘干", //APP请求烘干
+    "EID_I_STATION_DRY_MOP_START": "基站烘干开始", // 基站烘干开始
+    "EID_I_STATION_DRY_MOP_DONE": "基站烘干完成", // 基站烘干完成
+    "EID_I_STATION_DRY_MOP_FINISH": "基站烘干结束", // 基站烘干结束
+    "EID_I_REQUEST_ADD_WATER": "请求加水",
+    "EID_I_STATION_WATER_SEWAGE": "请求基站抽污水", // 请求基站抽污水
+    "EID_I_STATION_ELECTROCATALYSIS": "请求基站电催化", // 请求基站电催化
+    "EID_I_START_WASH_MOP_STATION": "基站自清洁", //基站自清洁
+    "EID_I_TRIGGER_SELF_CLEAN_BOTTOM_BROOM_OUT": "自清洁地刷没装", //自清洁地刷没装
+    "EID_I_WORKSTATION_CONNECTED": "基站连接",
+    "EID_I_WORKSTATION_DISCONNECT": "基站断连",
+    "EID_I_START_CALIBRATE_LIDAR": "开始雷达自校准", ///<开始雷达自校准
+    "EID_I_STOP_CALIBRATE_LIDAR": "停止雷达自校准", ///<停止雷达自校准
+    "EID_I_SET_CALIBRATION_ANGLE": "设置雷达校准角度",
+    "EID_I_ENABLE_CHILDLOCK": "童锁开启", ///<童锁开启
+    "EID_I_DISABLE_CHILDLOCK": "童锁关闭", ///<童锁关闭
+    "EID_I_CHILDLOCK_IS_ON": "童锁开启中",
+    "EID_I_MOP_DRYING_ENABLE": "开启拖布风干",
+    "EID_I_MOP_DRYING_DISABLE": "关闭拖布风干",
+    "EID_I_WORKSTATION_ERROR_RECOVERY": "基站异常恢复",
+    "EID_I_ERROR_CLEAN_WATER": "清洗水异常", // 清洗水异常（初始需求定义见W0200系列，盐度太大）
+    "EID_I_DUST_NO_FULL": "尘袋未满", //尘袋未满
+    "EID_I_SEWAGE_TANK_NO_FULL": "污水箱未满", //污水箱未满
+    "EID_I_CLEAR_WATER_NO_EMPTY": "清水箱非空", //清水箱非空
+    "EID_I_STATION_DETERGENT_NOT_ENOUGH": "基站清洁剂不足", // 基站清洁剂不足
+    "EID_I_STATION_IS_BUSY": "基站维护中", // 基站维护中
+    "EID_I_STATION_DETERGENT_BOTTLE_NOT_INSTALL": "基站清洁液瓶未安装", // 基站清洁液瓶未安装
+    "EID_I_STATION_PAIR_SUCCESS": "基站配对成功", //基站配对成功
+    "EID_I_REMOTE_CTRL_SWITCH": "实体遥控器开关", ///< 实体遥控器开关
+    "EID_I_STATION_AUTO_CLEAN_FUILD": "自动清洁液投放", // 自动清洁液投放
+    "EID_I_STATION_MODE": "基站模式", // 基站模式
+    "EID_I_STATION_DETERGENT_BOTTLE_HAVE": "清洁瓶已装回", // 清洁瓶已装回
+    "EID_I_STATION_DETERGENT_BOTTLE_LOST": "清洁瓶已取出", // 清洁瓶已取出
+    "EID_I_MOP_CLEAN_MODE": "清扫模式", //清扫模式
+    "EID_I_CLEAN_SWEEP_THEN_MOP_SWEEP_FINISH": "先扫后拖清扫完成", //先扫后拖清扫完成
+    "EID_I_DUST_CENTER_WORK_LOST_CHARGER": "自清洁时掉桩", //自清洁时掉桩
+    "EID_I_REPORT_DUST_COLLECTIION_TIMES": "上报清扫次数", //上报清扫次数
+    "EID_I_CHARGE_ENTER_DORMANT": "满电进入休眠", //满电进入休眠
+    "EID_I_CHARGE_EXIT_DORMANT": "满电退出休眠", //满电退出休眠
+    "EID_I_STATION_NEED_DIRTY_CLEAN": "脏污需要二次清扫", //脏污需要二次清扫
+    "EID_I_DEEP_CLEAN_NUM_CHANGE": "完成深度清扫次数变化", //完成深度清扫次数有改变
+
+    // IIIIIIIIIIIIIIIIIII INFO EVENTS END IIIIIIIIIIIIIIIIIII
+    //----------------------------------------------------------------------
+    // CCCCCCCCCCCCCCCCCCC CONTROL EVENTS BEGIN CCCCCCCCCCCCCCCCCCC
+    "EID_C_FIRMWARE_UPGRADE_ALL": "开始升级",
+    "EID_C_FIRMWARE_UPGRADE_SILENT_DOWNLOAD": "静默下载升级包",
+    "EID_C_FIRMWARE_UPGRADE_SILENT_UPDATE": "静默升级",
+    "EID_C_FIRMWARE_UPGRADE_DOWNLOAD_SUCCESS": "升级包下载成功",
+    "EID_C_FIRMWARE_UPGRADE_UPDATE_SUCCESS": "静默升级成功",
+    "EID_C_FIRMWARE_UPGRADE_SUCCESS": "升级成功",
+    "EID_C_FIRMWARE_UPGRADE_DOWNLOAD_FAIL": "下载升级包失败",
+    "EID_C_FIRMWARE_UPGRADE_UPDATE_FAIL": "静默升级失败",
+    "EID_C_FIRMWARE_UPGRADE_FAIL": "升级失败",
+    "EID_C_MCU_UPGRADE_SUCCESS": "MCU升级成功",
+    "EID_C_MCU_UPGRADE_FAIL": "MCU升级失败",
+    "EID_C_MCU_UPGRADE": "开始升级MCU",
+    "EID_C_SHUTDOWN": "关机",
+    "EID_C_REQUEST_REBOOT": "请求重启",
+    "EID_C_REBOOT": "重启",
+    "EID_C_UI_REQUEST_FACTORY_RESET": "按键恢复出厂设置",
+    "EID_C_APP_REQUEST_FACTORY_RESET": "APP恢复出厂设置",
+    "EID_C_FACTORY_RESET": "开始恢复出厂设置",
+    "EID_C_SET_LED_SWITCH": "设置灯光开关",
+    "EID_C_RELOAD_BACKUPMAP": "加载还原地图",
+    "EID_C_DELETE_MAP": "删除地图",
+    "EID_C_LINE_LASER_UPGRADE": "线激光升级",
+    "EID_C_LINE_LASER_UPGRADE_SUCCESS": "线激光升级成功",
+    "EID_C_LINE_LASER_UPGRADE_FAIL": "线激光升级失败",
+    "EID_C_LINE_LASER_POWER_CTRL": "线激光电源控制", // 线激光电源控制
+    "EID_C_LINE_LASER_OPEN": "线激光开启",
+    "EID_C_LINE_LASER_CLOSE": "线激光关闭",
+    "EID_C_CARRIER_WATER_PUMP_LEVEL": "水泵档位",
+    "EID_C_CARRIER_WATER_PUMP": "水泵控制",
+    "EID_C_CARRIER_WATER_ACTIVE_TIME": "水泵激活时间",
+    "EID_C_CARRIER_COMPONENT_CONTROL": "底盘组件控制",
+    "EID_C_SET_COMPONENT_LEVEL": "设置组件档位",
+    "EID_C_GET_COMPONENT_CUR_LEVEL_INFO": "获取组件当前档位信息",
+    "EID_C_SET_COMPONENT_OPEN_PROTECT": "设置组件开路保护",
+    "EID_C_GET_COMPONENT_OPEN_PROTECT": "获取自检开路保护",
+    "EID_C_SET_COMPONENT_BLOCK_PROTECT": "设置组件短路保护",
+    "EID_C_GET_COMPONENT_BLOCK_PROTECT": "获取组件短路保护",
+    "EID_C_NEED_AVOID_RUG": "需要规避地毯", ///< app下发需要规避地毯
+    "EID_C_NO_NEED_AVOID_RUG": "不需要规避地毯", ///< app下发不需要规避地毯
+    "EID_C_DISABLE_AVOID_RUG": "关闭超声波地毯避让", //关闭超声波地毯避让
+    "EID_C_PUB_COMPONENT_CUR_LEVEL_INFO": "发布组件当前档位信息",
+    "EID_C_CARRIER_COMPONENT_CONFIG": "底盘组件配置",
+    "EID_C_CHANGE_ROBOT_SPEED": "改变行进速度",
+    "EID_C_ATUO_SWITCH_CLEANMODE": "自动切换清扫模式", //已根据当前硬件条件自动切换清扫模式
+    "EID_C_UPGRADE_BASESTATION_SUCCESS": "基站升级成功", //基站升级成功
+    "EID_C_UPGRADE_BASESTATION_PROGRESS": "基站升级进度", //基站升级进度
+    "EID_C_UPGRADE_BASESTATIONE_FAIL": "基站升级失败", //基站升级失败
+    "EID_C_UPGRADE_BASESTATIONE_START": "开始基站升级", //开始基站升级
+    "EID_C_SET_WORK_STATION_CTRL": "基站控制的指令", // 基站控制的指令
+    // CCCCCCCCCCCCCCCCCCC CONTROL EVENTS END CCCCCCCCCCCCCCCCCCC
+    //----------------------------------------------------------------------
+    // EEEEEEEEEEEEEEEEEEE ERROR EVENTS BEGIN EEEEEEEEEEEEEEEEEEE
+    "EID_E_TEMPERATURE": "温度异常",
+    "EID_E_WHEEL": "主轮异常",
+    "EID_E_LEFT_WHEEL": "左轮异常",
+    "EID_E_RIGHT_WHEEL": "右轮异常",
+    "EID_E_UNIVERSAL_WHEEL_STUCK": "万向轮异常",
+    "EID_E_SIDE_BRUSH": "边刷异常",
+    "EID_E_MIDDLE_BRUSH": "中刷异常",
+    "EID_E_MIDDLE_BRUSH_FATAL": "中刷严重异常",
+    "EID_E_FAN_SPEED": "风机转速异常",
+    "EID_E_IMU_DATA": "陀螺仪数据异常",
+    "EID_E_IMU_DATA_NO_CHANGE": "陀螺仪数据无变化",
+    "EID_E_COLLISION": "碰撞异常",
+    "EID_E_DROP": "地检触发",
+    "EID_E_FRONT_WALL_DIRTY": "墙检脏污",
+    "EID_E_PSD_DIRTY": "沿墙脏污",
+    "EID_E_LIDAR_SPEED_ERROR": "雷达转速异常",
+    "EID_E_LIDAR_POINT_ERR": "雷达数据异常",
+    "EID_E_LIDAR_PROTECTIVE_COVER": "雷达上盖触发",
+    "EID_E_SPP_LOST_POS": "定位失败",
+    "EID_E_CLEAN_LOST_POSE": "清扫定位失败",
+    "EID_E_CLEAN_LOST_POSE_DONE": "定位失败，清扫结束",
+    "EID_E_FIND_CHGER_LOST_POSE": "回充定位失败",
+    "EID_E_FIND_CHGER_LOST_POSE_DONE": "定位失败，回充结束",
+    "EID_E_REMOTE_CONTROL_LOST_POSE": "遥控定位失败",
+    "EID_E_TRACE_LOCATION_LOST_POSE": "跟随定位失败",
+    "EID_E_GARBAGE_BOX_OUT": "尘盒取出",
+    "EID_E_GARBAGE_BOX_FULL": "尘盒满",
+    "EID_E_GARBAGE_BOX_FULL_OUT": "尘盒满取出",
+    "EID_E_WATER_BOX_DIRTY": "水箱脏",
+    "EID_E_WATER_PUMP": "水泵异常",
+    "EID_E_WATER_BOX_OUT": "水箱取出",
+    "EID_E_WATER_BOX_EMPTY": "水箱空",
+    "EID_E_PHYSICAL_TRAPPED": "物理被困",
+    "EID_E_PLAN_TRAPPED": "规划被困",
+    "EID_E_PICK_UP": "抱起",
+    "EID_E_PICK_UP_DO_TASK": "抱起启动清扫",
+    "EID_E_TILE_DO_TASK": "倾斜启动清扫",
+    "EID_E_NO_DUST_BOX_DO_TASK": "无尘盒启动清扫",
+    "EID_E_NO_WATER_BOX_DO_TASK": "无水箱启动清扫",
+    "EID_E_TRY_POWEROFF_ON_CHARGER": "充电中无法关机",
+    "EID_E_SKID": "打滑",
+    "EID_E_INCORRECT_WIFI_PASSWD": "WiFi密码错误",
+    "EID_E_LONG_TIME_NO_MOVE": "工作中长时间未移动",
+    "EID_E_CANNOT_UPGRADE": "无法升级",
+    "EID_E_OPT_DURING_UPGRADE": "升级中无法操作",
+    "EID_E_BATTERY_DISCONNECT": "电池连接异常",
+    "EID_E_CLEAN_CANNOT_ARRIVE": "清扫无法到达",
+    "EID_E_START_FROM_FORBID_AREA": "从禁区中启动",
+    "EID_E_KIT_FAN_ERR": "风机故障",
+    "EID_E_KIT_SIDE_BRUSH_ERR": "边刷故障",
+    "EID_E_KIT_MID_BRUSH_ERR": "中刷故障",
+    "EID_E_KIT_MOTOR_ERR": "主轮故障",
+    "EID_E_KIT_WATER_PUMP_ERR": "水泵故障",
+    "EID_E_KIT_LIDAR_ERR": "雷达故障",
+    "EID_E_KIT_MOP_MOTOR_ERR": "拖布电机故障",
+    "EID_E_KIT_EXTEND_MOP_MOTOR_ERR": "延伸拖布电机异常", //延伸拖布电机异常
+    "EID_E_KIT_LIFT_MOTOR_ERR": "抬升电机故障",
+    "EID_E_KIT_SIDE_STRETCH_BRUSH_ERR": "边刷伸缩电机故障",
+    "EID_E_KIT_AIR_PUMP_ERR": "气泵故障",
+    "EID_E_START_FROM_MAGNETIC_WALL": "从磁条启动",
+    "EID_E_COLLECT_DUST_FULL": "集尘尘满",
+    "EID_E_COLLECT_DUST_NO_BAG": "尘袋未安装",
+    "EID_E_COLLECT_DUST_NO_FAN": "集尘风机异常",
+    "EID_E_COLLECT_DUST_COVER": "集尘盖未装好",
+    "EID_E_COLLECT_DUST_BLOCK": "集尘宝尘道阻塞", // 集尘宝尘道阻塞
+    "EID_E_COLLECT_DUST_INTERRUTED": "集尘过程被中断", // 集尘过程被中断
+    "EID_E_SEWAGE_TANK_FULL": "污水箱满",
+    "EID_E_ROBOT_SEWAGE_BOX_FULL": "机器污水箱满",
+    "EID_E_SEWAGE_BUFFER_TANK_FULL": "污水缓冲箱满",
+    "EID_E_MID_MOTOR_LIFT": "中刷抬升电机异常",
+    "EID_E_DUST_COVER_OPEN": "尘盖未改好",
+    "EID_E_OPT_DURING_DUST_CENTER_WORKING": "集尘中不能操作",
+    "EID_E_DUST_CENTER_FAIL": "集尘失败",
+    "EID_E_DUST_CENTER_ERROR": "集尘异常",
+    "EID_E_MCU_BOARD": "MCU异常",
+
+    "EID_E_MOP_ERROR": "拖布异常",
+    "EID_E_NO_MOP_DO_TASK": "无拖布开始工作",
+    "EID_E_COLLECT_DUST_MOP_IN_NOT_WORK": "带拖布无法集尘",
+    "EID_E_ULTRASONIC_ERROR": "超声波异常",
+    "EID_E_LOW_WATER_TO_CLEAN": "水量不足",
+    "EID_E_DUST_COLLECT_PRESSURE_HIGH": "集尘压力过高",
+    "EID_E_DUST_COLLECT_PRESSURE_LOW": "集尘压力过低",
+    "EID_E_COLLECT_DUST_FREQUENT": "集尘太频繁",
+    "EID_E_COLLECT_DUST_CANNOT_START_TASK": "集尘中无法启动任务", // 集尘中 尝试启动其他任务
+    "EID_E_NO_MOP_AND_NO_WATER_BOX_DO_TASK": "无拖布无水箱启动工作",
+    "EID_E_FACTORY_RESET_FAIL": "恢复出厂设置失败",
+    "EID_E_FIND_CHARGER_ON_CHARGE": "充电中启动回充",
+    "EID_E_CANNOT_WORK_WHEN_COLLECT": "集尘中无法启动任务",
+    "EID_E_KIT_LINE_LASER_ERROR": "线激光异常", ///< 线激光运行中无数据
+    "EID_E_WIFI_BREAKDOWN": "WiFi异常",
+    "EID_E_WIFI_BREAKDOWN_TIMEOUT": "WiFi异常持续过长",
+    "EID_E_DOWN_WALL_BLOCK": "基站下水口堵塞", //RM66L基站下水口堵塞
+    "EID_E_BASESTATION_CONNECT_ERROR": "与基站通讯异常", //RM66L与基站通讯异常
+    "EID_E_BASE_ERROR_STOP_FINDCHARGE": "基站断线暂停回充", //RM66L基站断线暂停回充
+    "EID_E_STATION_ERROR": "基站其他错误", //基站其他错误
+    "EID_E_CLEAR_TANK_OUT": "净水箱不在位", //RM66L净水箱不在位
+    "EID_E_SEWAGE_BOX_OUT": "污水箱箱不在位", //RM66L污水箱箱不在位
+    "EID_E_CLEAR_BOX_EMPTY": "基站清水箱空", //< RM66L基站清水箱空
+    "EID_E_SEWAGE_BOX_FULL": "基站污水箱满", //< RM66L基站污水箱满
+    "EID_E_TRAY_LEAVE": "托盘脱离", //< RM66L托盘脱离
+    "EID_E_COVER_ERROR": "顶部上盖未关", // RM66l顶部上盖未关
+    "EID_E_BASESTATION_FAN_FAULT": "基站风机异常", //基站风机异常
+    "EID_E_SEWAGE_PUMP_FAULT": "污水泵异常", //污水泵异常
+    "EID_E_CLEAR_WATER_PUMP_FAULT": "清水泵异常", //清水泵异常
+    "EID_E_WATER_FUSE_ERROR": "加热泵异常", //加热泵异常
+    "EID_E_AIR_FUSE_ERROR": "基站烘干加热模块异常", //基站烘干加热模块异常
+    "EID_E_START_MOP_OUT": "开始清洗但无拖布", //开始清洗但无拖布
+    "EID_E_HOST_NOT_CHARGER_POSITION": "不在位开启任务", //不在位开启任务
+    "EID_E_WASH_TRAY": "在位状态无法清洗托盘", //在位状态无法清洗托盘
+    "EID_E_HEATING_ROD_TOO_COLD": "热水泵温度过低", //热水泵温度过低
+    "EID_E_POWER_SWITCH_OFF_WHILE_CHARGING": "充电时尝试关机异常",
+    "EID_E_BATTERY_TEMP_LIMIT": "电池温度异常",
+    "EID_E_WIFI_BREAKDOWN_RECONNECT": "WiFi掉线异常",
+    "EID_E_WITH_MOP_IN_RUG_DO_TASK": "地毯上启动拖地异常",
+    "EID_E_SELF_CLEAN_LOST_CHARGER": "自清洁中与充电桩断连", //自清洁中与充电桩断连
+    "EID_E_SELF_CLEAN_LOST_WATER_BOX": "自清洁中取出尘盒水箱", //自清洁中取出尘盒水箱
+    "EID_E_SELF_CLEAN_LOST_MOP_PLUGIN": "自清洁中取出滚刷", //自清洁中取出滚刷
+    "EID_E_DRYING_LOST_CHARGER": "烘干时与充电桩断连", //烘干时与充电桩断连
+    "EID_E_SWEEP_MODE_TRIGGER_SELF_CLEAN": "干扫模式下触发自清洁", //干扫模式下触发自清洁
+    "EID_E_DRYING_MID_BRUSH_OUT": "烘干模式下取出滚刷", //烘干模式下取出滚刷
+    "EID_E_DRYING_MID_BRUSH_IN": "烘干模式下装入滚刷", //烘干模式下装入滚刷
+    "EID_E_CLEANNING_GROOVE_FULL": "清洗槽水满",
+    "EID_E_CLEAN_TANK_LEAK": "清水箱漏水",
+    "EID_E_CLEANNING_GROOVE_OUT": "清洗槽未装",
+    "EID_E_MOVE_ROBOT_OUT_FROM_BOTTOM_GROOVE": "请将主机移出基站",
+    "EID_E_SEWAGE_TANK_OUT": "污水箱箱不在位", //污水箱箱不在位
+    "EID_E_STATION_NEED_WATER_TAP_ON": "基站水龙头需要被打开", // 基站水龙头需要被打开
+    "EID_E_STATION_WATER_PUMP_ERROR": "基站水泵异常", // 基站水泵异常
+    "EID_E_CLEANNING_GROOVE_FULL_WARNNING": "污水排空异常",
+    "EID_E_CLEAN_TANK_LEAK_WARNNING": "清水箱漏水警告",
+    "EID_E_CLEAN_TANK_OUT_WARNNING": "清水箱未安装警告",
+    "EID_E_CLEAN_TANK_EMPTY": "清水箱缺水",
+    "EID_E_CLEANNING_GROOVE_OUT_WARNNING": "清洗盘未安装",
+    "EID_E_LOST_POSE_DONE": "重定位失败",
+    "EID_E_NO_MOP_TO_Y_MOP_CLEAN": "无拖布Y字拖", // 没装拖布去y字拖报错
+    // EEEEEEEEEEEEEEEEEEE ERROR EVENTS END EEEEEEEEEEEEEEEEEEE
+
+    //----------------------------------------------------------------------
+    // RRRRRRRRRRRRRRRRRRR REQUEST EVENTS BEGIN RRRRRRRRRRRRRRR
+    "EID_R_NAVIGATOR_REQUEST": "请求导航服务",
+    "EID_R_NTP_UPDATE": "请求同步网络时间",
+    "EID_R_SAVE_BKMAP": "请求保存还原地图",
+    "EID_R_SYNC_CHECK_TRANSFORM_MAP": "请求检查地图是否需要对正", ///< 同步检测地图是否需要对正，耗时操作
+    "EID_R_CLEAN_TASK_UNFINISHED_AREA": "获取清扫未完成面积", ///< 获取清扫任务未完成的面积
+    "EID_R_SHUTDOWN": "请求关机",
+    // RRRRRRRRRRRRRRRRRRR REQUEST EVENTS END RRRRRRRRRRRRRRR
+
+    //----------------------------------------------------------------------
+    // RRRRRRRRRRRRRRRRRRR NAVIGATOR CONTROL STATUS EVENTS BEGIN RRRRRRRRRRRRRRR
+    "EID_N_CLEAN_DONE_NORMAL": "清扫正常完成",
+    "EID_N_CLEAN_DONE_UNNORMAL": "清扫异常完成",
+    "EID_N_STEP_DONE": "单步运动完成",
+    "EID_N_TARGET_DONE": "到点完成",
+    "EID_N_TARGET_FAILED": "到点失败",
+    "EID_N_SEARCH_TARGET_OVER": "目标点搜索完成",
+    "EID_N_ESCAPE_DONE": "脱困完成",
+    "EID_N_TRACE_PATH_DONE": "路径跟随完成",
+    "EID_N_TRACE_PATH_FAILED": "路径跟随失败",
+    "EID_N_TRACE_PATH_CTRL_END": "路径跟随控制结束",
+    "EID_N_AREA_CLEAN_DONE": "区域清扫完成",
+    "EID_N_EXPLORE_BUILD_MAP_START": "探索建图开始",
+    "EID_N_EXPLORE_BUILD_MAP_DONE": "探索建图完成",
+    "EID_N_EXPLORE_BUILD_MAP_SUCCESS": "探索建图成功",
+    "EID_N_EXPLORE_BUILD_MAP_FAIL": "探索建图失败",
+    "EID_N_START_RECORD_DIRTY_AREA": "开始记录浊污区域", ///< 请求na开始记录浊污区域
+    "EID_N_END_RECORD_DIRTY_AREA": "结束记录浊污区域", ///< 请求na结束记录浊污区域  //系统暂无用，系统需要用的时候最好告知算法，对逻辑问题
+    "EID_N_TRANSFORM_MORE_MAP_START": "开始对正地图图层", ///< 请求NA对正其他图层，例如探索路径图层等
+    "EID_N_NAVIGATED_TO_CLEAN_AREA": "请求进行预打湿", ///< 请求进行预打湿
+    "EID_N_DIRTY_AREA_CLEAN_DONE": "浊污区域清扫完成", ///< 浊污区域清扫完成事件
+    "EID_N_DIRTY_AREA_CLEAN_DONE_UNNORMAL": "浊污区域清扫异常", ///<浊污区域清扫异常
+    // RRRRRRRRRRRRRRRRRRR NAVIGATOR CONTROL STATUS EVENTS END RRRRRRRRRRRRRRR
+
+    // IMU自校准
+    "EID_I_IMU_CALIRATION_BEGIN": "陀螺仪校准开始",
+    "EID_I_IMU_CALIRATION_FINISH": "陀螺仪校准结束"
+  }
+}

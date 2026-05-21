@@ -11,6 +11,8 @@ build/
 *.exe
 *.zip
 *.bak
+.eggs/
+*.egg-info/
 
 # 运行产物
 logs/
@@ -19,12 +21,22 @@ tools/exports/
 
 # Python 缓存
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+
+# 生成的报告
+batch_report_*.html
+
+# 下载/缓存数据
+cache/
+
+# 旧参考工具
+Cp3LogTool*/
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # 临时文件
 build.log
@@ -32,6 +44,10 @@ _update_replace.bat
 _update_extracted/
 _update_download.zip
 _run_build.bat
+
+# OS
+Thumbs.db
+.DS_Store
 
 # Claude Code
 .claude/
