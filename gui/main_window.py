@@ -1087,17 +1087,43 @@ class MainWindow(QMainWindow):
     # ── Worker 管理 ───────────────────────────────────
 
     def _set_busy(self, busy):
-        """操作进行中禁用所有按钮"""
+        """操作进行中禁用所有按钮、输入框和开关"""
+        enabled = not busy
+        # 主操作按钮
         for btn in [self.btn_list, self.btn_dryrun, self.btn_sync,
                      self.btn_test, self.btn_config, self.btn_update]:
-            btn.setEnabled(not busy)
+            btn.setEnabled(enabled)
+        # 筛选面板
+        for w in [self.filter_url, self.btn_parse_url, self.filter_product,
+                  self.filter_project, self.filter_module, self.filter_status,
+                  self.filter_assigned, self.filter_platform,
+                  self.btn_add_assigned, self.btn_del_assigned, self.btn_toggle_assigned,
+                  self.filter_date_mode, self.filter_date_from, self.filter_date_to]:
+            w.setEnabled(enabled)
+        # 凭证输入
+        for w in [self.edit_zentao_base_url, self.edit_zentao_account,
+                  self.edit_zentao_password, self.edit_tb_creator,
+                  self.edit_tb_creator_id, self.edit_tb_belong_project]:
+            w.setEnabled(enabled)
+        # 同步/AI 开关
+        for chk in [self.chk_reopen, self.chk_ai_analysis, self.chk_fault_pattern,
+                     self.chk_specialized_prompt, self.chk_knowledge_base]:
+            chk.setEnabled(enabled)
 
     def _start_worker(self, worker):
+        # 防止并发：已有任务运行中时拒绝新任务
+        if self._worker is not None and self._worker.isRunning():
+            QMessageBox.information(self, "提示", "有任务正在执行，请等待完成")
+            return False
+        if self._update_download_worker is not None and self._update_download_worker.isRunning():
+            QMessageBox.information(self, "提示", "正在下载更新，请等待完成")
+            return False
         self._worker = worker
         self._setup_logging()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self._set_busy(True)
+        return True
 
     def _worker_finished(self, save_config=False):
         self._worker = None
@@ -1198,7 +1224,8 @@ class MainWindow(QMainWindow):
         worker = AuthTestWorker(self.config, self)
         worker.progress.connect(self._on_progress_message)
         worker.finished.connect(self._on_auth_result)
-        self._start_worker(worker)
+        if not self._start_worker(worker):
+            return
         worker.start()
 
     def _on_auth_result(self, success, message):
@@ -1218,7 +1245,8 @@ class MainWindow(QMainWindow):
         worker.progress.connect(self._on_progress_message)
         worker.finished.connect(self._on_list_result)
         worker.error.connect(self._on_worker_error)
-        self._start_worker(worker)
+        if not self._start_worker(worker):
+            return
         worker.start()
 
     def _on_list_result(self, bugs):
@@ -1244,7 +1272,8 @@ class MainWindow(QMainWindow):
         worker.progress.connect(self._on_sync_progress)
         worker.finished.connect(self._on_sync_result)
         worker.error.connect(self._on_worker_error)
-        self._start_worker(worker)
+        if not self._start_worker(worker):
+            return
         worker.start()
 
     def _on_full_sync(self):
@@ -1264,7 +1293,8 @@ class MainWindow(QMainWindow):
         worker.progress.connect(self._on_sync_progress)
         worker.finished.connect(self._on_sync_result)
         worker.error.connect(self._on_worker_error)
-        self._start_worker(worker)
+        if not self._start_worker(worker):
+            return
         worker.start()
 
     def _on_sync_progress(self, current, total, message):
@@ -1333,6 +1363,8 @@ class MainWindow(QMainWindow):
             return
 
         self._manual_check_pending = manual
+        if manual:
+            self._set_busy(True)
         self._update_check_worker = UpdateCheckWorker(self.config, parent=self)
         self._update_check_worker.progress.connect(self._on_update_check_progress)
         self._update_check_worker.finished.connect(self._on_update_check_result)
@@ -1347,6 +1379,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"更新检查失败: {msg}")
         if self._manual_check_pending:
             self._manual_check_pending = False
+            self._set_busy(False)
             QMessageBox.warning(self, "更新检查失败", f"检查更新时出错:\n{msg}")
         self._update_check_worker = None
 
@@ -1357,6 +1390,7 @@ class MainWindow(QMainWindow):
         if not result.get("has_update"):
             if self._manual_check_pending:
                 self._manual_check_pending = False
+                self._set_busy(False)
                 QMessageBox.information(self, "检查更新", msg or "未发现新版本")
             elif "已是最新" in msg:
                 self.status_label.setText(msg)
@@ -1365,12 +1399,14 @@ class MainWindow(QMainWindow):
 
         info = result.get("info")
         if not info:
+            self._set_busy(False)
             return
 
         # 检查最低版本
         from gui.updater import compare_versions
         current = result.get("current", "")
         if info.min_version and compare_versions(current, info.min_version) > 0:
+            self._set_busy(False)
             QMessageBox.warning(
                 self, "版本过旧",
                 f"当前版本 v{current} 低于最低可更新版本 v{info.min_version}，\n"
@@ -1392,6 +1428,8 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             self._start_download_update(info, result.get("best_mirror"),
                                          result.get("sorted_mirrors", []))
+        else:
+            self._set_busy(False)
 
     def _start_download_update(self, version_info, best_mirror, sorted_mirrors):
         """开始下载更新"""

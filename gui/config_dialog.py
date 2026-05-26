@@ -673,6 +673,17 @@ class ConfigDialog(QDialog):
                 pass
         return ""
 
+    def _set_collab_busy(self, busy: bool):
+        """协同学习同步时禁用/启用所有交互元素"""
+        enabled = not busy
+        self.tabs.setEnabled(enabled)
+        # 找到保存/取消按钮并禁用（它们是 QPushButton 没有直接引用）
+        for child in self.findChildren(QPushButton):
+            if child.text() in ("保存", "取消"):
+                child.setEnabled(enabled)
+        self.collab_sync_btn.setEnabled(enabled)
+        # collab_status label 不受影响
+
     def _on_collab_sync(self):
         """触发协同学习手动同步。"""
         token = self.collab_token.text().strip()
@@ -688,7 +699,7 @@ class ConfigDialog(QDialog):
             if self._collab_worker.isRunning():
                 return
 
-        self.collab_sync_btn.setEnabled(False)
+        self._set_collab_busy(True)
         self.collab_status.setText("正在同步...")
         self.collab_status.setStyleSheet("color:#d97706; font-size:12px;")
 
@@ -707,7 +718,7 @@ class ConfigDialog(QDialog):
         self._collab_worker.start()
 
     def _on_collab_sync_finished(self, success: bool, message: str):
-        self.collab_sync_btn.setEnabled(True)
+        self._set_collab_busy(False)
         if success:
             self.collab_status.setText(message)
             self.collab_status.setStyleSheet("color:#059669; font-size:12px;")
