@@ -1,8 +1,8 @@
 {
-  "version": "1.5",
-  "sha256": "be34c699d7f21ab03b68a4a8098e86bafbf044527064fe80dea4e4de732dcbdd",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.5/SmartDefectPlatform.zip",
-  "release_date": "2026-05-13",
-  "release_notes": "v1.5 release",
+  "version": "1.6",
+  "sha256": "cf03f16b1cbe3cf9761714e99bc72cc87180c358f502f9b26fa88bf875a1ad7a",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.6/TB_Import_tool_v1.6.zip",
+  "release_date": "2026-05-26",
+  "release_notes": "v1.6 协同学习 + AI日志分析 + 构建优化",
   "min_version": "1.0"
 }
