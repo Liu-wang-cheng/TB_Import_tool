@@ -1,8 +1,8 @@
 {
   "version": "1.6",
-  "sha256": "cf03f16b1cbe3cf9761714e99bc72cc87180c358f502f9b26fa88bf875a1ad7a",
+  "sha256": "3ee9a0cf2fc4a59cab20468a8b799aa9c9ad582e77107e5854c455d2e9dab52f",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.6/TB_Import_tool_v1.6.zip",
   "release_date": "2026-05-26",
-  "release_notes": "v1.6 协同学习 + AI日志分析 + 构建优化",
+  "release_notes": "v1.6 协同学习 + AI日志分析 + 构建优化 (修复开关配置Bug)",
   "min_version": "1.0"
 }
