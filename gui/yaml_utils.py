@@ -64,7 +64,8 @@ def _find_key_indent(lines: list, key: str, start: int):
 
 
 def _update_top_level(lines: list, key: str, value) -> list:
-    """更新顶层 key（仅匹配零缩进的根级键，不误匹配嵌套子键）"""
+    """更新顶层 key（仅匹配零缩进的根级键，不误匹配嵌套子键）。
+    若 key 不存在则追加到文件末尾。"""
     pattern = re.compile(
         r'^(\s*)["\']?' + re.escape(key) + r'["\']?\s*:(.*)')
     for i, line in enumerate(lines):
@@ -79,6 +80,13 @@ def _update_top_level(lines: list, key: str, value) -> list:
             else:
                 lines[i] = f"{indent}{key}: {_format_value(value)}\n"
                 return lines
+    # key 不存在 → 追加到末尾
+    if isinstance(value, list):
+        lines.append(f"{key}:\n")
+        for v in value:
+            lines.append(f"  - {_format_value(v)}\n")
+    else:
+        lines.append(f"{key}: {_format_value(value)}\n")
     return lines
 
 

@@ -1,8 +1,13 @@
 # 凭证和配置（含敏感信息，不提交）
 configs/*.yaml
 
-# 训练数据和模型（二进制大文件）
-data/
+# 训练数据和模型（协同学习共享文件除外）
+data/*
+data/pdf_extracts/
+# 协同学习共享文件 - 必须跟踪以支持多用户知识共享
+!data/knowledge_base.jsonl
+!data/knowledge_feedback.yaml
+!data/classifier_model.pkl
 
 # 构建产物
 dist/

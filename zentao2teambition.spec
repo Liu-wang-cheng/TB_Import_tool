@@ -15,8 +15,9 @@ EXE_NAME = '智能缺陷管理平台'
 # PyInstaller datas 格式: (source, dest_dir)，source 相对于 SPECPATH
 _DATA_RUNTIME = [
     'data/classifier_model.pkl',
-    'data/sweeper_knowledge_base.yaml',
+    'data/knowledge_base.jsonl',
     'data/knowledge_feedback.yaml',
+    'data/sweeper_knowledge_base.yaml',
     'data/knowledge_base_patch.yaml',
     'data/pdf_flowchart_knowledge.yaml',
 ]

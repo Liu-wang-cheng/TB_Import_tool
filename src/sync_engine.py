@@ -40,7 +40,7 @@ class SyncEngine:
         self.max_attachment_size_mb = sync_cfg.get("max_attachment_size_mb", 50)
         self.dry_run = sync_cfg.get("dry_run", False)
         self.attachment_retries = sync_cfg.get("attachment_retries", 3)
-        self.reactivate_closed = sync_cfg.get("reactivate_closed", True)
+        self.reactivate_closed = sync_cfg.get("reactivate_closed", False)
         self.extraction_enabled = sync_cfg.get("extraction", {}).get("enabled", True)
 
         tb_cfg = config.get("teambition", {})
