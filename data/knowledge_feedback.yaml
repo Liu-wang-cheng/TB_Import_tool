@@ -1,0 +1,77 @@
+# 知识库反馈 - 批量分析21条缺陷后的自审查结果
+# 格式：approved = 高质量分析（可入知识库作few-shot）
+#       rejected = 偏差分析（标记错误模式，供SYSTEM_PROMPT警示）
+
+approved:
+  - id: "batch_65123"
+    task_id: "65123"
+    title: "【禅道7131】烘烤过程中抱出基站再放回，机器没有继续烘干而是进入充电"
+    reason: "分析准确：正确识别了pickup事件、tilt_checker触发、任务暂停后未恢复的状态机缺陷"
+    category: "应用-基站交互"
+    root_cause_type: "软件逻辑缺陷"
+    key_evidence:
+      - "tilt wait start dip:16.779deg"
+      - "RobotEventReport: pickup, wheelsLiftedUp=true"
+      - "idle task pause start...idle task pause end"
+
+  - id: "batch_65111"
+    task_id: "65111"
+    title: "app设置的地毯规避，扫拖时机器没有规避地毯"
+    reason: "分析准确：直接找到component_control_service下发carpet_avoid=false的关键日志，与用户设置矛盾"
+    category: "应用-地毯策略"
+    root_cause_type: "软件逻辑缺陷"
+    key_evidence:
+      - 'avoid rug control:{ "carpet_avoid" : false'
+      - "request_manager.cpp carpet avoid = 0"
+      - "IsMopExist: 1 + AUTO_RUG_CLEAN_MODE"
+
+  - id: "batch_65110"
+    task_id: "65110"
+    title: "地毯清洁模式切换失败"
+    reason: "分析准确：在地毯检测后找到clean type change format error直接报错，时间与事件高度吻合"
+    category: "应用-地毯策略"
+    root_cause_type: "软件逻辑缺陷"
+    key_evidence:
+      - "extend_path_info.cpp clean type change format error!"
+      - "rug_clean_mode: AUTO_RUG_CLEAN_MODE"
+      - "ultrasonic_carpet result 0->1"
+
+  - id: "batch_65070"
+    task_id: "65070"
+    title: "避障得分165.5 绕障过程中容易推动障碍物"
+    reason: "分析准确：找到wallfollow_base angle_range_ok FAILED的具体日志，角度阈值过严导致避障失败"
+    category: "算法"
+    root_cause_type: "软件逻辑缺陷"
+    key_evidence:
+      - "angle_range_ok FAILED (angle=25.0 need 50-150)"
+      - "CUSTOM_SLOW_AVOID -> CUSTOM_AVOID MotionType:GAT_EMERGENCY_STOP"
+      - "robot in small corner"
+
+rejected:
+  - id: "batch_65285"
+    task_id: "65285"
+    title: "毛毯过渡测试，主机对于长毛毛毯分区清扫完之后不会上毛毯清洁，直接进入回充状态"
+    reason: "严重偏离：缺陷标题明确是地毯过渡问题，但分析却去讨论IMU yaw累积和烘干中断，完全离题"
+    error_pattern: "偏离主题——被日志中的次要信息（yaw值、状态转换）带偏，忽略缺陷标题的核心问题"
+    lesson: "分析必须与缺陷标题一致，禁止偏离主题讨论无关模块"
+
+  - id: "batch_65241"
+    task_id: "65241"
+    title: "外直角沿墙概率发生碰撞"
+    reason: "可能错误：将'line laser: sensor closed'作为缺陷证据，但线激光在特定清扫模式下正常关闭不一定是缺陷"
+    error_pattern: "误读传感器状态——将'sensor closed'直接等同于缺陷，未区分'不需要开启'和'应该开启但未开启'"
+    lesson: "区分'sensor未激活因为不需要'和'sensor应该激活但未激活'"
+
+  - id: "batch_65118"
+    task_id: "65118"
+    title: "清洁报告的弹框提示显示在地图主页左上角"
+    reason: "推测过度：将pathinfo无效和clean type格式错误与弹框位置关联，缺乏直接因果依据，属于猜测"
+    error_pattern: "过度关联——将两个可能无关的日志异常强行关联到缺陷现象"
+    lesson: "如果日志中没有直接证据，必须说'未找到直接证据'，禁止强行关联"
+
+  - id: "batch_65109"
+    task_id: "65109"
+    title: "定点清扫完成后，机器人的风机吸力没有自动恢复为设置值"
+    reason: "证据薄弱：仅引用了一条来自不同时间段的sweep type日志，没有直接证据证明吸力未恢复"
+    error_pattern: "证据不足——用间接/弱相关日志支撑结论"
+    lesson: "每个结论必须有直接日志证据支撑，证据不足时应明确说明"
