@@ -137,7 +137,7 @@ def update_version_json(repo: str, token: str, version: str,
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        repo_url = f"git@github.com:{repo}.git"
+        repo_url = f"https://github.com/{repo}.git"
         try:
             subprocess.run(["git", "clone", "--depth", "1", repo_url, tmpdir],
                            check=True, capture_output=True)
