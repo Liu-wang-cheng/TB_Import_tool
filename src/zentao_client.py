@@ -177,9 +177,9 @@ class ZentaoClient:
             # 客户端筛选（注意：批量API不返回 moduleName，module_filter 在获取详情后处理）
             if statuses and bug.status not in statuses:
                 continue
-            if date_from and bug.openedDate[:10] < date_from:
+            if date_from and str(date_from) > bug.openedDate[:10]:
                 continue
-            if date_to and bug.openedDate[:10] > date_to:
+            if date_to and str(date_to) < bug.openedDate[:10]:
                 continue
             if resolved_assignees and bug.assignedToAccount not in resolved_assignees \
                     and bug.assignedTo not in resolved_assignees:
@@ -626,10 +626,13 @@ class ZentaoClient:
         elif isinstance(opened_build, dict):
             build_info = opened_build.get("title", "")
 
-        # 提取 SN 编码
-        sn_code = ZentaoClient._extract_sn(
-            data.get("steps", "") + " " + data.get("title", "")
+        # 提取 SN 编码（从标题、步骤、附件文件名中搜索）
+        files = ZentaoClient._normalize_files(data.get("files", []))
+        file_names = " ".join(
+            f.get("title", "") for f in files if isinstance(f, dict)
         )
+        sn_text = data.get("steps", "") + " " + data.get("title", "") + " " + file_names
+        sn_code = ZentaoClient._extract_sn(sn_text)
 
         return ZentaoBug(
             id=int(data.get("id") or 0),
@@ -659,16 +662,22 @@ class ZentaoClient:
     def _extract_sn(text: str) -> str:
         """从文本中提取 SN 编码，如 SN：0004、SN:12345
 
-        匹配格式：SN 后跟中文/英文冒号和可选空格，然后是字母数字组合。
+        匹配优先级：
+        1. SN/SN码/设备SN 后跟冒号或空格
+        2. HQ 开头 + 数字/字母（扫地机设备 SN 格式）
         找不到时返回 '/'。
         """
         if not text:
             return "/"
-        # 匹配 SN/SN码/设备SN 后跟冒号或空格
+        # 1. 匹配 SN/SN码/设备SN 后跟冒号或空格
         match = re.search(r'(?:设备)?SN(?:码)?\s*[:：]\s*([A-Za-z0-9\-_]+)',
                           text, re.IGNORECASE)
         if match:
             return match.group(1)
+        # 2. 匹配 HQ 开头的设备 SN（如 HQ5S00700002HC261300069）
+        match = re.search(r'\b(HQ[0-9A-Z]{10,})\b', text, re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
         return "/"
 
     @staticmethod

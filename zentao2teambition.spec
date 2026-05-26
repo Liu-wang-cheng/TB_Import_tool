@@ -11,11 +11,17 @@ with open(_version_file, 'r') as _f:
     VERSION = _f.read().strip()
 EXE_NAME = '智能缺陷管理平台'
 
-# 收集 data/ 目录下的 TF-IDF 训练模型（如果存在）
-extra_datas = []
-data_dir = os.path.join(SPECPATH, 'data')
-if os.path.isdir(data_dir):
-    extra_datas.append(('data', 'data'))
+# 收集 data/ 下的必要运行时文件（排除约 42MB 的 PDF 和 DRC 配置 JSON）
+# PyInstaller datas 格式: (source, dest_dir)，source 相对于 SPECPATH
+_DATA_RUNTIME = [
+    'data/classifier_model.pkl',
+    'data/sweeper_knowledge_base.yaml',
+    'data/knowledge_feedback.yaml',
+    'data/knowledge_base_patch.yaml',
+    'data/pdf_flowchart_knowledge.yaml',
+]
+extra_datas = [(f, 'data') for f in _DATA_RUNTIME
+               if os.path.isfile(os.path.join(SPECPATH, f))]
 
 a = Analysis(
     ['gui_main.py'],
@@ -41,6 +47,18 @@ a = Analysis(
         'src.source_client',
         'src.source_factory',
         'src.zentao_adapter',
+        'src.ai_log_analyzer',
+        'src.log_analysis_integration',
+        'src.fault_pattern_library',
+        'src.prompt_builder',
+        'src.knowledge_base',
+        'src.knowledge_rag',
+        'src.collaborative_learning',
+        'src.html_report_generator',
+        'src.vision_analyzer',
+        'src.vision_integration',
+        'src.tb_web_downloader',
+        'src.zentao_video_downloader',
         'gui.updater',
         'gui.workers',
         'dingtalk',
@@ -70,11 +88,18 @@ a = Analysis(
         'numpy',
         'joblib',
         'oss2',
+        'cv2',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['PyQt5'],
+    excludes=[
+        'PyQt5',
+        'pandas',           # 未被代码使用，PyInstaller 自动拉入但非必需
+        'matplotlib',       # 未被代码使用，PyInstaller 自动拉入但非必需
+        'PIL',              # Pillow 图像库，未被代码使用
+        'pytest',           # 测试框架，运行时不需要
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 
 from bs4 import BeautifulSoup
 
+from src.log_analysis_integration import LogAnalysisIntegration
 from src.models import (BUG_TYPE_NAMES, SEVERITY_NAMES, SyncAction, SyncResult,
                         SyncStats, ZentaoBug)
 from src.source_client import SourceClient
@@ -114,6 +115,27 @@ class SyncEngine:
         self._sn_patterns_loaded: bool = False
         if self._tb_project_id:
             self._load_sn_patterns_for_project(self._tb_project_id)
+
+        # AI 日志分析集成（可选）
+        ai_cfg = config.get("ai_analysis", {})
+        self.ai_analysis_enabled = ai_cfg.get("enabled", False)
+        self.log_analyzer: Optional[LogAnalysisIntegration] = None
+        if self.ai_analysis_enabled:
+            try:
+                web_cookies = tb_cfg.get("web_cookies", {})
+                self.log_analyzer = LogAnalysisIntegration(
+                    tb_client=teambition,
+                    drc_server=ai_cfg.get("drc_server"),
+                    drc_username=ai_cfg.get("drc_username"),
+                    drc_password=ai_cfg.get("drc_password"),
+                    drc_model=ai_cfg.get("drc_model") or tb_cfg.get("project", {}).get("name"),
+                    zentao_client=source,
+                    web_cookies=web_cookies if web_cookies else None,
+                )
+                logger.info("AI 日志分析集成已启用")
+            except Exception as e:
+                logger.warning("AI 日志分析初始化失败: %s", e)
+                self.ai_analysis_enabled = False
 
     def run(self, dry_run: bool = False, progress_callback=None) -> SyncStats:
         """执行同步
@@ -737,6 +759,24 @@ class SyncEngine:
             if self.sync_attachments:
                 self._sync_attachments(full_bug, task_id)
 
+            # AI 日志分析（可选，失败不影响同步）
+            if self.ai_analysis_enabled and self.log_analyzer:
+                try:
+                    data = self.teambition._request(
+                        "GET", "/v3/task/query", params={"taskId": task_id}
+                    )
+                    result = data.get("result", [])
+                    raw = result[0] if isinstance(result, list) and result else (
+                        result if isinstance(result, dict) else None)
+                    if raw:
+                        task_obj = self.teambition._parse_task(raw)
+                        self.log_analyzer.analyze_and_comment(
+                            task_obj, task_raw=raw,
+                            fw_hint=full_bug.openedBuild or "",
+                        )
+                except Exception as e:
+                    logger.warning("AI 分析失败: Bug#%d → TB %s - %s", full_bug.id, task_id, e)
+
             logger.info("[已同步] Bug#%d → TB %s (%s)", full_bug.id, task_identifier or task_id, task_id)
             return SyncResult(bug.id, SyncAction.CREATED, task_id,
                               f"同步成功 → {task_identifier or task_id}")
@@ -853,9 +893,29 @@ class SyncEngine:
         except Exception as e:
             logger.warning("同步评论失败: Bug#%d - %s", full_bug.id, e)
 
-        # 同步附件
+        # 同步附件（只上传新增的，跳过已有的）
         if self.sync_attachments:
-            self._sync_attachments(full_bug, task_id)
+            existing_filenames = self._get_existing_task_filenames(task_id)
+            self._sync_attachments(full_bug, task_id,
+                                   existing_filenames=existing_filenames)
+
+        # AI 日志分析（可选，失败不影响同步）
+        if self.ai_analysis_enabled and self.log_analyzer:
+            try:
+                data = self.teambition._request(
+                    "GET", "/v3/task/query", params={"taskId": task_id}
+                )
+                result = data.get("result", [])
+                raw = result[0] if isinstance(result, list) and result else (
+                    result if isinstance(result, dict) else None)
+                if raw:
+                    task_obj = self.teambition._parse_task(raw)
+                    self.log_analyzer.analyze_and_comment(
+                        task_obj, task_raw=raw,
+                        fw_hint=full_bug.openedBuild or "",
+                    )
+            except Exception as e:
+                logger.warning("AI 分析失败: Bug#%d → TB %s - %s", full_bug.id, task_id, e)
 
         logger.info("[已重新激活] Bug#%d → TB %s", full_bug.id, task_id)
         return SyncResult(bug.id, SyncAction.REACTIVATED, task_id,
@@ -1456,9 +1516,17 @@ class SyncEngine:
 
     # ── 附件同步 ──────────────────────────────────────
 
-    def _sync_attachments(self, bug: ZentaoBug, task_id: str):
-        """同步附件：bug.files + 重现步骤内联图片，全部写入日志附件字段。"""
+    def _sync_attachments(self, bug: ZentaoBug, task_id: str,
+                          existing_filenames: set = None):
+        """同步附件：bug.files + 重现步骤内联图片，全部写入日志附件字段。
+
+        Args:
+            existing_filenames: 已上传的文件名集合（用于重新激活时跳过已有附件）
+        """
+        if existing_filenames is None:
+            existing_filenames = set()
         uploaded: Dict[str, tuple] = {}  # file_id → (work_id, filename, download_url)
+        skipped = 0
 
         # Step 1: 上传 bug.files 文件附件
         total_files = len(bug.files)
@@ -1467,6 +1535,11 @@ class SyncEngine:
             filename = f.get("title", f.get("name", ""))
             size = f.get("size", 0)
             if not file_id:
+                continue
+            # 跳过已上传的附件（按文件名匹配）
+            if filename and filename in existing_filenames:
+                logger.info("跳过已上传附件 [%d/%d]: %s", idx, total_files, filename)
+                skipped += 1
                 continue
             size_mb = size / 1024 / 1024
             if size > self.max_attachment_size_mb * 1024 * 1024:
@@ -1490,6 +1563,12 @@ class SyncEngine:
         for file_id in inline_ids:
             if file_id in uploaded:
                 continue  # 避免与 bug.files 重复上传
+            # 内联图片文件名固定为 image_{file_id}.png，也检查是否已上传
+            inline_name = f"image_{file_id}.png"
+            if inline_name in existing_filenames:
+                logger.info("跳过已上传内联图片: file_id=%s", file_id)
+                skipped += 1
+                continue
             logger.info("下载内联图片: file_id=%s", file_id)
 
             def _do_inline(fid=file_id):
@@ -1502,13 +1581,18 @@ class SyncEngine:
             if not self._retry(f"内联图片 file#{file_id}", _do_inline):
                 logger.warning("内联图片上传失败（已耗尽重试）: file_id=%s", file_id)
 
-        # Step 3: 批量更新"日志附件"自定义字段（包含 bug.files + 内联图片）
+        # Step 3: 批量更新"日志附件"自定义字段（包含已有 + 新上传）
         attachment_cf_id = self.cf_ids.get("attachment", "")
-        if attachment_cf_id and uploaded:
-            values = [
-                {"id": entry[0], "title": entry[1]}
-                for entry in uploaded.values()
-            ]
+        if attachment_cf_id and (uploaded or existing_filenames):
+            # 合并已有附件（从 existing_filenames 保留）和新上传的
+            values = []
+            # 先保留已有附件记录（从任务详情 customfields 中获取）
+            if existing_filenames:
+                existing_values = self._get_existing_attachment_values(task_id, attachment_cf_id)
+                values.extend(existing_values)
+            # 追加新上传的
+            for entry in uploaded.values():
+                values.append({"id": entry[0], "title": entry[1]})
             if values:
                 try:
                     self.teambition._request(
@@ -1516,13 +1600,57 @@ class SyncEngine:
                         f"/v3/task/{task_id}/customfield/{attachment_cf_id}/update",
                         json={"value": values},
                     )
+                    new_count = len(uploaded)
                     total = len(values)
-                    file_count = len(bug.files)
-                    inline_count = total - file_count
-                    logger.info("日志附件字段已更新: %d 个文件 (bug附件 %d + 内联图 %d)",
-                                total, file_count, inline_count)
+                    logger.info("日志附件字段已更新: %d 个文件 (新增 %d, 跳过 %d, 总计 %d)",
+                                total, new_count, skipped, total)
                 except Exception as e:
                     logger.warning("更新日志附件字段失败: %s", e)
+
+    def _get_existing_attachment_values(self, task_id: str, cf_id: str) -> list:
+        """从任务详情中获取日志附件自定义字段的已有值列表。"""
+        try:
+            data = self.teambition._request(
+                "GET", "/v3/task/query", params={"taskId": task_id}
+            )
+            result = data.get("result", [])
+            raw = result[0] if isinstance(result, list) and result else (
+                result if isinstance(result, dict) else None)
+            if not raw:
+                return []
+            for cf in raw.get("customfields", []):
+                if cf.get("customfieldId") == cf_id or cf.get("id") == cf_id:
+                    val = cf.get("value", [])
+                    if isinstance(val, list):
+                        return val
+            return []
+        except Exception:
+            return []
+
+    def _get_existing_task_filenames(self, task_id: str) -> set:
+        """获取 TB 任务已上传附件的文件名集合，用于去重。"""
+        filenames = set()
+        # 1. 从 works 列表获取
+        try:
+            works = self.teambition.list_task_works(task_id)
+            for w in works:
+                fn = w.get("fileName", "")
+                if fn:
+                    filenames.add(fn)
+        except Exception:
+            pass
+        # 2. 从日志附件自定义字段获取
+        attachment_cf_id = self.cf_ids.get("attachment", "")
+        if attachment_cf_id:
+            existing = self._get_existing_attachment_values(task_id, attachment_cf_id)
+            for item in existing:
+                title = item.get("title", "") if isinstance(item, dict) else ""
+                if title:
+                    filenames.add(title)
+        if filenames:
+            logger.info("任务 %s 已有 %d 个附件: %s", task_id, len(filenames),
+                        ", ".join(list(filenames)[:5]))
+        return filenames
 
     # ── 重试机制 ──────────────────────────────────────
 

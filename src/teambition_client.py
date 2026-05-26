@@ -412,6 +412,23 @@ class TeambitionClient:
 
     # ── 文件/Work 查询 ────────────────────────────────
 
+    def list_task_works(self, task_id: str) -> List[dict]:
+        """查询任务已上传的所有文件(works)列表。
+
+        Returns:
+            [{"id": work_id, "fileName": "xxx", ...}, ...]
+        """
+        try:
+            data = self._request("GET", f"/v3/work/list",
+                                 params={"taskId": task_id, "limit": 200})
+            result = data.get("result", [])
+            if isinstance(result, list):
+                return result
+            return []
+        except Exception as e:
+            logger.warning("查询任务 works 列表失败: %s - %s", task_id, e)
+            return []
+
     def get_work_info(self, work_id: str) -> Optional[dict]:
         """根据 work_id 查询文件记录（元数据：fileName, fileSize 等）。
 

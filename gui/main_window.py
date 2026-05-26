@@ -384,7 +384,11 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_action_buttons(self):
-        layout = QHBoxLayout()
+        layout = QVBoxLayout()
+        layout.setSpacing(4)
+
+        # 第一行：操作按钮
+        btn_row = QHBoxLayout()
 
         self.btn_list = QPushButton("列出Bug")
         self.btn_list.setToolTip("获取禅道Bug列表（不需要Teambition认证）")
@@ -416,7 +420,48 @@ class MainWindow(QMainWindow):
 
         for btn in [self.btn_list, self.btn_dryrun, self.btn_sync,
                      self.btn_test, self.btn_config, self.btn_update]:
-            layout.addWidget(btn)
+            btn_row.addWidget(btn)
+
+        layout.addLayout(btn_row)
+
+        # 第二行：同步选项开关
+        sync_row = QHBoxLayout()
+        sync_row.setSpacing(12)
+
+        self.chk_reopen = QCheckBox("重新打开任务")
+        self.chk_reopen.setToolTip("同步时若TB任务已关闭，自动重新打开并同步最新评论和附件")
+        self.chk_reopen.stateChanged.connect(self._save_reopen_switch)
+
+        sync_row.addWidget(self.chk_reopen)
+        sync_row.addStretch()
+        layout.addLayout(sync_row)
+
+        # 第三行：AI 分析开关
+        ai_row = QHBoxLayout()
+        ai_row.setSpacing(12)
+
+        self.chk_ai_analysis = QCheckBox("开启AI分析日志")
+        self.chk_ai_analysis.setToolTip("同步后自动下载DRC日志并调用LLM分析，结果写入TB评论")
+        self.chk_ai_analysis.stateChanged.connect(self._on_ai_switch_changed)
+
+        self.chk_fault_pattern = QCheckBox("故障模式库")
+        self.chk_fault_pattern.setToolTip("匹配已知故障模式（倾斜误触发、抱起未恢复等），提供根因提示")
+        self.chk_fault_pattern.stateChanged.connect(lambda: self._save_ai_switches())
+
+        self.chk_specialized_prompt = QCheckBox("模块化提示词")
+        self.chk_specialized_prompt.setToolTip("根据缺陷类别（算法/嵌入式/IOT/应用等）使用专业化分析提示词")
+        self.chk_specialized_prompt.stateChanged.connect(lambda: self._save_ai_switches())
+
+        self.chk_knowledge_base = QCheckBox("RAG知识库")
+        self.chk_knowledge_base.setToolTip("从历史分析中检索相似案例作为参考，越用越准")
+        self.chk_knowledge_base.stateChanged.connect(lambda: self._save_ai_switches())
+
+        for chk in [self.chk_ai_analysis, self.chk_fault_pattern,
+                     self.chk_specialized_prompt, self.chk_knowledge_base]:
+            ai_row.addWidget(chk)
+
+        ai_row.addStretch()
+        layout.addLayout(ai_row)
 
         return layout
 
@@ -445,6 +490,10 @@ class MainWindow(QMainWindow):
             self._populate_filters()
             self._init_dingtalk()
             self._check_classifier_config()
+            self._check_ai_analysis_config()
+            self._load_ai_switches()
+            # 协同学习启动自动拉取
+            self._start_collab_auto_pull()
             # 状态栏显示当前平台链路
             source_cfg = self.config.get("source", {})
             platform = source_cfg.get("platform", "zentao")
@@ -489,6 +538,122 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             self._on_config()
 
+    def _check_ai_analysis_config(self):
+        """检查 AI 分析配置状态，在状态栏显示"""
+        ai_cfg = self.config.get("ai_analysis", {})
+        if ai_cfg.get("enabled"):
+            cls_cfg = self.config.get("classifier", {})
+            if "classifier" in cls_cfg and "llm" not in cls_cfg:
+                cls_cfg = cls_cfg["classifier"]
+            llm_cfg = cls_cfg.get("llm", {})
+            if not (llm_cfg.get("api_key") or "").strip():
+                reply = QMessageBox.warning(
+                    self, "AI分析配置不完整",
+                    "AI 日志分析已启用，但分类器 LLM 的 API Key 未配置。\n"
+                    "AI 分析需要 LLM 支持，请先在「分类器」页面配置 LLM。\n\n"
+                    "是否现在打开配置界面？",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if reply == QMessageBox.Yes:
+                    self._on_config()
+
+    def _load_ai_switches(self):
+        """从配置文件加载开关状态，全部默认关闭"""
+        # 重新打开任务开关（默认关闭）
+        sync_cfg = self.config.get("sync", {})
+        self.chk_reopen.blockSignals(True)
+        self.chk_reopen.setChecked(bool(sync_cfg.get("reactivate_closed", False)))
+        self.chk_reopen.blockSignals(False)
+
+        # AI 日志分析开关（默认关闭）
+        ai_cfg = self.config.get("ai_analysis", {})
+        self.chk_ai_analysis.blockSignals(True)
+        self.chk_ai_analysis.setChecked(bool(ai_cfg.get("enabled", False)))
+        self.chk_ai_analysis.blockSignals(False)
+
+        import yaml
+        for chk, yaml_path, key in [
+            (self.chk_fault_pattern, "configs/fault_patterns.yaml", "enabled"),
+            (self.chk_specialized_prompt, "configs/prompts.yaml", "enabled"),
+        ]:
+            try:
+                with open(yaml_path, "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f) or {}
+                chk.setChecked(bool(cfg.get(key, False)))
+            except Exception:
+                chk.setChecked(False)
+
+        kb_cfg = ai_cfg.get("knowledge_base", {})
+        self.chk_knowledge_base.setChecked(bool(kb_cfg.get("enabled", False)))
+
+        # AI 关闭时禁用子开关
+        self._update_ai_sub_switches()
+
+    def _save_reopen_switch(self):
+        """保存重新打开任务开关到 sync.yaml"""
+        import yaml
+        from gui.yaml_utils import update_yaml_values
+        sync_path = os.path.join("configs", "sync.yaml")
+        enabled = self.chk_reopen.isChecked()
+        try:
+            update_yaml_values(sync_path, {"reactivate_closed": enabled})
+        except Exception as e:
+            logger.warning("保存重新打开任务开关失败: %s", e)
+
+    def _on_ai_switch_changed(self, state):
+        """AI 分析总开关变化时更新子开关可用性"""
+        self._update_ai_sub_switches()
+        self._save_ai_switches()
+
+    def _update_ai_sub_switches(self):
+        """AI 总开关关闭时禁用子开关"""
+        enabled = self.chk_ai_analysis.isChecked()
+        for chk in [self.chk_fault_pattern, self.chk_specialized_prompt,
+                     self.chk_knowledge_base]:
+            chk.setEnabled(enabled)
+
+    def _save_ai_switches(self):
+        """将 AI 开关状态保存到配置文件"""
+        from gui.yaml_utils import update_yaml_values
+
+        # AI 分析总开关 → ai_analysis.yaml
+        ai_enabled = self.chk_ai_analysis.isChecked()
+        ai_path = os.path.join("configs", "ai_analysis.yaml")
+        if os.path.exists(ai_path):
+            update_yaml_values(ai_path, {"enabled": ai_enabled})
+        self.config.setdefault("ai_analysis", {})["enabled"] = ai_enabled
+
+        # 故障模式库 → fault_patterns.yaml
+        fp_path = os.path.join("configs", "fault_patterns.yaml")
+        if os.path.exists(fp_path):
+            update_yaml_values(fp_path, {"enabled": self.chk_fault_pattern.isChecked()})
+
+        # 模块化提示词 → prompts.yaml
+        prompt_path = os.path.join("configs", "prompts.yaml")
+        if os.path.exists(prompt_path):
+            update_yaml_values(prompt_path, {"enabled": self.chk_specialized_prompt.isChecked()})
+
+        # RAG 知识库 → ai_analysis.yaml
+        kb_enabled = self.chk_knowledge_base.isChecked() and ai_enabled
+        if os.path.exists(ai_path):
+            update_yaml_values(ai_path, {"knowledge_base.enabled": kb_enabled})
+        self.config.setdefault("ai_analysis", {}).setdefault("knowledge_base", {})["enabled"] = kb_enabled
+
+        # 更新状态栏
+        parts = []
+        if ai_enabled:
+            parts.append("AI分析:开")
+            if self.chk_fault_pattern.isChecked():
+                parts.append("模式库")
+            if self.chk_specialized_prompt.isChecked():
+                parts.append("专业提示词")
+            if self.chk_knowledge_base.isChecked():
+                parts.append("知识库")
+        else:
+            parts.append("AI分析:关")
+        self.status_label.setText(" | ".join(parts))
+
     def _init_dingtalk(self):
         """根据配置初始化钉钉机器人"""
         self._dingtalk_bot = None
@@ -502,6 +667,63 @@ class MainWindow(QMainWindow):
                 logger.info("钉钉通知已启用")
             except Exception as e:
                 logger.warning("钉钉机器人初始化失败: %s", e)
+
+    def _start_collab_auto_pull(self):
+        """启动协同学习自动拉取（延迟执行，等待组件初始化完成）。"""
+        cl_cfg = self.config.get("ai_analysis", {}).get("collaborative_learning", {})
+        if not cl_cfg.get("enabled", True) or not cl_cfg.get("auto_pull", True):
+            return
+        if not cl_cfg.get("github_token", ""):
+            return
+
+        from gui.qt_compat import QTimer
+        QTimer.singleShot(5000, self._do_collab_auto_pull)
+
+        # 定时推送：每小时检查一次
+        self._collab_sync_interval_hours = cl_cfg.get("sync_interval_hours", 168)
+        self._collab_sync_timer = QTimer()
+        self._collab_sync_timer.timeout.connect(self._do_collab_periodic_sync)
+        self._collab_sync_timer.start(3600 * 1000)  # 每小时检查
+
+    def _do_collab_auto_pull(self):
+        """后台自动拉取共享数据。"""
+        from src.collaborative_learning import CollaborativeLearning
+        cl = CollaborativeLearning(self.config.get("ai_analysis", {}))
+        try:
+            success, msg, has_updates = cl.pull()
+            if has_updates:
+                self._log(f"[协同学习] 自动拉取: {msg}")
+                # 尝试重建模型
+                self._rebuild_models_after_pull()
+            elif success:
+                logger.info("协同学习自动拉取: %s", msg)
+        except Exception as e:
+            logger.warning("协同学习自动拉取失败: %s", e)
+
+    def _do_collab_periodic_sync(self):
+        """定时检查是否需要推送。"""
+        from src.collaborative_learning import CollaborativeLearning
+        cl = CollaborativeLearning(self.config.get("ai_analysis", {}))
+        if not cl.enabled or not cl.should_sync():
+            return
+        try:
+            success, msg = cl.push()
+            if success:
+                self._log(f"[协同学习] 定时推送: {msg}")
+        except Exception as e:
+            logger.warning("协同学习定时推送失败: %s", e)
+
+    def _rebuild_models_after_pull(self):
+        """在协同学习拉取新数据后重建本地模型。"""
+        try:
+            from src.knowledge_base import KnowledgeBase
+            kb = KnowledgeBase(self.config.get("ai_analysis", {}))
+            if kb.enabled:
+                kb.reload_data()
+                kb.rebuild_model()
+                self._log("[协同学习] 知识库模型已重建")
+        except Exception as e:
+            logger.warning("协同学习模型重建失败: %s", e)
 
     def _on_platform_changed(self, index: int):
         """源平台切换时更新界面标签、提示文字、字段值"""

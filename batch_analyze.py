@@ -129,9 +129,16 @@ def list_drc_files():
     return files
 
 
-def filter_by_utc_hour(files, start_h, end_h):
-    """Filter files whose name contains timestamp in UTC range [start_h, end_h)."""
+def filter_by_utc_hour(files, start_h, end_h, start_m=0, end_m=0):
+    """Filter files whose name contains timestamp in UTC range.
+
+    Args:
+        start_h, end_h: UTC hour range [start_h, end_h)
+        start_m, end_m: optional minute boundaries for precise filtering.
+                        When both > 0, uses exact datetime range instead of hour-only.
+    """
     res = []
+    use_precise = start_m > 0 or end_m > 0
     for remote, name in files:
         m = re.search(r'(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})', name)
         if not m:
@@ -140,15 +147,30 @@ def filter_by_utc_hour(files, start_h, end_h):
             if m2:
                 ts = int(m2.group(1))
                 dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-                if start_h <= dt.hour < end_h:
+                if use_precise:
+                    start_dt = datetime(dt.year, dt.month, dt.day, start_h, start_m, 0, tzinfo=timezone.utc)
+                    end_dt = datetime(dt.year, dt.month, dt.day, end_h, end_m, 0, tzinfo=timezone.utc)
+                    if start_dt <= dt < end_dt:
+                        res.append((remote, name, ts))
+                elif start_h <= dt.hour < end_h:
                     res.append((remote, name, ts))
             continue
         date_str, hh, mi, sec = m.groups()
         h = int(hh)
-        if start_h <= h < end_h:
-            # parse approximate timestamp for sorting
+        minute = int(mi)
+        if use_precise:
             ts = int(datetime(int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10]),
-                              h, int(mi), int(sec), tzinfo=timezone.utc).timestamp())
+                              h, minute, int(sec), tzinfo=timezone.utc).timestamp())
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            start_dt = datetime(int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10]),
+                                start_h, start_m, 0, tzinfo=timezone.utc)
+            end_dt = datetime(int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10]),
+                              end_h, end_m, 0, tzinfo=timezone.utc)
+            if start_dt <= dt < end_dt:
+                res.append((remote, name, ts))
+        elif start_h <= h < end_h:
+            ts = int(datetime(int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10]),
+                              h, minute, int(sec), tzinfo=timezone.utc).timestamp())
             res.append((remote, name, ts))
     res.sort(key=lambda x: x[2])
     return res
@@ -447,11 +469,23 @@ def analyze_merged_logs():
         if not m:
             continue
         _, time_str, mod, level, file, lineno, msg = m.groups()
+        # 保留: E/W/F级别, 关键词匹配, 关键模块的任何级别
+        _important_srcs = ('task_idle', 'tilt_checker', 'ultrasonic_carpet',
+                           'linelaser_base', 'motion_control', 'navigator',
+                           'carpet_manager', 'slam', 'localization',
+                           'hot_swap_component', 'imu', 'odom', 'chassis',
+                           'bumper', 'lidar', 'double_rotate_rag',
+                           'pose_provider', 'navimap_manager', 'navimap_algo',
+                           'ir_record', 'escaper', 'target_navigator')
         is_relevant = (
-            level in ('W', 'E')
+            level in ('W', 'E', 'F')
             or 'RobotEventReport' in msg
             or 'event_id' in msg
             or 'status change' in msg
+            or any(s in file for s in _important_srcs)
+            or any(kw in msg.lower() for kw in ('yaw', 'tilt', 'angle', 'protect',
+                                                   'no pose', 'pose lost',
+                                                   'localization failed', 'relocation failed'))
         )
         if is_relevant:
             fault_window_lines.append((parse_time(time_str), time_str, mod, level, msg))
@@ -512,7 +546,25 @@ def analyze_merged_logs():
                     root_cause_event = m_rc.group(1)
 
         # Phase 3: Human-readable root cause
-        if root_cause_event:
+        # Check for IMU/yaw/tilt anomaly in context logs before error
+        imu_anomaly = ''
+        for t, ts_str, mod, lvl, msg in context_logs:
+            if t > et_time:
+                break
+            m_yaw = re.search(r'yaw_deg[:\s]+(-?\d+\.?\d*)deg', msg, re.IGNORECASE)
+            if m_yaw:
+                yaw_val = abs(float(m_yaw.group(1)))
+                if yaw_val > 3600:  # > 10 full rotations = anomaly
+                    imu_anomaly = f'IMU yaw 累积异常 (yaw={m_yaw.group(1)}°, 约{yaw_val/360:.0f}圈)'
+                    break
+            m_tilt = re.search(r'tilt[:\s]+(\d+\.?\d*)', msg, re.IGNORECASE)
+            if m_tilt and float(m_tilt.group(1)) > 15:  # > 15° threshold
+                imu_anomaly = f'倾斜保护触发 (tilt={m_tilt.group(1)}°)'
+
+        if imu_anomaly:
+            root_cause = imu_anomaly
+            root_cause_event = root_cause_event or 'imu_tilt_anomaly'
+        elif root_cause_event:
             root_cause = KNOWN_EVENTS.get(root_cause_event, root_cause_event)
         elif trigger_comp:
             root_cause = f'{trigger_comp} 异常'
@@ -552,7 +604,13 @@ def analyze_merged_logs():
                     continue  # Skip repetitive noise warnings
                 tag = 'warning'
             else:
-                continue
+                # D/I 级别：来自关键模块或包含重要语义的也保留
+                _diag_srcs = ('task_idle', 'tilt_checker', 'ultrasonic_carpet',
+                              'imu', 'odom', 'motion_control', 'navigator')
+                if any(s in mod for s in _diag_srcs) or any(kw in msg.lower() for kw in ('yaw', 'tilt', 'protect')):
+                    tag = 'diagnostic'
+                else:
+                    continue
             event_chain.append({'time': ts_str, 'level': lvl, 'module': mod, 'msg': msg, 'tag': tag})
 
         # Add recovery event to chain

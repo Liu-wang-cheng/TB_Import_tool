@@ -13,8 +13,28 @@ from gui.qt_compat import (
 )
 
 from gui.yaml_utils import update_yaml_values
+from gui.qt_compat import QThread, pyqtSignal
 
 logger = logging.getLogger(__name__)
+
+
+class CollabSyncWorker(QThread):
+    """协同学习同步后台线程"""
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, config: dict, data_dir: str = "data"):
+        super().__init__()
+        self._config = config
+        self._data_dir = data_dir
+
+    def run(self):
+        try:
+            from src.collaborative_learning import CollaborativeLearning
+            cl = CollaborativeLearning(self._config, self._data_dir)
+            success, msg, _ = cl.sync()
+            self.finished_signal.emit(success, msg)
+        except Exception as e:
+            self.finished_signal.emit(False, f"同步异常: {e}")
 
 
 class ConfigDialog(QDialog):
@@ -36,6 +56,7 @@ class ConfigDialog(QDialog):
         self.tabs.addTab(self._build_teambition_tab(), "Teambition")
         self.tabs.addTab(self._build_sync_tab(), "同步")
         self.tabs.addTab(self._build_classifier_tab(), "分类器")
+        self.tabs.addTab(self._build_ai_analysis_tab(), "AI分析")
         self.tabs.addTab(self._build_dingtalk_tab(), "钉钉")
         layout.addWidget(self.tabs)
 
@@ -268,7 +289,7 @@ class ConfigDialog(QDialog):
         llm_form.addRow("模型名称:", self.cls_llm_model)
 
         self.cls_llm_timeout = QSpinBox()
-        self.cls_llm_timeout.setRange(5, 120)
+        self.cls_llm_timeout.setRange(5, 300)
         self.cls_llm_timeout.setSuffix(" 秒")
         llm_form.addRow("超时时间:", self.cls_llm_timeout)
 
@@ -277,6 +298,107 @@ class ConfigDialog(QDialog):
         llm_form.addRow("批量大小:", self.cls_llm_batch_size)
 
         form.addRow(llm_group)
+
+        return w
+
+    # ── AI分析 Tab ──────────────────────────────────────
+
+    def _build_ai_analysis_tab(self):
+        w = QWidget()
+        form = QFormLayout(w)
+
+        self.ai_enabled = QCheckBox("启用 AI 日志分析（同步后自动分析并写入评论）")
+        form.addRow("", self.ai_enabled)
+
+        # DRC 服务器
+        drc_group = QGroupBox("DRC 日志服务器")
+        drc_form = QFormLayout(drc_group)
+        self.ai_drc_server = QLineEdit()
+        self.ai_drc_server.setPlaceholderText("http://61.141.202.107:8008")
+        drc_form.addRow("服务器地址:", self.ai_drc_server)
+        self.ai_drc_username = QLineEdit()
+        self.ai_drc_username.setPlaceholderText("ldrobot-team")
+        drc_form.addRow("用户名:", self.ai_drc_username)
+        self.ai_drc_password = QLineEdit()
+        self.ai_drc_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ai_drc_password.setPlaceholderText("密码")
+        drc_form.addRow("密码:", self.ai_drc_password)
+        self.ai_project_name = QLineEdit()
+        self.ai_project_name.setPlaceholderText("与 Teambition 配置自动同步")
+        self.ai_project_name.setReadOnly(True)
+        self.ai_project_name.setStyleSheet("color:#6b7280;")
+        drc_form.addRow("所属项目:", self.ai_project_name)
+        form.addRow(drc_group)
+
+        form.addRow(QLabel(
+            "说明：AI 分析依赖 LLM（配置在「分类器」Tab 中）。\n"
+            "DRC 服务器配置留空则使用默认值。"
+        ))
+
+        # 协同学习
+        collab_group = QGroupBox("协同学习（多用户知识共享）")
+        collab_layout = QVBoxLayout(collab_group)
+        collab_layout.setSpacing(8)
+
+        self.collab_enabled = QCheckBox("启用协同学习（自动同步知识库和分类器训练数据到 GitHub）")
+        self.collab_enabled.setChecked(True)
+        collab_layout.addWidget(self.collab_enabled)
+
+        token_row = QHBoxLayout()
+        token_row.addWidget(QLabel("GitHub Token:"))
+        self.collab_token = QLineEdit()
+        self.collab_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.collab_token.setPlaceholderText("ghp_xxxxxxxxxxxxxxxxxxxx")
+        token_row.addWidget(self.collab_token)
+        # 获取 Token 帮助链接
+        token_help = QLabel(
+            "<a href='https://github.com/settings/tokens' style='color:#2563eb;text-decoration:none;'>获取Token</a> (需勾选 repo 权限)"
+        )
+        token_help.setOpenExternalLinks(True)
+        token_help.setStyleSheet("font-size:12px;")
+        token_row.addWidget(token_help)
+        collab_layout.addLayout(token_row)
+
+        # 仓库地址（只读）
+        repo_row = QHBoxLayout()
+        repo_row.addWidget(QLabel("共享仓库:"))
+        self.collab_repo = QLineEdit("Liu-wang-cheng/TB_Import_tool")
+        self.collab_repo.setReadOnly(True)
+        self.collab_repo.setStyleSheet("color:#6b7280;")
+        repo_row.addWidget(self.collab_repo)
+        collab_layout.addLayout(repo_row)
+
+        # 同步间隔
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(QLabel("自动同步间隔:"))
+        self.collab_interval = QComboBox()
+        self.collab_interval.addItems(["每天", "每周", "每月"])
+        self.collab_interval.setCurrentIndex(1)  # 默认每周
+        interval_row.addWidget(self.collab_interval)
+        interval_row.addStretch()
+        collab_layout.addLayout(interval_row)
+
+        # 立即同步按钮 + 状态
+        sync_row = QHBoxLayout()
+        self.collab_sync_btn = QPushButton("立即同步")
+        self.collab_sync_btn.setToolTip("立即从 GitHub 拉取最新数据并推送本地数据")
+        self.collab_sync_btn.clicked.connect(self._on_collab_sync)
+        sync_row.addWidget(self.collab_sync_btn)
+        self.collab_status = QLabel("")
+        self.collab_status.setStyleSheet("color:#6b7280; font-size:12px;")
+        sync_row.addWidget(self.collab_status)
+        sync_row.addStretch()
+        collab_layout.addLayout(sync_row)
+
+        # 说明
+        note = QLabel(
+            "说明：开启后，知识库和分类器训练数据会通过 GitHub 仓库在团队成员间自动同步。\n"
+            "首次使用需先到 GitHub Settings 创建 Personal Access Token 并勾选 repo 权限。"
+        )
+        note.setStyleSheet("color:#6b7280; font-size:12px;")
+        collab_layout.addWidget(note)
+
+        form.addRow(collab_group)
 
         return w
 
@@ -376,8 +498,33 @@ class ConfigDialog(QDialog):
         self.cls_llm_base_url.setText(llm.get("base_url", ""))
         self.cls_llm_api_key.setText(llm.get("api_key", ""))
         self.cls_llm_model.setText(llm.get("model", ""))
-        self.cls_llm_timeout.setValue(llm.get("timeout", 30))
+        self.cls_llm_timeout.setValue(llm.get("timeout", 180))
         self.cls_llm_batch_size.setValue(llm.get("batch_size", 10))
+
+        # AI分析
+        ai = self._load_yaml("ai_analysis.yaml")
+        self.ai_enabled.setChecked(ai.get("enabled", False))
+        self.ai_drc_server.setText(ai.get("drc_server", "") or "http://61.141.202.107:8008")
+        self.ai_drc_username.setText(ai.get("drc_username", "") or "ldrobot-team")
+        self.ai_drc_password.setText(ai.get("drc_password", "") or "ldrobotlog4110")
+        # 所属项目：自动从 TB 配置同步
+        self.ai_project_name.setText(project_cfg.get("name", ""))
+
+        # 协同学习
+        cl = ai.get("collaborative_learning", {})
+        self.collab_enabled.setChecked(cl.get("enabled", True))
+        token = cl.get("github_token", "")
+        # 如果 config 没配，尝试从环境变量或 ~/.github_token 文件中读取
+        if not token:
+            token = self._resolve_github_token()
+        self.collab_token.setText(token)
+        interval_hours = cl.get("sync_interval_hours", 168)
+        if interval_hours <= 24:
+            self.collab_interval.setCurrentIndex(0)    # 每天
+        elif interval_hours <= 168:
+            self.collab_interval.setCurrentIndex(1)    # 每周
+        else:
+            self.collab_interval.setCurrentIndex(2)    # 每月
 
     def _save(self):
         try:
@@ -385,6 +532,7 @@ class ConfigDialog(QDialog):
             self._save_teambition()
             self._save_sync()
             self._save_classifier()
+            self._save_ai_analysis()
             self._save_dingtalk()
             QMessageBox.information(self, "保存成功", "配置已保存")
             self.accept()
@@ -475,6 +623,32 @@ class ConfigDialog(QDialog):
             "classifier.llm.batch_size": self.cls_llm_batch_size.value(),
         })
 
+    def _save_ai_analysis(self):
+        values = {
+            "enabled": self.ai_enabled.isChecked(),
+        }
+        if self.ai_drc_server.text().strip():
+            values["drc_server"] = self.ai_drc_server.text().strip()
+        if self.ai_drc_username.text().strip():
+            values["drc_username"] = self.ai_drc_username.text().strip()
+        if self.ai_drc_password.text().strip():
+            values["drc_password"] = self.ai_drc_password.text().strip()
+        # 所属项目：只读，自动与 TB 配置同步，无需保存
+
+        # 协同学习
+        interval_map = {0: 24, 1: 168, 2: 720}
+        values["collaborative_learning.enabled"] = self.collab_enabled.isChecked()
+        values["collaborative_learning.github_token"] = self.collab_token.text().strip()
+        values["collaborative_learning.sync_interval_hours"] = interval_map.get(
+            self.collab_interval.currentIndex(), 168
+        )
+        values["collaborative_learning.repo_owner"] = "Liu-wang-cheng"
+        values["collaborative_learning.repo_name"] = "TB_Import_tool"
+        values["collaborative_learning.branch"] = "main"
+
+        path = os.path.join(self.config_dir, "ai_analysis.yaml")
+        update_yaml_values(path, values)
+
     def _save_dingtalk(self):
         path = os.path.join(self.config_dir, "dingtalk.yaml")
         update_yaml_values(path, {
@@ -483,3 +657,60 @@ class ConfigDialog(QDialog):
             "secret": self.dt_secret.text().strip(),
             "at_all": self.dt_at_all.isChecked(),
         })
+
+    @staticmethod
+    def _resolve_github_token() -> str:
+        """从环境变量或文件读取 GitHub token（与 release.py 一致）"""
+        env_token = os.environ.get("GITHUB_TOKEN", "")
+        if env_token:
+            return env_token.strip()
+        token_path = os.path.expanduser("~/.github_token")
+        if os.path.exists(token_path):
+            try:
+                with open(token_path, "r") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+        return ""
+
+    def _on_collab_sync(self):
+        """触发协同学习手动同步。"""
+        token = self.collab_token.text().strip()
+        if not token:
+            QMessageBox.warning(self, "未配置 Token",
+                "请先在 GitHub Settings 创建 Personal Access Token\n"
+                "并填入 GitHub Token 输入框（需勾选 repo 权限）。\n\n"
+                "获取地址: https://github.com/settings/tokens")
+            return
+
+        # 防止重复点击
+        if hasattr(self, '_collab_worker') and self._collab_worker is not None:
+            if self._collab_worker.isRunning():
+                return
+
+        self.collab_sync_btn.setEnabled(False)
+        self.collab_status.setText("正在同步...")
+        self.collab_status.setStyleSheet("color:#d97706; font-size:12px;")
+
+        config = {
+            "collaborative_learning": {
+                "enabled": self.collab_enabled.isChecked(),
+                "github_token": token,
+                "repo_owner": "Liu-wang-cheng",
+                "repo_name": "TB_Import_tool",
+                "branch": "main",
+            }
+        }
+
+        self._collab_worker = CollabSyncWorker(config)
+        self._collab_worker.finished_signal.connect(self._on_collab_sync_finished)
+        self._collab_worker.start()
+
+    def _on_collab_sync_finished(self, success: bool, message: str):
+        self.collab_sync_btn.setEnabled(True)
+        if success:
+            self.collab_status.setText(message)
+            self.collab_status.setStyleSheet("color:#059669; font-size:12px;")
+        else:
+            self.collab_status.setText(f"同步失败: {message}")
+            self.collab_status.setStyleSheet("color:#dc2626; font-size:12px;")

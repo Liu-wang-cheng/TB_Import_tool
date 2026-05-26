@@ -29,7 +29,7 @@ echo [OK] PyInstaller
 echo.
 
 echo [INSTALL] Dependencies ...
-pip install pyyaml requests pyjwt beautifulsoup4 PyQt6 scikit-learn jieba flask oss2
+pip install pyyaml requests pyjwt beautifulsoup4 PyQt6 scikit-learn jieba flask oss2 opencv-python-headless
 if %errorlevel% neq 0 (
     echo [ERROR] Dependencies install failed
     goto :fail

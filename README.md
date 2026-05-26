@@ -1,32 +1,49 @@
 # 智能缺陷管理平台
 
-多平台缺陷自动同步到 Teambition（TB），支持禅道（Zentao）、Jira 等平台接入，一键完成筛选、去重、字段映射、附件和评论同步。
+将禅道（Zentao）/ Jira 缺陷一键同步到 Teambition（TB），支持智能去重、字段映射、AI 日志分析、协同学习。面向扫地机器人软件测试团队。
 
 ## 功能特性
 
-- **多平台支持**：禅道 / Jira 缺陷一键同步到 Teambition，GUI 界面自由切换平台
-- **智能去重**：精确标签匹配 + 标题模糊匹配，避免重复创建
-- **字段映射**：严重程度(S/A/B/C)、复现概率、缺陷分类自动映射
-- **附件同步**：源平台附件自动上传到 Teambition 任务
-- **AI 分类**：TF-IDF 相似度 + LLM 大模型 + 部门兜底，四层分类管道
-- **SN 提取**：自动从重现步骤中提取设备 SN 编码
-- **双向标注**：TB 标题加 `【源平台{id}】`，源平台标题加 `【VLNS-xxxxx】`
-- **钉钉通知**：同步结果自动推送到钉钉群
-- **自动更新**：启动时检测新版本，镜像站自动测速选最快，一键更新
+- **多平台支持**：禅道 / Jira 缺陷同步到 TB，GUI 界面切换平台
+- **智能去重**：精确标签匹配 `【禅道{id}】` + 标题模糊匹配（阈值 0.8）
+- **字段映射**：严重程度(S/A/B/C)、复现概率、缺陷分类、所属项目自动映射
+- **AI 自动分类**：TF-IDF 相似度 → LLM 大模型 → AI 审核 → 部门兜底，四层管道
+- **AI 日志分析**：同步后自动下载 DRC 日志 → LLM 根因分析 → HTML 报告 → 写入 TB 评论
+- **视觉分析**：GLM-4V 多模态分析视频关键帧和图片附件（可选）
+- **附件同步**：禅道附件（含视频/图片）自动上传到 TB 任务，支持断点续传和去重
+- **评论同步**：禅道评论（含内联图片）同步到 TB，重新激活时增量同步新评论
+- **SN 自动提取**：从 Bug 重现步骤中提取设备 SN 编码
+- **双向标题标注**：TB 任务标题加 `【禅道{id}】`，禅道 Bug 标题加 `【VLNS-xxxxx】`
+- **协同学习**：通过 GitHub 仓库多用户共享知识库和分类器训练数据（无需 Git）
+- **钉钉通知**：同步结果通过 Markdown 表格自动推送
+- **自动更新**：启动时检测新版本，镜像站自动测速，一键热更新
+- **批量分析**：独立工具，支持 DRC 日志批量下载、故障检测、HTML 报告生成
 
-## 使用方式
+## 快速开始
+
+### 安装依赖
+
+```bash
+pip install pyyaml requests pyjwt beautifulsoup4 oss2 PyQt6 scikit-learn jieba
+# 可选：视频帧提取
+pip install opencv-python-headless
+```
 
 ### GUI 界面（推荐）
 
-双击 exe 启动，图形界面操作。支持在界面上切换禅道/Jira 平台。
+```bash
+python gui_main.py
+```
+
+双击 `智能缺陷管理平台.exe` 启动，图形界面操作。
 
 ### 命令行
 
 ```bash
-# 列出 Bug（禅道）
+# 列出禅道 Bug
 python main.py --list-bugs --status active
 
-# 列出 Bug（Jira）
+# 列出 Jira Bug
 python main.py --list-bugs --platform jira
 
 # 试运行（不实际创建任务）
@@ -35,46 +52,100 @@ python main.py --dry-run
 # 正式同步
 python main.py
 
+# 测试 TB 认证
+python main.py --auth-only
+
 # 查询 TB 组织/项目 ID
 python tools/query_ids.py
+
+# 批量日志分析
+python batch_analyze.py
 ```
 
 ## 配置
 
-配置文件位于 `configs/` 目录，首次使用请复制 `.example` 模板并填写实际值：
-
-```bash
-cp configs/zentao.yaml.example configs/zentao.yaml
-cp configs/teambition.yaml.example configs/teambition.yaml
-```
+配置文件位于 `configs/` 目录。部分配置提供了 `.example` 模板：
 
 | 文件 | 内容 |
 |------|------|
-| `source.yaml` | 选择缺陷来源平台（zentao / jira） |
+| `source.yaml` | 缺陷来源选择（zentao / jira） |
 | `zentao.yaml` | 禅道服务器地址、账号、Bug 筛选条件 |
-| `jira.yaml` | Jira 服务器地址、账号、JQL 查询条件 |
-| `teambition.yaml` | TB 应用凭证、项目、字段映射 |
-| `classifier.yaml` | AI 分类器配置（TF-IDF / LLM） |
-| `dingtalk.yaml` | 钉钉通知设置 |
-| `update.yaml` | 自动更新镜像站配置 |
+| `jira.yaml` | Jira 服务器地址、账号、JQL 查询 |
+| `teambition.yaml` | TB 应用凭证、项目 ID、字段映射、用户映射 |
+| `sync.yaml` | 同步规则：去重阈值、附件大小限制、API 延迟 |
+| `classifier.yaml` | AI 分类器：TF-IDF 配置、LLM 模型、分类描述 |
+| `ai_analysis.yaml` | AI 日志分析：DRC 服务器、知识库、协同学习 |
+| `dingtalk.yaml` | 钉钉 Webhook、密钥、通知设置 |
+| `prompts.yaml` | LLM Prompt 模板 |
+| `fault_patterns.yaml` | 故障模式定义、预检测规则 |
+| `update.yaml` | 自动更新：镜像站、版本检测 |
 
 ## 项目结构
 
 ```
-gui_main.py              → GUI 入口
-gui/                     → PyQt5/6 图形界面（平台切换、筛选、日志）
+gui_main.py                   → GUI 入口
+gui/                          → PyQt6 图形界面（配置、筛选、同步、日志）
 src/
-  sync_engine.py         → 核心同步逻辑（去重、映射、附件）
-  source_factory.py      → 平台工厂（禅道/Jira 自动选择）
-  zentao_client.py       → 禅道 API 客户端
-  zentao_adapter.py      → 禅道适配器
-  source_client.py       → Jira 客户端
-  classifier.py          → AI 缺陷分类器
-  teambition_client.py   → Teambition API 客户端
-dingtalk/                → 钉钉通知集成
-tools/                   → 辅助工具（ID 查询、Bug 导出等）
-docs/                    → 使用文档
+  sync_engine.py              → 核心同步引擎（去重、映射、附件、评论）
+  zentao_client.py            → 禅道 REST API v1（Token + Session 双认证）
+  teambition_client.py        → TB 开放 API（JWT 认证、任务 CRUD、OSS 上传）
+  classifier.py               → AI 缺陷分类器（四层管道）
+  ai_log_analyzer.py          → AI 日志分析（LLM + 领域知识）
+  log_analysis_integration.py → 日志分析集成（DRC 下载 → 分析 → TB 评论）
+  vision_analyzer.py          → 视觉分析（GLM-4V 多模态）
+  vision_integration.py       → 视觉分析集成
+  knowledge_base.py           → 知识库管理（JSONL 存储、向量检索）
+  knowledge_rag.py            → RAG 检索增强
+  fault_pattern_library.py    → 故障模式匹配库
+  prompt_builder.py           → LLM Prompt 动态构建
+  html_report_generator.py    → HTML 报告生成
+  collaborative_learning.py   → 协同学习（GitHub API 共享知识库）
+  config_loader.py            → 多文件配置加载
+  config_resolver.py          → 中文名称 → ID 解析
+  source_factory.py           → 多平台工厂（禅道/Jira）
+  extractor.py                → SN/时间提取
+  utils.py                    → 工具函数
+dingtalk/                     → 钉钉通知 + 回调服务
+tools/                        → 辅助脚本（ID 查询、Bug 导出等）
+configs/                      → YAML 配置文件
+data/                         → 模型缓存、知识库、参考文档
+tests/                        → 单元测试
+docs/                         → 使用文档
 ```
+
+## TB 应用前提条件
+
+TB 应用（`teambition.yaml` 中的 `app_id`）**必须已发布并安装在企业中**，否则所有 API 调用返回 403。
+
+参考：https://support.teambition.com/help/docs/60c8649368465f00468fb378
+
+## 协同学习
+
+多用户通过 GitHub 仓库自动共享知识库和分类器训练数据：
+
+- **方式**：GitHub REST API（无需 Git），Personal Access Token 认证
+- **Token 获取**：GitHub Settings → Developer settings → Personal access tokens → 勾选 `repo` 权限
+- **配置**：GUI 配置界面 → AI 分析 Tab → 协同学习区域
+- **周期**：启动时自动拉取，每小时检查推送（默认每周推送一次）
+
+## 打包
+
+```bash
+build.bat
+```
+
+输出到 `dist/智能缺陷管理平台/`。仅包含运行时必需文件，自动排除未使用的库。
+
+## 依赖
+
+| 类别 | 包 |
+|------|-----|
+| 核心 | pyyaml, requests, pyjwt, beautifulsoup4, oss2 |
+| GUI | PyQt6（兼容 PyQt5） |
+| ML | scikit-learn, jieba, numpy, scipy, joblib |
+| AI 分析 | opencv-python-headless（可选，视频帧提取） |
+| 协同学习 | requests（内置，无额外依赖） |
+| 打包 | pyinstaller |
 
 ## 版本历史
 

@@ -44,19 +44,12 @@ classifier:
   llm:
     api_key: ""
     base_url: "http://192.168.x.x:8081/v1"
-    batch_size: 15
+    batch_size: 30
     enabled: true
-    max_retries: 2
+    max_retries: 1
     model: ""
     provider: ""
-    timeout: 60
-    # 兜底 LLM：主 LLM 超时/失败后自动切换（免费模型，密钥可直接使用）
-    fallback:
-      enabled: true
-      api_key: fb3ba10687da4be8b8e5b5696c7ac841.WDdaJtBGLufAQ5hS
-      base_url: https://open.bigmodel.cn/api/paas/v4
-      model: glm-4-flash
-      timeout: 60
+    timeout: 30
   similarity:
     cache_dir: data
     enabled: true
