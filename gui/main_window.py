@@ -580,12 +580,18 @@ class MainWindow(QMainWindow):
             try:
                 with open(yaml_path, "r", encoding="utf-8") as f:
                     cfg = yaml.safe_load(f) or {}
+                chk.blockSignals(True)
                 chk.setChecked(bool(cfg.get(key, False)))
+                chk.blockSignals(False)
             except Exception:
+                chk.blockSignals(True)
                 chk.setChecked(False)
+                chk.blockSignals(False)
 
         kb_cfg = ai_cfg.get("knowledge_base", {})
+        self.chk_knowledge_base.blockSignals(True)
         self.chk_knowledge_base.setChecked(bool(kb_cfg.get("enabled", False)))
+        self.chk_knowledge_base.blockSignals(False)
 
         # AI 关闭时禁用子开关
         self._update_ai_sub_switches()

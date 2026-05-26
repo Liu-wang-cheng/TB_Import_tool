@@ -64,13 +64,16 @@ def _find_key_indent(lines: list, key: str, start: int):
 
 
 def _update_top_level(lines: list, key: str, value) -> list:
-    """更新顶层 key"""
+    """更新顶层 key（仅匹配零缩进的根级键，不误匹配嵌套子键）"""
     pattern = re.compile(
         r'^(\s*)["\']?' + re.escape(key) + r'["\']?\s*:(.*)')
     for i, line in enumerate(lines):
         m = pattern.match(line)
         if m:
             indent = m.group(1)
+            # 有缩进的键是嵌套子键，跳过（如 collaborative_learning.enabled ≠ 顶层 enabled）
+            if indent:
+                continue
             if isinstance(value, list):
                 return _replace_list_value(lines, i, indent, key, value)
             else:
