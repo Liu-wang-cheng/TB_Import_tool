@@ -1393,16 +1393,21 @@ class SyncEngine:
 
     def _sync_bug_comments(self, bug: ZentaoBug, task_id: str,
                            cutoff_time: str = ""):
-        """将禅道 Bug 的备注/评论同步到 Teambition 任务评论中（含图片）
+        """将禅道 Bug 的备注/评论同步到 Teambition 任务评论中（含图片/视频）
 
+        评论中的图片/视频统一作为附件上传到 TB 任务，评论文本中用文件名引用。
         cutoff_time: ISO 时间字符串，只同步该时间之后的评论（用于重新激活场景）
         """
         comments = self.source.fetch_bug_comments(bug.id)
         if not comments:
             return
         synced = 0
-        # 评论图片单独跟踪，不写入日志附件字段
-        comment_uploaded: Dict[str, tuple] = {}
+        # 收集所有评论中需要上传的媒体文件
+        # {file_id: assigned_filename}  e.g. {"123": "comment_01.png"}
+        media_to_upload: Dict[str, str] = {}
+        media_counter = 0
+        processed_comments: List[tuple] = []  # (content, actor, date)
+
         for c in comments:
             actor = c.get("actor", "")
             date = c.get("date", "")
@@ -1415,13 +1420,22 @@ class SyncEngine:
                 norm_cutoff = self._normalize_dt(cutoff_time)
                 if norm_date and norm_cutoff and norm_date <= norm_cutoff:
                     continue
-            # 处理评论中的图片（上传到 TB 并替换 src）
-            processed = self._process_comment_images(
-                comment, bug.id, task_id, comment_uploaded
+            # 替换评论中的图片/视频标签为文件名引用
+            processed, media_counter = self._replace_comment_media_with_filenames(
+                comment, media_to_upload, media_counter
             )
             # HTML → 纯文本：TB 评论不支持 HTML 渲染
             processed = self._html_to_text(processed)
-            # 格式：【禅道评论】操作人 日期\n内容
+            processed_comments.append((processed, actor, date))
+
+        # 批量上传评论中的媒体文件到 TB 附件
+        if media_to_upload:
+            self._upload_comment_media(
+                bug.id, task_id, media_to_upload, cutoff_time
+            )
+
+        # 发送评论
+        for processed, actor, date in processed_comments:
             content_parts = ["【禅道评论】"]
             if actor:
                 content_parts.append(actor)
@@ -1439,21 +1453,17 @@ class SyncEngine:
 
     @staticmethod
     def _html_to_text(html: str) -> str:
-        """将禅道 HTML 评论转为 TB 可读的纯文本，图片显示为可点击的引用"""
+        """将禅道 HTML 评论转为 TB 可读的纯文本"""
         if not html or "<" not in html:
             return html
         try:
             soup = BeautifulSoup(html, "html.parser")
-            # 处理图片：work_id 作为 TB 文件引用
+            # 处理未被替换的图片（无 file_id 的情况）
             for img in soup.find_all("img"):
-                src = img.get("src", "")
-                alt = img.get("alt", "").strip()
-                if src and not src.startswith("data:"):
-                    # work_id 是 TB 的文件 UUID，前端可识别
-                    label = alt if alt else "图片"
-                    img.replace_with(f"[{label}]({src})")
-                else:
-                    img.replace_with("[图片]")
+                img.replace_with("[图片]")
+            # 处理未被替换的视频标签
+            for video in soup.find_all("video"):
+                video.replace_with("[视频]")
             # 处理换行
             for tag in soup.find_all(["br", "p", "div"]):
                 tag.insert_after("\n")
@@ -1464,55 +1474,130 @@ class SyncEngine:
         except Exception:
             return html
 
-    def _process_comment_images(self, comment: str, bug_id: int,
-                                task_id: str,
-                                uploaded: Dict[str, tuple] = None) -> str:
-        """处理评论中的内联图片：下载禅道图片→上传Teambition→替换为文件引用"""
-        if "<img" not in comment:
-            return comment
-        if uploaded is None:
-            uploaded = {}
+    def _replace_comment_media_with_filenames(
+            self, comment: str, media_map: Dict[str, str],
+            counter: int) -> tuple:
+        """将评论中的图片/视频标签替换为文件名引用，收集需要上传的媒体。
+
+        Args:
+            comment: 禅道评论 HTML
+            media_map: {zentao_file_id: assigned_filename} 累积收集器
+            counter: 当前媒体编号计数器
+
+        Returns:
+            (processed_comment, new_counter) 元组
+        """
+        if "<img" not in comment and "<video" not in comment:
+            return comment, counter
         try:
             soup = BeautifulSoup(comment, "html.parser")
             modified = False
+
+            # 处理 <img> 标签
             for img in soup.find_all("img"):
                 src = img.get("src", "")
-                match = re.search(r'file-read[_-](\d+)', src)
-                if not match:
-                    match = re.search(r'/file/download/(\d+)', src)
-                if not match:
+                file_id = self._extract_file_id_from_src(src)
+                if not file_id:
                     continue
-                file_id = match.group(1)
+                if file_id not in media_map:
+                    counter += 1
+                    media_map[file_id] = f"comment_{counter:02d}.png"
+                fname = media_map[file_id]
+                img.replace_with(f"[图片: {fname}]")
+                modified = True
 
-                # 复用已上传的评论图片
-                if file_id in uploaded:
-                    entry = uploaded[file_id]
-                    work_id = entry[0]
-                    dl_url = entry[2] if len(entry) > 2 else ""
-                    img["src"] = dl_url or work_id
-                    img["alt"] = ""
+            # 处理 <video> / <source> 标签
+            for video in soup.find_all("video"):
+                src = video.get("src", "")
+                if not src:
+                    source = video.find("source")
+                    if source:
+                        src = source.get("src", "")
+                file_id = self._extract_file_id_from_src(src)
+                if not file_id:
+                    video.replace_with("[视频]")
                     modified = True
                     continue
-
-                def _do_upload(fid=file_id):
-                    att = self.source.download_image(int(fid))
-                    result = self.teambition.upload_attachment(task_id, att)
-                    if result:
-                        work_id, dl_url = result
-                        img["src"] = dl_url or work_id
-                        img["alt"] = ""
-                        uploaded[fid] = (work_id, att.filename, dl_url)
-                        return True
-                    return False
-
-                if self._retry(f"评论图片 file#{file_id}", _do_upload):
-                    modified = True
+                if file_id not in media_map:
+                    counter += 1
+                    media_map[file_id] = f"comment_{counter:02d}.mp4"
+                fname = media_map[file_id]
+                video.replace_with(f"[视频: {fname}]")
+                modified = True
 
             if modified:
-                return str(soup)
+                return str(soup), counter
         except Exception as e:
-            logger.warning("处理评论图片失败: Bug#%d - %s", bug_id, e)
-        return comment
+            logger.warning("处理评论媒体失败: %s", e)
+        return comment, counter
+
+    @staticmethod
+    def _extract_file_id_from_src(src: str) -> str:
+        """从 src URL 中提取禅道 file_id"""
+        if not src:
+            return ""
+        match = re.search(r'file-read[_-](\d+)', src)
+        if not match:
+            match = re.search(r'/file/download/(\d+)', src)
+        return match.group(1) if match else ""
+
+    def _upload_comment_media(self, bug_id: int, task_id: str,
+                               media_map: Dict[str, str],
+                               cutoff_time: str = ""):
+        """批量上传评论中的媒体文件到 TB 任务附件。
+
+        Args:
+            media_map: {zentao_file_id: assigned_filename}
+        """
+        attachment_cf_id = self.cf_ids.get("attachment", "")
+        existing_filenames = set()
+        if attachment_cf_id:
+            existing_filenames = self._get_existing_task_filenames(task_id)
+
+        uploaded: Dict[str, tuple] = {}  # file_id → (work_id, filename, download_url)
+        for file_id, assigned_name in media_map.items():
+            # 跳过已上传的
+            if assigned_name in existing_filenames:
+                logger.info("跳过已上传评论媒体: %s", assigned_name)
+                continue
+
+            def _do_upload(fid=file_id, fname=assigned_name):
+                # 视频文件用 download_attachment（支持大文件和更长超时）
+                is_video = fname.lower().endswith(
+                    (".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv"))
+                if is_video:
+                    att = self.source.download_attachment(int(fid), fname)
+                else:
+                    att = self.source.download_image(int(fid))
+                    att.filename = fname
+                result = self.teambition.upload_attachment(task_id, att)
+                if result:
+                    uploaded[fid] = (result[0], fname, result[1])
+                    return True
+                return False
+
+            if not self._retry(f"评论媒体 {assigned_name}", _do_upload):
+                logger.warning("评论媒体上传失败（已耗尽重试）: %s (file_id=%s)",
+                               assigned_name, file_id)
+
+        # 更新"日志附件"自定义字段
+        if attachment_cf_id and uploaded:
+            try:
+                existing_values = self._get_existing_attachment_values(
+                    task_id, attachment_cf_id
+                ) if existing_filenames else []
+                values = list(existing_values)
+                for entry in uploaded.values():
+                    values.append({"id": entry[0], "title": entry[1]})
+                if values:
+                    self.teambition._request(
+                        "POST",
+                        f"/v3/task/{task_id}/customfield/{attachment_cf_id}/update",
+                        json={"value": values},
+                    )
+                    logger.info("评论媒体附件已更新: 新增 %d 个", len(uploaded))
+            except Exception as e:
+                logger.warning("更新评论媒体附件字段失败: %s", e)
 
     # ── 附件同步 ──────────────────────────────────────
 
