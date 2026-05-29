@@ -7,6 +7,7 @@ import logging
 import os
 import pickle
 import re
+import sys
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple
@@ -25,6 +26,19 @@ def is_mostly_chinese(text: str) -> bool:
     chinese_count = sum(1 for c in text if '一' <= c <= '鿿')
     alpha_count = sum(1 for c in text if c.isalpha())
     return alpha_count > 0 and chinese_count / alpha_count > 0.3
+
+
+def _sanitize_pandas_module():
+    """PyInstaller excludes pandas 但传递依赖可能拉入残缺模块，
+    sklearn is_pandas_df() 只捕获 ImportError 不捕获 AttributeError。
+    在每次 sklearn 调用前清理残缺 pandas 模块。
+    """
+    if 'pandas' in sys.modules:
+        try:
+            import pandas as _pd
+            _pd.DataFrame
+        except (ImportError, AttributeError):
+            del sys.modules['pandas']
 
 
 # ── TF-IDF 相似度分类器（本地学习，无需外部 API）────────────────
@@ -101,6 +115,7 @@ class SimilarityClassifier:
             return
 
         self._samples = samples
+        _sanitize_pandas_module()
         from sklearn.feature_extraction.text import TfidfVectorizer
 
         logger.info("开始训练 TF-IDF 模型: %d 条样本，正在进行中文分词...",
@@ -183,6 +198,7 @@ class SimilarityClassifier:
         segmented = self._segment(text)
         vec = self._vectorizer.transform([segmented])
 
+        _sanitize_pandas_module()
         from sklearn.metrics.pairwise import cosine_similarity
 
         sample_scores = cosine_similarity(vec, self._tfidf_matrix)[0]
@@ -234,6 +250,7 @@ class SimilarityClassifier:
         segmented = self._segment(text)
         vec = self._vectorizer.transform([segmented])
 
+        _sanitize_pandas_module()
         from sklearn.metrics.pairwise import cosine_similarity
 
         sample_scores = cosine_similarity(vec, self._tfidf_matrix)[0]
