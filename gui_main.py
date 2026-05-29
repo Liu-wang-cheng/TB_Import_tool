@@ -12,6 +12,15 @@ _project_root = os.path.dirname(os.path.abspath(__file__))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+# PyInstaller excludes pandas 但传递依赖可能拉入残缺模块，
+# 导致 sklearn is_pandas_df() 触发 AttributeError（只捕获 ImportError）。
+if 'pandas' in sys.modules:
+    try:
+        import pandas
+        pandas.DataFrame
+    except (ImportError, AttributeError):
+        del sys.modules['pandas']
+
 
 def _is_frozen():
     """是否在 PyInstaller 打包环境中运行"""

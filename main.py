@@ -6,6 +6,15 @@ import os
 import sys
 from datetime import datetime
 
+# PyInstaller excludes pandas 但传递依赖可能拉入残缺模块，
+# 导致 sklearn is_pandas_df() 触发 AttributeError（只捕获 ImportError）。
+if 'pandas' in sys.modules:
+    try:
+        import pandas
+        pandas.DataFrame
+    except (ImportError, AttributeError):
+        del sys.modules['pandas']
+
 from dingtalk.bot import DingTalkBot
 from src.config_loader import load_configs
 from src.config_resolver import ConfigResolver
