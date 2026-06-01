@@ -3,6 +3,6 @@
   "sha256": "5fad85214f7be71c8c0315924fc7ab9f43585babc44a216af5da529d5cbcc63c",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.8/SmartDefectPlatform.zip",
   "release_date": "2026-06-01",
-  "release_notes": "v1.8 release - config persistence fixes, YAML null handling, build script improvements",
+  "release_notes": "v1.8: 修复配置持久化、YAML null写入、云版分页/用户映射、打包脚本密钥清除等 10+ 项问题",
   "min_version": "1.0"
 }
