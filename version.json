@@ -1,8 +1,8 @@
 {
-  "version": "1.7",
-  "sha256": "1ceb38d9a6f1767e1af3f3a45e8231093ddcbe4ed1f34bd8d8aad1ef2b6f1776",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.7/SmartDefectPlatform.zip",
-  "release_date": "2026-05-29",
-  "release_notes": "v1.7 release",
+  "version": "1.8",
+  "sha256": "5fad85214f7be71c8c0315924fc7ab9f43585babc44a216af5da529d5cbcc63c",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.8/SmartDefectPlatform.zip",
+  "release_date": "2026-06-01",
+  "release_notes": "v1.8 release - config persistence fixes, YAML null handling, build script improvements",
   "min_version": "1.0"
 }
