@@ -10,7 +10,7 @@ def update_yaml_values(file_path: str, updates: dict):
         file_path: YAML 文件路径
         updates: 要更新的 key→value 映射，支持嵌套用 '.' 分隔
                  如 {"filters.product": 11, "account": "user1"}
-                 值为 None 时保留原值不变
+                 值为 None 时写入 null
                  特殊 key "__list__" 用于列表类型字段
 
     对于简单标量值，直接替换行内值。
@@ -20,8 +20,6 @@ def update_yaml_values(file_path: str, updates: dict):
         lines = f.readlines()
 
     for key, value in updates.items():
-        if value is None and key != "__delete__":
-            continue
         lines = _apply_update(lines, key, value)
 
     with open(file_path, "w", encoding="utf-8") as f:
@@ -79,6 +77,7 @@ def _update_top_level(lines: list, key: str, value) -> list:
                 return _replace_list_value(lines, i, indent, key, value)
             else:
                 lines[i] = f"{indent}{key}: {_format_value(value)}\n"
+                _strip_trailing_list_items(lines, i, indent)
                 return lines
     # key 不存在 → 追加到末尾
     if isinstance(value, list):
@@ -116,6 +115,7 @@ def _update_child_key(lines: list, key: str, value, parent_line: int,
                 return _replace_list_value(lines, i, indent_str, key, value)
             else:
                 lines[i] = f"{indent_str}{key}: {_format_value(value)}\n"
+                _strip_trailing_list_items(lines, i, indent_str)
                 return lines
         stripped = lines[i].rstrip()
         if not stripped:
@@ -137,6 +137,22 @@ def _update_child_key(lines: list, key: str, value, parent_line: int,
     else:
         lines.insert(insert_pos, f"{indent_str}{key}: {_format_value(value)}\n")
     return lines
+
+
+def _strip_trailing_list_items(lines: list, key_line: int, indent: str):
+    """Remove old list items when a list-valued key is changed to scalar/null."""
+    item_prefix = indent + "  - "
+    to_delete = []
+    for j in range(key_line + 1, len(lines)):
+        stripped = lines[j].rstrip()
+        if stripped.startswith(item_prefix):
+            to_delete.append(j)
+        elif not stripped or stripped.startswith("#"):
+            continue
+        else:
+            break
+    for j in reversed(to_delete):
+        del lines[j]
 
 
 def _replace_list_value(lines: list, key_line: int, indent: str,

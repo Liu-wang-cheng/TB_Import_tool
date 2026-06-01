@@ -1,47 +1,61 @@
-"""打包前清理配置中的敏感字段。由 build.bat 自动调用。"""
+"""打包前清理配置中的敏感字段。由 build.bat 自动调用。
+
+注意：代码中硬编码的兜底 LLM api_key 不需要清除，这里清除的是用户个人配置中的敏感字段。
+"""
 import os
 import yaml
-import shutil
 
-def _strip_yaml(path, keys):
-    """将指定 YAML 文件中的敏感 key 替换为空字符串。"""
+# 脚本所在目录即为项目根目录（由 build.bat cd /d "%~dp0" 保证）
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _strip_classifier(path):
+    """清理分类器配置中用户配置的 classifier.llm.api_key。"""
     if not os.path.exists(path):
         return
     with open(path, 'r', encoding='utf-8') as f:
         data = yaml.safe_load(f) or {}
-    
     changed = False
-    for key in keys:
-        if isinstance(data, dict) and key in data:
-            data[key] = ''
+    classifier = data.get('classifier')
+    if isinstance(classifier, dict):
+        llm = classifier.get('llm')
+        if isinstance(llm, dict) and 'api_key' in llm:
+            llm['api_key'] = ''
             changed = True
-    
     if changed:
         with open(path, 'w', encoding='utf-8') as f:
             yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
 
-# 清理分类器配置中的 api_key
-_strip_yaml('configs/classifier.yaml', ['api_key'])
-# 清理 AI 分析配置中的 github_token 和敏感凭证
-ai_path = 'configs/ai_analysis.yaml'
-if os.path.exists(ai_path):
-    with open(ai_path, 'r', encoding='utf-8') as f:
-        ai_data = yaml.safe_load(f) or {}
+
+def _strip_ai_analysis(path):
+    """清理 AI 分析配置中的敏感凭证。"""
+    if not os.path.exists(path):
+        return
+    with open(path, 'r', encoding='utf-8') as f:
+        data = yaml.safe_load(f) or {}
     changed = False
-    if isinstance(ai_data, dict):
-        # Clean DRC credentials
+    if isinstance(data, dict):
         for key in ('drc_username', 'drc_password'):
-            if key in ai_data:
-                ai_data[key] = ''
+            if key in data:
+                data[key] = ''
                 changed = True
-        # Clean web_cookies
-        if 'web_cookies' in ai_data:
-            ai_data['web_cookies'] = {}
+        if 'web_cookies' in data:
+            data['web_cookies'] = {}
             changed = True
-        # Clean collaborative_learning token
-        if 'collaborative_learning' in ai_data and isinstance(ai_data['collaborative_learning'], dict):
-            ai_data['collaborative_learning']['github_token'] = ''
+        cl = data.get('collaborative_learning')
+        if isinstance(cl, dict):
+            cl['github_token'] = ''
             changed = True
     if changed:
-        with open(ai_path, 'w', encoding='utf-8') as f:
-            yaml.dump(ai_data, f, allow_unicode=True, default_flow_style=False)
+        with open(path, 'w', encoding='utf-8') as f:
+            yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
+
+
+if __name__ == '__main__':
+    cfg_dir = os.path.join(_PROJECT_ROOT, 'configs')
+
+    # 清理分类器配置中用户配置的 classifier.llm.api_key
+    _strip_classifier(os.path.join(cfg_dir, 'classifier.yaml'))
+
+    # 清理 AI 分析配置中的敏感凭证
+    _strip_ai_analysis(os.path.join(cfg_dir, 'ai_analysis.yaml'))

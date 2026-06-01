@@ -51,6 +51,7 @@ if exist "build" rmdir /s /q build
 REM Strip api_key before packaging
 echo [CLEAN] Stripping api_key from config ...
 copy /y "configs\classifier.yaml" "configs\classifier.yaml.bak" >nul
+copy /y "configs\ai_analysis.yaml" "configs\ai_analysis.yaml.bak" >nul
 python strip_api_key.py
 echo [OK] api_key stripped
 echo.
@@ -60,9 +61,11 @@ echo.
 pyinstaller --noconfirm zentao2teambition.spec
 set BUILD_RESULT=%errorlevel%
 
-REM Restore original config
+REM Restore original configs
 copy /y "configs\classifier.yaml.bak" "configs\classifier.yaml" >nul
 del "configs\classifier.yaml.bak" >nul 2>&1
+copy /y "configs\ai_analysis.yaml.bak" "configs\ai_analysis.yaml" >nul
+del "configs\ai_analysis.yaml.bak" >nul 2>&1
 
 if %BUILD_RESULT% neq 0 (
     echo.

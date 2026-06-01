@@ -69,18 +69,21 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        # 从 VERSION 文件读取版本号（兼容 PyInstaller 打包）
+        # 项目根目录（兼容 PyInstaller 打包）
         try:
             import sys
             if getattr(sys, 'frozen', False):
+                self._project_root = os.path.dirname(sys.executable)
                 _base = sys._MEIPASS
             else:
-                _base = os.path.dirname(os.path.dirname(__file__))
+                self._project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                _base = self._project_root
             _vpath = os.path.join(_base, "VERSION")
             with open(_vpath, "r") as _vf:
                 _ver = _vf.read().strip()
         except Exception:
             _ver = "?"
+            self._project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.setWindowTitle(f"智能缺陷管理平台 v{_ver}")
         self.setMinimumSize(780, 550)
 
@@ -225,22 +228,24 @@ class MainWindow(QMainWindow):
         self.filter_module.setMaximumWidth(80)
         row1.addWidget(self.filter_module)
 
-        # 状态：中文显示，英文保存
-        self._status_map = {
-            "active,confirmed": "活跃+已确认",
-            "active": "活跃",
-            "confirmed": "已确认",
-            "resolved": "已解决",
-            "closed": "已关闭",
-            "": "全部",
+        # 状态：固定三个选项，对应 status_code 动态获取
+        # "激活" = 任务为打开状态（active/confirmed/opened 等所有未关闭状态）
+        # "已关闭" = 任务为关闭/已解决（closed/resolved）
+        # "激活+已关闭" = 不筛选
+        # _status_code_map: 显示名 → [code1, code2, ...]
+        # 兜底用标准 ZenTao 状态码，连接成功后会用 fetch_status_codes 自适应
+        # 默认选项："激活"（所有打开的任务）
+        self._status_code_map = {
+            "激活": ["active", "confirmed"],
+            "已关闭": ["closed", "resolved"],
+            "激活+已关闭": ["active", "confirmed", "closed", "resolved"],
         }
-        self._status_reverse = {v: k for k, v in self._status_map.items()}
 
         row1.addWidget(QLabel("状态:"))
         self.filter_status = QComboBox()
-        self.filter_status.setEditable(True)
-        self.filter_status.addItems(list(self._status_reverse.keys()))
-        self.filter_status.setCurrentIndex(0)
+        self.filter_status.addItems(list(self._status_code_map.keys()))
+        self.filter_status.setCurrentIndex(0)  # 默认 "激活"
+        self.filter_status.setMinimumWidth(100)
         self.filter_status.setMaximumWidth(160)
         row1.addWidget(self.filter_status)
         row1.addStretch()
@@ -486,7 +491,8 @@ class MainWindow(QMainWindow):
 
     def _load_config(self):
         try:
-            self.config = load_configs("configs")
+            config_dir = os.path.join(self._project_root, "configs")
+            self.config = load_configs(config_dir)
             self._populate_filters()
             self._init_dingtalk()
             self._check_classifier_config()
@@ -600,7 +606,7 @@ class MainWindow(QMainWindow):
         """保存重新打开任务开关到 sync.yaml"""
         import yaml
         from gui.yaml_utils import update_yaml_values
-        sync_path = os.path.join("configs", "sync.yaml")
+        sync_path = os.path.join(self._project_root, "configs", "sync.yaml")
         enabled = self.chk_reopen.isChecked()
         try:
             update_yaml_values(sync_path, {"reactivate_closed": enabled})
@@ -625,18 +631,18 @@ class MainWindow(QMainWindow):
 
         # AI 分析总开关 → ai_analysis.yaml
         ai_enabled = self.chk_ai_analysis.isChecked()
-        ai_path = os.path.join("configs", "ai_analysis.yaml")
+        ai_path = os.path.join(self._project_root, "configs", "ai_analysis.yaml")
         if os.path.exists(ai_path):
             update_yaml_values(ai_path, {"enabled": ai_enabled})
         self.config.setdefault("ai_analysis", {})["enabled"] = ai_enabled
 
         # 故障模式库 → fault_patterns.yaml
-        fp_path = os.path.join("configs", "fault_patterns.yaml")
+        fp_path = os.path.join(self._project_root, "configs", "fault_patterns.yaml")
         if os.path.exists(fp_path):
             update_yaml_values(fp_path, {"enabled": self.chk_fault_pattern.isChecked()})
 
         # 模块化提示词 → prompts.yaml
-        prompt_path = os.path.join("configs", "prompts.yaml")
+        prompt_path = os.path.join(self._project_root, "configs", "prompts.yaml")
         if os.path.exists(prompt_path):
             update_yaml_values(prompt_path, {"enabled": self.chk_specialized_prompt.isChecked()})
 
@@ -796,13 +802,9 @@ class MainWindow(QMainWindow):
             self.filter_module.setText(filters.get("module_filter", "") or "")
             self.filter_url.setText("")
 
-            # 加载状态
-            statuses = filters.get("statuses", []) or []
-            if statuses:
-                key = ",".join(statuses)
-                self.filter_status.setCurrentText(self._status_map.get(key, key))
-            else:
-                self.filter_status.setCurrentIndex(0)
+            # 加载状态：始终默认"激活"，不从 YAML 恢复状态选项
+            # 用户要求 GUI 状态始终默认为"激活"
+            self.filter_status.setCurrentIndex(0)
 
             # 加载指派人列表
             assigned_checked = filters.get("assigned_to", []) or []
@@ -837,6 +839,10 @@ class MainWindow(QMainWindow):
             self.filter_url.clear()
             self.filter_assigned.clear()
 
+        # 平台切换后持久化到 YAML，避免异常退出时丢失
+        if old_platform is not None and old_platform != self._last_platform:
+            self._save_config_to_yaml()
+
     def _populate_filters(self):
         """从配置文件填充筛选面板"""
         # 源平台
@@ -868,7 +874,9 @@ class MainWindow(QMainWindow):
         is_zentao = (platform_idx == 0)
 
         if is_zentao:
-            filters = self.config.setdefault("zentao", {}).setdefault("filters", {})
+            zt_cfg = self.config.setdefault("zentao", {})
+            zt_cfg["base_url"] = self.edit_zentao_base_url.text().strip()
+            filters = zt_cfg.setdefault("filters", {})
 
             product = self.filter_product.text().strip()
             filters["product"] = int(product) if product.isdigit() else (product or None)
@@ -882,13 +890,12 @@ class MainWindow(QMainWindow):
                 filters.pop("project_id", None)
 
             module = self.filter_module.text().strip()
-            filters["module_filter"] = module or None
+            filters["module_filter"] = module if module else ""
 
             status_text = self.filter_status.currentText().strip()
-            if status_text and status_text != "全部":
-                # 中文 → 英文
-                val = self._status_reverse.get(status_text, status_text)
-                filters["statuses"] = [s.strip() for s in val.split(",") if s.strip()]
+            if status_text and self._status_code_map.get(status_text):
+                # 动态获取的 status_code 列表
+                filters["statuses"] = list(self._status_code_map[status_text])
             else:
                 filters["statuses"] = None
 
@@ -957,15 +964,17 @@ class MainWindow(QMainWindow):
         tb_cfg = self.config.get("teambition", {})
         source_cfg = self.config.get("source", {})
 
+        cfg_dir = os.path.join(self._project_root, "configs")
+
         # 保存 source.yaml —— 只存平台类型
-        source_path = os.path.join("configs", "source.yaml")
+        source_path = os.path.join(cfg_dir, "source.yaml")
         if os.path.exists(source_path):
             update_yaml_values(source_path, {
                 "platform": source_cfg.get("platform", "zentao"),
             })
 
         # 保存禅道配置（独立文件）
-        zt_path = os.path.join("configs", "zentao.yaml")
+        zt_path = os.path.join(cfg_dir, "zentao.yaml")
         if os.path.exists(zt_path):
             update_yaml_values(zt_path, {
                 "base_url": zt_cfg.get("base_url"),
@@ -979,11 +988,12 @@ class MainWindow(QMainWindow):
                 "filters.assigned_to_known": zt_filters.get("assigned_to_known"),
                 "filters.date_from": zt_filters.get("date_from"),
                 "filters.date_to": zt_filters.get("date_to"),
+                "filters.branch": zt_filters.get("branch"),
             })
 
         # 保存 Jira 配置（独立文件）
         jira_cfg = self.config.get("jira", {})
-        jira_path = os.path.join("configs", "jira.yaml")
+        jira_path = os.path.join(cfg_dir, "jira.yaml")
         if os.path.exists(jira_path):
             update_yaml_values(jira_path, {
                 "base_url": jira_cfg.get("base_url"),
@@ -994,7 +1004,7 @@ class MainWindow(QMainWindow):
             })
 
         # 保存 Teambition 配置
-        tb_path = os.path.join("configs", "teambition.yaml")
+        tb_path = os.path.join(cfg_dir, "teambition.yaml")
         if os.path.exists(tb_path):
             update_yaml_values(tb_path, {
                 "creator_name": tb_cfg.get("creator_name"),
@@ -1176,6 +1186,10 @@ class MainWindow(QMainWindow):
         if parsed["base_url"]:
             self.edit_zentao_base_url.setText(parsed["base_url"])
             filled.append(f"禅道地址={parsed['base_url']}")
+        if parsed["branch_id"] is not None:
+            zt_filters = self.config.setdefault("zentao", {}).setdefault("filters", {})
+            zt_filters["branch"] = parsed["branch_id"]
+            filled.append(f"分支ID={parsed['branch_id']}")
 
         if filled:
             self.status_label.setText("已解析: " + ", ".join(filled))
@@ -1207,6 +1221,11 @@ class MainWindow(QMainWindow):
             )
             self._module_thread.finished_signal.connect(self._on_module_resolved)
             self._module_thread.start()
+        else:
+            # URL 不含模块ID，清空模块名称字段，避免残留旧配置
+            self.filter_module.clear()
+        # 将解析结果持久化到 YAML，避免重启后恢复旧值
+        self._save_config_to_yaml()
 
     def _on_module_resolved(self, module_name, module_id):
         """模块名称异步解析完成回调"""
@@ -1215,7 +1234,10 @@ class MainWindow(QMainWindow):
             self.filter_module.setText(module_name)
             self.status_label.setText(f"已解析: 模块ID={module_id} → {module_name}")
         else:
+            self.filter_module.clear()
             self.status_label.setText(f"模块ID={module_id} 未找到对应名称，可手动填写")
+        # 模块名称解析结果持久化到 YAML
+        self._save_config_to_yaml()
 
     def _on_test_auth(self):
         self._apply_filters_to_config()
@@ -1235,9 +1257,65 @@ class MainWindow(QMainWindow):
         if not success:
             QMessageBox.warning(self, "连接测试", message)
         else:
+            # 认证成功：动态加载当前禅道版本的状态码
+            self._refresh_status_codes()
             QMessageBox.information(self, "连接测试", message)
 
+    def _refresh_status_codes(self):
+        """从当前连接的禅道服务器动态获取状态码分组，更新 _status_code_map。
+
+        复用 ZentaoClient 单例缓存，避免重复认证/扫描带来的网络请求与日志噪音。
+        """
+        # 复用 ZentaoClient 全局缓存（_cloud_browse_cache 等是 class-level 实例共享）
+        # 直接通过 source_factory 单例获取 client 即可
+        try:
+            from src.source_factory import _CLIENT_CACHE
+            from src.zentao_client import ZentaoClient
+
+            # 单例 key：base_url + account
+            zt_cfg = self.config.get("zentao", {})
+            cache_key = (zt_cfg.get("base_url", ""), zt_cfg.get("account", ""), zt_cfg.get("password", ""))
+            client = _CLIENT_CACHE.get(cache_key)
+            if client is None:
+                sync_cfg = self.config.get("sync", {})
+                client = ZentaoClient(
+                    base_url=zt_cfg.get("base_url", ""),
+                    account=zt_cfg.get("account", ""),
+                    password=zt_cfg.get("password", ""),
+                    api_delay=sync_cfg.get("api_delay", 0.5),
+                )
+                client.authenticate()
+                _CLIENT_CACHE[cache_key] = client
+            # 确保 branch_id 始终同步（即使是缓存的 client）
+            filters = zt_cfg.get("filters", {})
+            if "branch" in filters:
+                client.set_branch_id(int(filters["branch"]))
+
+            # 复用浏览页缓存（不主动发请求）；如果缓存空，则同步浏览一次
+            if not client._cloud_browse_cache and client._cloud_session_auth:
+                product_id = zt_cfg.get("filters", {}).get("product")
+                if product_id:
+                    try:
+                        client._cloud_get_browse(int(product_id),
+                                                  params={"recPerPage": 200, "pageID": 1})
+                    except Exception as e:
+                        logger.debug("预热浏览页缓存失败: %s", e)
+
+            groups = client.fetch_status_groups()
+            if groups:
+                open_codes = groups.get("open", ["active", "confirmed"])
+                closed_codes = groups.get("closed", ["resolved", "closed"])
+                self._status_code_map = {
+                    "激活+已关闭": list(open_codes) + list(closed_codes),
+                    "激活": list(open_codes),
+                    "已关闭": list(closed_codes),
+                }
+                logger.info("动态加载状态码分组: %s", self._status_code_map)
+        except Exception as e:
+            logger.warning("动态加载状态码失败，使用兜底: %s", e)
+
     def _on_list_bugs(self):
+        self._refresh_status_codes()
         self._apply_filters_to_config()
         self.log_text.clear()
         self.status_label.setText("正在获取Bug列表...")
@@ -1264,6 +1342,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"共 {len(bugs)} 条Bug")
 
     def _on_dry_run(self):
+        self._refresh_status_codes()
         self._apply_filters_to_config()
         self.log_text.clear()
         self.status_label.setText("试运行中...")
@@ -1277,6 +1356,7 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _on_full_sync(self):
+        self._refresh_status_codes()
         self._apply_filters_to_config()
         reply = QMessageBox.question(
             self, "确认同步",

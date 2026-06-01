@@ -189,68 +189,78 @@ def normalize_zentao_filters(filters: dict) -> dict:
 
 
 def parse_zentao_url(url: str) -> dict:
-    """从禅道 Bug 页面 URL 中解析产品ID、项目ID、模块ID
+    """从禅道 Bug 页面 URL 中解析产品ID、项目ID、模块ID、分支ID
 
-    支持的 URL 格式：
+    支持的 URL 格式（大小写不敏感）：
       新版（PATH_INFO）：
-        bug-browse-{产品ID}-{分支}-{浏览方式}-{参数}.html
+        bug-browse-{产品ID}-{分支ID}-{浏览方式}-{参数}.html
+        bug-browse-{产品ID}-{分支ID}.html
         bug-browse-{产品ID}.html
+        bug-browse-{产品ID}--byModule-{模块ID}.html
         project-bug-{项目ID}.html
       旧版（查询参数）：
         ?m=bug&f=browse&productID=324
-        ?m=bug&f=browse&productID=324&branch=&browseType=byModule&param=122
+        ?m=bug&f=browse&productid=381
+        ?m=bug&f=browse&product=381
+        ?m=bug&f=browse&root=381&type=byModule&param=2091
         ?m=project&f=bug&projectID=5
 
-    返回: {"product_id": int|None, "project_id": int|None, "module_id": int|None, "base_url": str|None}
+    返回: {"product_id": int|None, "project_id": int|None, "module_id": int|None,
+            "branch_id": int|None, "base_url": str|None}
     """
-    result = {"product_id": None, "project_id": None, "module_id": None, "base_url": None}
+    result = {"product_id": None, "project_id": None, "module_id": None,
+              "branch_id": None, "base_url": None}
     if not url:
         return result
 
     # ── 新版 PATH_INFO 格式 ──
-    m = re.search(r'bug-browse-(\d+)', url)
+    m = re.search(r'bug-browse-(\d+)', url, re.IGNORECASE)
     if m:
         result["product_id"] = int(m.group(1))
 
-    m = re.search(r'project-bug-(\d+)', url)
+    m = re.search(r'project-bug-(\d+)', url, re.IGNORECASE)
     if m:
         result["project_id"] = int(m.group(1))
 
-    m = re.search(r'byModule-(\d+)', url)
+    # 模块ID：仅当有 byModule 前缀时解析
+    m = re.search(r'byModule-(\d+)', url, re.IGNORECASE)
     if m:
         result["module_id"] = int(m.group(1))
 
-    # ── 旧版查询参数格式 ──
-    m = re.search(r'[?&]productID=(\d+)', url)
+    # 分支ID：bug-browse-{产品ID}-{分支ID}(-...).html（第二个数字，非 byModule 前缀）
+    if not result["module_id"]:
+        m = re.search(r'bug-browse-\d+-(\d+)', url, re.IGNORECASE)
+        if m and m.group(1) != "0":
+            result["branch_id"] = int(m.group(1))
+
+    # ── 旧版查询参数格式（大小写不敏感）──
+    # 产品ID：productID / productid / product / root
+    m = re.search(r'[?&](?:productID|product|root)=(\d+)', url, re.IGNORECASE)
     if m:
         result["product_id"] = int(m.group(1))
 
-    m = re.search(r'[?&]projectID=(\d+)', url)
+    # 项目ID：projectID / projectid / project
+    m = re.search(r'[?&](?:projectID|project)=(\d+)', url, re.IGNORECASE)
     if m:
         result["project_id"] = int(m.group(1))
 
-    # 旧版模块：browseType=byModule&param={模块ID}
-    if re.search(r'[?&]browseType=byModule', url):
-        m = re.search(r'[?&]param=(\d+)', url)
+    # 模块ID：browseType=byModule 或 type=byModule &param={模块ID}
+    if re.search(r'[?&](?:browseType|type)=byModule', url, re.IGNORECASE):
+        m = re.search(r'[?&]param=(\d+)', url, re.IGNORECASE)
         if m:
             result["module_id"] = int(m.group(1))
 
     # ── 提取 base_url ──
-    # 新版: https://host/zentao/bug-browse-11.html → https://host/zentao
-    # 旧版: http://host:8088/index.php?m=bug&... → http://host:8088
     from urllib.parse import urlparse
     parsed = urlparse(url)
     if parsed.scheme and parsed.netloc:
-        # 去掉路径中的具体页面，保留到禅道根路径
         path = parsed.path
-        # 新版：/zentao/bug-browse-11.html → /zentao
-        m = re.match(r'(.+?)/(?:bug-browse|project-bug|index\.php)', path)
+        m = re.match(r'(.+?)/(?:bug-browse|project-bug|index\.php)', path, re.IGNORECASE)
         if m:
             base = f"{parsed.scheme}://{parsed.netloc}{m.group(1)}"
-        # 旧版：/index.php 或 /zentao/index.php
-        elif 'index.php' in path:
-            base_path = path.replace('/index.php', '')
-            base = f"{parsed.scheme}://{parsed.netloc}{base_path}"
+        elif 'index.php' in path.lower():
+            idx = path.lower().rfind('/index.php')
+            base = f"{parsed.scheme}://{parsed.netloc}{path[:idx]}"
         else:
             base = f"{parsed.scheme}://{parsed.netloc}"
         result["base_url"] = base.rstrip('/')

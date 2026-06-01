@@ -9,6 +9,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# ZentaoClient 单例缓存：base_url+account → client
+# 避免 GUI 多个入口（测试连接、列出Bug、试运行、正式导入）反复创建 client 触发重复认证
+_CLIENT_CACHE: dict = {}
+
 
 def create_source_client(config: dict):
     """根据配置创建源平台适配器实例。
@@ -25,12 +29,20 @@ def create_source_client(config: dict):
         from src.zentao_client import ZentaoClient
 
         zt_cfg = config.get("zentao", {})
-        client = ZentaoClient(
-            base_url=zt_cfg.get("base_url", ""),
-            account=zt_cfg.get("account", ""),
-            password=zt_cfg.get("password", ""),
-            api_delay=sync_cfg.get("api_delay", 0.5),
-        )
+        cache_key = (zt_cfg.get("base_url", ""), zt_cfg.get("account", ""), zt_cfg.get("password", ""))
+        client = _CLIENT_CACHE.get(cache_key)
+        if client is None:
+            client = ZentaoClient(
+                base_url=zt_cfg.get("base_url", ""),
+                account=zt_cfg.get("account", ""),
+                password=zt_cfg.get("password", ""),
+                api_delay=sync_cfg.get("api_delay", 0.5),
+            )
+            _CLIENT_CACHE[cache_key] = client
+        # 确保 branch_id 始终同步（即使是缓存的 client）
+        filters = zt_cfg.get("filters", {})
+        if "branch" in filters:
+            client.set_branch_id(int(filters["branch"]))
         return ZentaoAdapter(client)
 
     elif platform == "jira":

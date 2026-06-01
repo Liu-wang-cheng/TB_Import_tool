@@ -32,6 +32,8 @@ class ZentaoClient:
         self._token: Optional[str] = None
         self._session_id: Optional[str] = None
         self._session_logged_in = False
+        self._cloud_session_auth = False  # 禅道云版：用 session 代替 token 认证
+        self._branch_id = 0  # 分支ID，云版 URL 解析时设置，自建版忽略
         self._http = requests.Session()
         # 同一个 bug_id 在一次同步过程中多处需要详情（VLNS 检查、详细同步、评论），
         # 这里缓存原始 raw 数据避免重复 GET /api.php/v1/bugs/{id}。
@@ -41,12 +43,22 @@ class ZentaoClient:
         # 在同一会话内重复 GET /api.php/v1/products/{id}/modules
         self._product_modules_cache: dict = {}
         self._product_modules_cache_lock = threading.Lock()
+        # 云端浏览页数据缓存（含 modules），避免 get_bug_raw 已拉过一套数据又拉一次
+        self._cloud_browse_cache: dict = {}
+        self._cloud_browse_cache_lock = threading.Lock()
+        # 云版用户名映射：中文名 → 英文账号（从 browse JSON users 字段构建）
+        self._cloud_user_name_to_account: dict = {}
+        self._cloud_user_cache_lock = threading.Lock()
 
     # ── 认证 ──────────────────────────────────────────
 
     def close(self):
         if self._http:
             self._http.close()
+
+    def set_branch_id(self, branch_id: int):
+        """设置分支ID（云版 URL 解析时使用）"""
+        self._branch_id = branch_id
 
     def authenticate(self):
         """认证并获取 token（公共接口）"""
@@ -65,6 +77,11 @@ class ZentaoClient:
         data = resp.json()
         self._token = data.get("token")
         if not self._token:
+            # 禅道云版返回 {"errcode":401,"errmsg":"缺少code参数"}，不支持 token 认证
+            if "errcode" in data:
+                logger.info("检测到禅道云版，将使用 Session 认证代替 Token")
+                self._cloud_session_auth = True
+                return
             raise ZentaoAPIError(resp.status_code, "未获取到token", "/tokens")
         logger.info("禅道 REST API 认证成功")
 
@@ -102,22 +119,226 @@ class ZentaoClient:
         self._session_logged_in = True
         logger.info("禅道 Session 认证成功（用于文件下载）")
 
+    # ── 云版 JSON 端点 ─────────────────────────────────
+
+    def _cloud_json_get(self, path: str, params: dict = None) -> dict:
+        """调用禅道云版 Web JSON 端点，返回内层 data dict。
+
+        健壮性：服务器有时会在响应体中拼接多个 JSON（中间夹杂 user-deny 重定向），
+        此时用 brace-count 截取第一个完整 JSON 对象解析，避免 _cloud_browse_cache
+        被空 dict 污染后导致后续 fetch_bugs 拿到 0 条。
+        """
+        self._ensure_session()
+        url = f"{self.base_url}/{path}"
+        resp = self._http.get(url, params=params, timeout=30)
+        if resp.status_code >= 400:
+            raise ZentaoAPIError(resp.status_code, resp.text[:500], f"/{path}")
+        if not resp.text:
+            logger.error("云版响应为空: %s params=%s status=%s", path, params, resp.status_code)
+            return {}
+        time.sleep(self.api_delay)
+        # 截取第一个完整 JSON 对象（应对响应体拼接多个 JSON 的情况）
+        text = resp.text.strip()
+        if text.startswith("{") and "}{" in text:
+            # 用 brace 计数找第一个完整 JSON 对象的结束位置
+            depth = 0
+            for i, c in enumerate(text):
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        text = text[:i + 1]
+                        break
+        try:
+            data = json.loads(text)
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.error("云版JSON解析失败: %s, body前200字: %s", e, resp.text[:200])
+            return {}
+        inner = data.get("data", {})
+        if isinstance(inner, str):
+            inner = json.loads(inner)
+        return inner
+
+    def _cloud_get_browse(self, product_id: int, params: dict = None) -> dict:
+        """获取云版 Bug 浏览页 JSON 数据（含 bugs、modules、users 等），结果缓存
+
+        缓存键包含 pageID/recPerPage，避免分页请求命中第 1 页缓存导致重复数据。
+        users 和 modules 在各页之间共享，每次拉取时合并更新。
+        """
+        _params = params or {}
+        page = _params.get("pageID", 1)
+        per_page = _params.get("recPerPage", 50)
+        cache_key = f"{product_id}_{self._branch_id}_{page}_{per_page}"
+        with self._cloud_browse_cache_lock:
+            if cache_key in self._cloud_browse_cache:
+                return self._cloud_browse_cache[cache_key]
+        data = self._cloud_json_get(f"bug-browse-{product_id}-{self._branch_id}.json", params=params)
+        with self._cloud_browse_cache_lock:
+            self._cloud_browse_cache[cache_key] = data
+        # 同时更新用户名映射缓存和模块名映射
+        self._update_user_mapping(data)
+        ZentaoClient._register_cloud_modules(data.get("modules", {}))
+        return data
+
+    def _update_user_mapping(self, browse_data: dict):
+        """从云版浏览数据中提取用户名→中文名双向映射"""
+        users = browse_data.get("users", {})
+        if not users:
+            return
+        with self._cloud_user_cache_lock:
+            for account, realname in users.items():
+                if account and realname and realname != account:
+                    self._cloud_user_name_to_account[realname] = account
+
+    def _resolve_assigned_to_cloud(self, assigned_to: list) -> set:
+        """将 assigned_to 列表中的中文名自动转换为英文账号名（云版）"""
+        if not assigned_to or not self._cloud_session_auth:
+            return set(assigned_to) if assigned_to else set()
+        # 确保已加载用户映射（用任一已缓存的浏览数据，没有则尝试当前 branch_id）
+        if not self._cloud_user_name_to_account:
+            # 优先从已有缓存中提取用户
+            with self._cloud_browse_cache_lock:
+                for data in self._cloud_browse_cache.values():
+                    if data.get("users"):
+                        self._update_user_mapping(data)
+                        break
+        result = set()
+        for name in assigned_to:
+            result.add(name)
+            if "-" in name:
+                suffix = name.split("-", 1)[1]
+                result.add(suffix)
+                account = self._cloud_user_name_to_account.get(suffix)
+                if account:
+                    result.add(account)
+            else:
+                account = self._cloud_user_name_to_account.get(name)
+                if account:
+                    result.add(account)
+        return result
+
+    # ── 状态枚举 ──────────────────────────────────────
+
+    def fetch_status_groups(self) -> dict:
+        """动态获取当前禅道版本的开放/关闭状态码分组。
+
+        返回 {"open": [<code>, ...], "closed": [<code>, ...]}。
+        GUI 三个固定选项（激活/已关闭/激活+已关闭）按以下规则映射：
+        - "激活" = open 组
+        - "已关闭" = closed 组
+        - "激活+已关闭" = open + closed
+
+        - 自建版：从 /api.php/v1/bugStatuses 读取所有状态，按 name/code 归类
+        - 云版：扫描浏览页提取实际出现的 status，按 code 关键字归类
+        - 兜底：open=["active", "confirmed"]，closed=["resolved", "closed"]
+        """
+        if self._cloud_session_auth:
+            return self._fetch_status_groups_cloud()
+        return self._fetch_status_groups_self_hosted()
+
+    def _fetch_status_groups_self_hosted(self) -> dict:
+        """自建版：从 bugStatuses API 归类"""
+        fallback = {"open": ["active", "confirmed"], "closed": ["resolved", "closed"]}
+        try:
+            data = self._request("GET", "/api.php/v1/bugStatuses")
+            statuses = data.get("statuses", [])
+            if not statuses:
+                return fallback
+
+            open_codes = []
+            closed_codes = []
+            for s in statuses:
+                code = s.get("code", "")
+                name = s.get("name", "")
+                if not code:
+                    continue
+                # 归类规则：name/code 包含 "关闭/closed" → closed；"解决/resolved" → closed；
+                # 包含 "激活/active/确认/confirmed/打开/opened" → open
+                cn_lower = (name or "").lower()
+                if "关闭" in name or "closed" in cn_lower or "解决" in name or "resolved" in cn_lower:
+                    closed_codes.append(code)
+                elif "激活" in name or "active" in cn_lower or "确认" in name or "confirmed" in cn_lower or "打开" in name or "opened" in cn_lower:
+                    open_codes.append(code)
+                else:
+                    # 兜底：按 code 关键字
+                    if code in ("active", "confirmed", "opened"):
+                        open_codes.append(code)
+                    elif code in ("resolved", "closed"):
+                        closed_codes.append(code)
+
+            # 去重保序
+            seen = set()
+            open_codes = [c for c in open_codes if not (c in seen or seen.add(c))]
+            seen.clear()
+            closed_codes = [c for c in closed_codes if not (c in seen or seen.add(c))]
+
+            if not open_codes:
+                open_codes = fallback["open"]
+            if not closed_codes:
+                closed_codes = fallback["closed"]
+            return {"open": open_codes, "closed": closed_codes}
+        except Exception as e:
+            logger.debug("获取 bugStatuses 失败: %s", e)
+            return fallback
+
+    def _fetch_status_groups_cloud(self) -> dict:
+        """云版：扫描浏览页，提取实际出现的 status"""
+        fallback = {"open": ["active", "confirmed"], "closed": ["resolved", "closed"]}
+
+        # 仅从已有缓存的浏览数据中提取 status，不主动请求新接口
+        # （避免连接产品 0 触发权限错误、也避免不必要的网络请求）
+        seen = set()
+        with self._cloud_browse_cache_lock:
+            for data in self._cloud_browse_cache.values():
+                for b in data.get("bugs", []):
+                    st = b.get("status", "")
+                    if st:
+                        seen.add(st)
+
+        if not seen:
+            logger.debug("云版浏览页缓存为空，使用兜底状态码分组")
+            return fallback
+
+        # 按 code 关键字归类
+        open_codes = []
+        closed_codes = []
+        for st in sorted(seen):
+            if st in ("active", "confirmed", "opened", "unclosed"):
+                open_codes.append(st)
+            elif st in ("resolved", "closed"):
+                closed_codes.append(st)
+
+        if not open_codes:
+            open_codes = fallback["open"]
+        if not closed_codes:
+            closed_codes = fallback["closed"]
+        return {"open": open_codes, "closed": closed_codes}
+
     # ── 通用请求 ──────────────────────────────────────
 
     def _request(self, method: str, path: str,
                  retry_on_401: bool = True, **kwargs) -> dict:
-        self._ensure_token()
+        if self._cloud_session_auth:
+            self._ensure_session()
+            headers = {}
+        else:
+            self._ensure_token()
+            headers = {"Token": self._token}
         url = f"{self.base_url}{path}"
-        headers = {"Token": self._token}
 
         for attempt in range(3):
             try:
                 resp = self._http.request(method, url, headers=headers,
                                           timeout=30, **kwargs)
                 if resp.status_code == 401 and retry_on_401:
-                    self._token = None
-                    self._ensure_token()
-                    headers["Token"] = self._token
+                    if self._cloud_session_auth:
+                        self._session_logged_in = False
+                        self._ensure_session()
+                    else:
+                        self._token = None
+                        self._ensure_token()
+                        headers["Token"] = self._token
                     continue
                 if resp.status_code >= 400:
                     raise ZentaoAPIError(resp.status_code, resp.text[:500], path)
@@ -146,12 +367,18 @@ class ZentaoClient:
                    date_to: Optional[str] = None,
                    assigned_to: Optional[List[str]] = None,
                    page: int = 1, limit: int = 50) -> Tuple[List[ZentaoBug], int]:
+        if not product_id and not project_id:
+            raise ValueError("必须指定 product_id 或 project_id")
+
+        if self._cloud_session_auth:
+            return self._fetch_bugs_cloud(product_id, project_id, statuses,
+                                          date_from, date_to, assigned_to,
+                                          page, limit)
+
         if product_id:
             path = f"/api.php/v1/products/{product_id}/bugs"
-        elif project_id:
-            path = f"/api.php/v1/projects/{project_id}/bugs"
         else:
-            raise ValueError("必须指定 product_id 或 project_id")
+            path = f"/api.php/v1/projects/{project_id}/bugs"
 
         params = {"page": page, "limit": limit}
         data = self._request("GET", path, params=params)
@@ -159,41 +386,87 @@ class ZentaoClient:
         bugs_data = data.get("bugs", [])
         total = data.get("total", 0)
 
-        # 解析 assigned_to: 统一为列表，"me" 替换为当前账号
-        resolved_assignees = set()
-        if assigned_to:
-            if isinstance(assigned_to, str):
-                assigned_to = [assigned_to]
-            for a in assigned_to:
-                if str(a).lower() == "me":
-                    resolved_assignees.add(self.account)
-                else:
-                    resolved_assignees.add(a)
-
         bugs = []
-        skipped_assignee = 0
         for b in bugs_data:
             bug = self._parse_bug(b)
-            # 客户端筛选（注意：批量API不返回 moduleName，module_filter 在获取详情后处理）
-            if statuses and bug.status not in statuses:
-                continue
-            if date_from and str(date_from) > bug.openedDate[:10]:
-                continue
-            if date_to and str(date_to) < bug.openedDate[:10]:
-                continue
-            if resolved_assignees and bug.assignedToAccount not in resolved_assignees \
-                    and bug.assignedTo not in resolved_assignees:
-                skipped_assignee += 1
-                logger.debug("[过滤-指派人不匹配] Bug#%d assignedTo='%s' account='%s' 期望∈%s",
-                             bug.id, bug.assignedTo, bug.assignedToAccount, resolved_assignees)
+            if not self._passes_filters(bug, statuses, date_from, date_to, assigned_to):
                 continue
             bugs.append(bug)
 
-        if resolved_assignees and skipped_assignee:
-            logger.info("第 %d 页：%d/%d 条因指派人不匹配被过滤",
-                        page, skipped_assignee, len(bugs_data))
+        return bugs, total
+
+    def _fetch_bugs_cloud(self, product_id, project_id, statuses,
+                          date_from, date_to, assigned_to, page, limit):
+        """云版：通过 Web JSON 端点拉取 Bug 列表"""
+        if not product_id:
+            raise ValueError("云版必须指定 product_id，不支持按项目ID查询")
+        data = self._cloud_get_browse(
+            product_id,
+            params={"recPerPage": limit, "pageID": page})
+        bugs_data = data.get("bugs", [])
+        pager = data.get("pager", {})
+        total = pager.get("recTotal", len(bugs_data))
+
+        # 浏览页数据已加载（含 users），现在可以解析中文名→英文账号
+        if assigned_to and self._cloud_session_auth:
+            resolved = self._resolve_assigned_to_cloud(assigned_to)
+        else:
+            resolved = set(assigned_to) if assigned_to else set()
+
+        # 云版浏览页的 users 字典：英文账号 → 中文实名
+        users_map = data.get("users", {})
+
+        bugs = []
+        for b in bugs_data:
+            bug = self._parse_bug(b)
+            # 用 users 映射将 assignedTo/openedBy 从英文账号替换为中文实名，
+            # 确保后续 sync_engine._map_assignee 能匹配 TB 成员
+            if users_map:
+                if bug.assignedToAccount and bug.assignedToAccount in users_map:
+                    bug.assignedTo = users_map[bug.assignedToAccount]
+                if bug.openedBy and bug.openedBy in users_map:
+                    bug.openedBy = users_map[bug.openedBy]
+            if not self._passes_filters_with_assignees(
+                    bug, statuses, date_from, date_to, resolved):
+                continue
+            bugs.append(bug)
 
         return bugs, total
+
+    def _passes_filters(self, bug, statuses, date_from, date_to, assigned_to):
+        """客户端筛选，自建版和云版共享"""
+        if self._cloud_session_auth:
+            return self._passes_filters_with_assignees(
+                bug, statuses, date_from, date_to,
+                set(assigned_to) if assigned_to else set())
+        return self._passes_filters_with_assignees(
+            bug, statuses, date_from, date_to, None,
+            raw_assigned_to=assigned_to)
+
+    def _passes_filters_with_assignees(self, bug, statuses, date_from, date_to,
+                                        resolved_assignees, raw_assigned_to=None):
+        """客户端筛选，自建版和云版共享"""
+        if raw_assigned_to is not None and not self._cloud_session_auth:
+            # 自建版路径：现在才把 assigned_to 转 resolved
+            resolved_assignees = set()
+            if raw_assigned_to:
+                if isinstance(raw_assigned_to, str):
+                    raw_assigned_to = [raw_assigned_to]
+                for a in raw_assigned_to:
+                    resolved_assignees.add(
+                        self.account if str(a).lower() == "me" else a)
+
+        if statuses and bug.status not in statuses:
+            return False
+        if date_from and str(date_from) > bug.openedDate[:10]:
+            return False
+        if date_to and str(date_to) < bug.openedDate[:10]:
+            return False
+        if resolved_assignees:
+            if bug.assignedToAccount not in resolved_assignees \
+                    and bug.assignedTo not in resolved_assignees:
+                return False
+        return True
 
     def _get_bug_raw(self, bug_id: int, retry_on_401: bool = True) -> Optional[dict]:
         """获取 Bug 的原始 JSON 数据并缓存，避免一次同步内重复 GET。"""
@@ -201,6 +474,38 @@ class ZentaoClient:
             cached = self._bug_raw_cache.get(bug_id)
             if cached is not None:
                 return cached
+
+        if self._cloud_session_auth:
+            data = self._cloud_json_get(f"bug-view-{bug_id}.json")
+            bug_data = data.get("bug", data)
+            # 云版 actions 是 dict，转为 list 以兼容自建版格式
+            actions = data.get("actions", {})
+            if isinstance(actions, dict):
+                bug_data["actions"] = list(actions.values())
+            elif isinstance(actions, list):
+                bug_data["actions"] = actions
+            # 注入 users map 供解析 assignedTo 等
+            users_map = data.get("users", {})
+            bug_data["_users"] = users_map
+            # 将 assignedTo 从英文账号转为 {account, realname} 格式，
+            # 确保 _parse_bug 输出的 assignedTo 为中文实名
+            if users_map:
+                raw_assigned = bug_data.get("assignedTo", "")
+                if isinstance(raw_assigned, str) and raw_assigned in users_map:
+                    bug_data["assignedTo"] = {
+                        "account": raw_assigned,
+                        "realname": users_map[raw_assigned],
+                    }
+                raw_opened = bug_data.get("openedBy", "")
+                if isinstance(raw_opened, str) and raw_opened in users_map:
+                    bug_data["openedBy"] = {
+                        "account": raw_opened,
+                        "realname": users_map[raw_opened],
+                    }
+            with self._bug_raw_cache_lock:
+                self._bug_raw_cache[bug_id] = bug_data
+            return bug_data
+
         path = f"/api.php/v1/bugs/{bug_id}"
         data = self._request("GET", path, retry_on_401=retry_on_401)
         bug_data = data.get("bug", data)
@@ -259,6 +564,9 @@ class ZentaoClient:
             return []
 
     def update_bug_title(self, bug_id: int, new_title: str):
+        if self._cloud_session_auth:
+            logger.warning("云版暂不支持修改 Bug 标题，请手动操作 (Bug#%d)", bug_id)
+            return
         path = f"/api.php/v1/bugs/{bug_id}"
         self._request("PUT", path, json={"title": new_title})
         logger.info("禅道 Bug#%d 标题已更新: %s", bug_id, new_title)
@@ -287,6 +595,13 @@ class ZentaoClient:
         initial_ids = {str(m.get("id")) for m in modules if m.get("id")}
         seen_ids = set(initial_ids)
         expanded = list(modules)
+
+        # 云版：扁平模块结构（无 parent），不需要 BFS 探测子模块
+        if self._cloud_session_auth:
+            logger.debug("云版模块为扁平结构，跳过BFS探测")
+            with self._product_modules_cache_lock:
+                self._product_modules_cache[product_id] = expanded
+            return expanded
 
         # 探测：API 是否支持按 module_id 查询子树（避免无谓的 N 次 BFS）
         probe_mid = next(iter(initial_ids), None)
@@ -347,6 +662,17 @@ class ZentaoClient:
     def _fetch_modules_endpoint(self, id_param: int,
                                 type_: str = "bug") -> List[dict]:
         """单次模块 API 调用，依次尝试多种端点格式。"""
+        # 云版：从浏览页 JSON 的 modules 字段获取
+        if self._cloud_session_auth:
+            try:
+                data = self._cloud_get_browse(id_param)
+                modules_dict = data.get("modules", {})
+                if modules_dict:
+                    return [{"id": k, "name": v, "parent": "0"}
+                            for k, v in modules_dict.items() if k != "0"]
+            except Exception as e:
+                logger.debug("云版获取模块失败: %s", e)
+            return []
         attempts = [
             ("/api.php/v1/modules",
              {"id": id_param, "type": type_, "limit": 200}),
@@ -423,11 +749,16 @@ class ZentaoClient:
                 pm in id_map for pm in parent_map.values()
             )
             if matched and not has_hierarchy:
-                logger.warning(
-                    "模块API仅返回 %d 个根级模块、无父子层级，匹配 '%s' 的 "
-                    "%d 个根模块下的子模块可能漏掉，回退到逐条比对 moduleName",
-                    len(modules), name, len(matched))
-                return None
+                # 云版：扁平模块结构（无 parent），名称匹配即可，不用回退
+                if self._cloud_session_auth:
+                    logger.info("云版模块为扁平结构，按ID集合直接匹配 %d 个: %s",
+                                len(matched), ",".join(sorted(matched))[:100])
+                else:
+                    logger.warning(
+                        "模块API仅返回 %d 个根级模块、无父子层级，匹配 '%s' 的 "
+                        "%d 个根模块下的子模块可能漏掉，回退到逐条比对 moduleName",
+                        len(modules), name, len(matched))
+                    return None
 
             if matched:
                 logger.info("模块名称 '%s' 解析为 %d 个ID: %s",
@@ -634,6 +965,13 @@ class ZentaoClient:
         sn_text = data.get("steps", "") + " " + data.get("title", "") + " " + file_names
         sn_code = ZentaoClient._extract_sn(sn_text)
 
+        # 模块名：自建版直接读 moduleTitle/moduleName；云版只有 module id，
+        # 需要从浏览页缓存的 modules 字段（id→name）反查
+        module_id = str(data.get("module", ""))
+        module_name = data.get("moduleTitle", "") or data.get("moduleName", "")
+        if not module_name and module_id and module_id != "0":
+            module_name = ZentaoClient._lookup_cloud_module_name(module_id)
+
         return ZentaoBug(
             id=int(data.get("id") or 0),
             title=data.get("title", ""),
@@ -651,12 +989,33 @@ class ZentaoClient:
             productName=data.get("productName", ""),
             project=str(data.get("project", "")),
             projectName=data.get("projectName", ""),
-            module=str(data.get("module", "")),
-            moduleName=data.get("moduleTitle", "") or data.get("moduleName", ""),
+            module=module_id,
+            moduleName=module_name,
             openedBuild=build_info,
             snCode=sn_code,
             files=ZentaoClient._normalize_files(data.get("files", [])),
         )
+
+    # 全局缓存：云版模块名查询
+    _cloud_module_id_to_name: dict = {}
+    _cloud_module_id_to_name_lock = threading.Lock()
+
+    @staticmethod
+    def _lookup_cloud_module_name(module_id: str) -> str:
+        """从最近一次云版浏览页缓存中查询模块名"""
+        # 浏览页缓存是按 product_id 索引的，module_id 是全局唯一的
+        with ZentaoClient._cloud_module_id_to_name_lock:
+            return ZentaoClient._cloud_module_id_to_name.get(module_id, "")
+
+    @classmethod
+    def _register_cloud_modules(cls, modules_dict: dict):
+        """注册云版浏览页中的 modules 映射（id→name）"""
+        if not modules_dict:
+            return
+        with cls._cloud_module_id_to_name_lock:
+            for mid, mname in modules_dict.items():
+                if mid and mname:
+                    cls._cloud_module_id_to_name[str(mid)] = str(mname)
 
     @staticmethod
     def _extract_sn(text: str) -> str:
