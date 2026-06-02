@@ -43,12 +43,20 @@ def _extract_sn_from_task(task: "TeambitionTask") -> Optional[str]:
         val = cf.get("value", "")
         if isinstance(val, list):
             val = ", ".join(v.get("title", str(v)) for v in val)
-        if val and len(str(val)) >= 20 and str(val).startswith("HQ"):
-            return str(val).strip()
+        if not val:
+            continue
+        s = str(val).strip()
+        # HQ 格式（如 HQ5S00700002HC261300069）
+        if len(s) >= 10 and (s.upper().startswith("HQ") or s[0].isdigit()):
+            return s
     # 尝试从标题中提取
-    m = re.search(r"HQ\S{20,}", task.content)
+    m = re.search(r"HQ\S{10,}", task.content)
     if m:
         return m.group(0)
+    # 尝试提取非 HQ 格式 SN（如 48HCNFBN0049X）
+    m = re.search(r"\b([0-9]{2,}[A-Z]{2,}[0-9A-Z]{4,})\b", task.content, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
     return None
 
 

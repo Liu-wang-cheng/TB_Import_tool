@@ -1234,6 +1234,7 @@ class ZentaoClient:
         匹配优先级：
         1. SN/SN码/设备SN 后跟冒号或空格
         2. HQ 开头 + 数字/字母（扫地机设备 SN 格式）
+        3. 文件名中的 SN 模式（如 48HCNFBN0049X-2026-...）
         找不到时返回 '/'。
         """
         if not text:
@@ -1245,6 +1246,12 @@ class ZentaoClient:
             return match.group(1)
         # 2. 匹配 HQ 开头的设备 SN（如 HQ5S00700002HC261300069）
         match = re.search(r'\b(HQ[0-9A-Z]{10,})\b', text, re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
+        # 3. 文件名中的 SN：数字开头+字母混合，后跟日期（如 48HCNFBN0049X-2026-...）
+        match = re.search(
+            r'\b([0-9]{2,}[A-Z]{3,}[0-9A-Z]{4,})[-_]\d{4}[-_]\d{2}',
+            text, re.IGNORECASE)
         if match:
             return match.group(1).upper()
         return "/"
