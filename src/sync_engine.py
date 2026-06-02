@@ -687,12 +687,11 @@ class SyncEngine:
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
                                   existing.taskId, "已存在")
 
-            # 检查禅道备注/历史记录中是否含 VLNS 或 CPAX（代价较高的回退检查）
+            # 检查禅道备注/历史记录中是否含 VLNS 或 CPAX
+            # 仅当 TB 仍存在对应任务时才跳过（避免 TB 任务已删除后无法重新导入）
             if self.source.check_bug_has_vlns(bug.id):
-                logger.info("[跳过-已导入] Bug#%d 备注中含 VLNS/CPAX 标记",
-                            bug.id)
-                return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
-                                  "", "备注含VLNS/CPAX，已导入过")
+                logger.warning("[提醒] Bug#%d 备注中含 VLNS/CPAX 历史标记，"
+                             "但 TB 未找到对应任务，将继续导入", bug.id)
 
             # 获取完整详情
             full_bug = self.source.fetch_bug_detail(bug.id)

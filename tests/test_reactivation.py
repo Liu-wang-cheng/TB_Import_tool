@@ -539,16 +539,31 @@ class TestVLNSBranchReactivation:
         assert result.action == SyncAction.SKIPPED_DEDUP
         engine.teambition.update_task_status.assert_not_called()
 
-    def test_vlns_title_bug_no_existing_task_skips(self):
-        """VLNS 跳过分支：标题含 VLNS 但 TB 找不到任务 → 仍跳过"""
+    def test_vlns_title_bug_no_existing_task_allows_reimport(self):
+        """VLNS 历史标记 + TB 任务已删除 → 允许重新导入"""
         engine = _make_engine()
         engine._closed_status_ids = {"closed_001"}
         engine._find_existing_task = MagicMock(return_value=None)
+        engine.source = MagicMock()
+        engine.source.check_bug_has_vlns = MagicMock(return_value=True)
+        engine.source.fetch_bug_detail = MagicMock(return_value=_make_bug())
+        engine._build_teambition_title = MagicMock(return_value="title")
+        engine._build_note = MagicMock(return_value="note")
+        engine._map_severity = MagicMock(return_value="A")
+        engine._map_assignee = MagicMock(return_value=None)
+        engine._build_customfields = MagicMock(return_value=[])
+        engine._create_teambition_task = MagicMock(
+            return_value=("task_001", "TB-001"))
+        engine.teambition = MagicMock()
+        engine.teambition.taskflow_map = {}
+        engine.classifier = None
+        engine._map_type_to_category = MagicMock(return_value="IOT-其他问题")
+        engine._sync_attachments_to_task = MagicMock(return_value="")
 
+        # dry_run → 应允许创建（不再因 VLNS 备注标记跳过）
         bug = _make_bug(status="active", title="【VLNS-12345】测试Bug")
-        result = engine._sync_single_bug(bug, dry_run=False)
-
-        assert result.action == SyncAction.SKIPPED_DEDUP
+        result = engine._sync_single_bug(bug, dry_run=True)
+        assert result.action == SyncAction.CREATED
 
 
 # ══════════════════════════════════════════════════════════
