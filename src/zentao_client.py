@@ -83,14 +83,43 @@ class ZentaoClient:
         if resp.status_code not in (200, 201):
             raise ZentaoAPIError(resp.status_code, resp.text, "/tokens")
         data = resp.json()
+
+        # 检测各种认证失败的响应格式
+        if isinstance(data, dict):
+            status = data.get("status", "")
+            result = data.get("result", "")
+            if status and str(status).lower() in ("fail", "failed"):
+                reason = data.get("message", data.get("reason", str(data)))
+                raise ZentaoAPIError(resp.status_code, f"认证失败: {reason}", "/tokens")
+            if result and str(result).lower() in ("fail", "failed"):
+                reason = data.get("message", data.get("reason", str(data)))
+                raise ZentaoAPIError(resp.status_code, f"认证失败: {reason}", "/tokens")
+
         self._token = data.get("token")
         if not self._token:
             # 禅道云版返回 {"errcode":401,"errmsg":"缺少code参数"}，不支持 token 认证
-            if "errcode" in data:
+            if isinstance(data, dict) and "errcode" in data:
                 logger.info("检测到禅道云版，将使用 Session 认证代替 Token")
                 self._cloud_session_auth = True
                 return
             raise ZentaoAPIError(resp.status_code, "未获取到token", "/tokens")
+
+        # 验证 token 是否有效（部分禅道版本对错误凭证也返回 token）
+        try:
+            verify_url = f"{self.base_url}/api.php/v1/user"
+            verify_resp = self._http.get(verify_url, headers={"Token": self._token},
+                                         timeout=10)
+            if verify_resp.status_code == 403:
+                self._token = None
+                raise ZentaoAPIError(403, "认证失败：账号或密码错误", "/user")
+            if verify_resp.status_code >= 400:
+                self._token = None
+                raise ZentaoAPIError(verify_resp.status_code,
+                                    f"认证失败: {verify_resp.text[:200]}", "/user")
+        except ZentaoAPIError:
+            raise
+        except Exception:
+            logger.debug("token验证请求异常（忽略，后续请求会重试）", exc_info=True)
         logger.info("禅道 REST API 认证成功")
 
     def _ensure_session(self):
@@ -124,22 +153,36 @@ class ZentaoClient:
         }, headers={"Content-Type": "application/x-www-form-urlencoded"})
         if resp.status_code != 200:
             raise ZentaoAPIError(resp.status_code, "session登录失败", "/user-login")
-        # 云版登录失败时可能仍返回 HTTP 200，需检查响应体中的实际登录结果
+
+        # 云版登录失败时可能仍返回 HTTP 200，需检查响应体
         login_data = resp.json()
         if isinstance(login_data, dict):
+            fail_reason = (
+                login_data.get("message")
+                or login_data.get("reason")
+                or login_data.get("errmsg")
+                or login_data.get("error")
+                or ""
+            )
+            # 检查 result 字段
             result = login_data.get("result")
-            if result and str(result).lower() in ("fail", "failed"):
-                reason = login_data.get("message", login_data.get("reason", str(login_data)))
-                raise ZentaoAPIError(resp.status_code, f"登录失败: {reason}", "/user-login")
-            # 某些版本用 status 字段
+            if result is not None and str(result).lower() in ("fail", "failed"):
+                raise ZentaoAPIError(resp.status_code,
+                                    f"登录失败: {fail_reason or str(login_data)}", "/user-login")
+            # 检查 status 字段
             status = login_data.get("status")
-            if status and str(status).lower() in ("fail", "failed"):
-                reason = login_data.get("message", login_data.get("reason", str(login_data)))
-                raise ZentaoAPIError(resp.status_code, f"登录失败: {reason}", "/user-login")
+            if status is not None and str(status).lower() in ("fail", "failed"):
+                raise ZentaoAPIError(resp.status_code,
+                                    f"登录失败: {fail_reason or str(login_data)}", "/user-login")
             # 云版 errcode（如 {"errcode":401,"errmsg":"密码错误"}）
             if "errcode" in login_data and login_data["errcode"] != 0:
-                errmsg = login_data.get("errmsg", "未知错误")
-                raise ZentaoAPIError(resp.status_code, f"登录失败: [{login_data['errcode']}] {errmsg}", "/user-login")
+                raise ZentaoAPIError(resp.status_code,
+                                    f"登录失败: [{login_data['errcode']}] {fail_reason or str(login_data)}",
+                                    "/user-login")
+            # result 为 null 但有错误消息（如 {"result":null,"message":"密码错误"}）
+            if result is None and fail_reason:
+                raise ZentaoAPIError(resp.status_code,
+                                    f"登录失败: {fail_reason}", "/user-login")
         self._session_logged_in = True
         logger.info("禅道 Session 认证成功（用于文件下载）")
 
@@ -219,9 +262,7 @@ class ZentaoClient:
         """将 assigned_to 列表中的中文名自动转换为英文账号名（云版）"""
         if not assigned_to or not self._cloud_session_auth:
             return set(assigned_to) if assigned_to else set()
-        # 确保已加载用户映射（用任一已缓存的浏览数据，没有则尝试当前 branch_id）
         if not self._cloud_user_name_to_account:
-            # 优先从已有缓存中提取用户
             with self._cloud_browse_cache_lock:
                 for data in self._cloud_browse_cache.values():
                     if data.get("users"):
@@ -240,6 +281,13 @@ class ZentaoClient:
                 account = self._cloud_user_name_to_account.get(name)
                 if account:
                     result.add(account)
+                else:
+                    # 纯名字找不到时，搜索带部门前缀的映射（如 "邓建和" → "部门-邓建和"）
+                    for realname, acct in self._cloud_user_name_to_account.items():
+                        if "-" in realname and realname.endswith("-" + name):
+                            result.add(acct)
+                            result.add(realname)
+                            break
         return result
 
     # ── 状态枚举 ──────────────────────────────────────
@@ -487,8 +535,15 @@ class ZentaoClient:
         if date_to and str(date_to) < bug.openedDate[:10]:
             return False
         if resolved_assignees:
-            if bug.assignedToAccount not in resolved_assignees \
-                    and bug.assignedTo not in resolved_assignees:
+            if bug.assignedToAccount in resolved_assignees \
+                    or bug.assignedTo in resolved_assignees:
+                pass
+            elif "-" in (bug.assignedTo or ""):
+                # 部门前缀后缀匹配：如筛选 "邓建和" 匹配 Bug 经办人 "部门-邓建和"
+                suffix = bug.assignedTo.split("-", 1)[1]
+                if suffix not in resolved_assignees:
+                    return False
+            else:
                 return False
         return True
 

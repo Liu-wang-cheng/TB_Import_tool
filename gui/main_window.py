@@ -1,5 +1,6 @@
 """主窗口：筛选面板、操作按钮、日志区、进度条、状态栏"""
 
+import datetime
 import logging
 import os
 import sys
@@ -807,12 +808,24 @@ class MainWindow(QMainWindow):
             self.filter_status.setCurrentIndex(0)
 
             # 加载指派人列表
-            assigned_checked = filters.get("assigned_to", []) or []
-            if isinstance(assigned_checked, str):
-                assigned_checked = [assigned_checked]
-            assigned_known = filters.get("assigned_to_known") or assigned_checked
-            if isinstance(assigned_known, str):
-                assigned_known = [assigned_known]
+            def _valid_assignee(name):
+                return (name and isinstance(name, str)
+                        and name.strip() and not name.startswith("null-")
+                        and name != "null")
+
+            def _to_filtered_list(raw, fallback):
+                if raw is None:
+                    raw = fallback
+                if isinstance(raw, str):
+                    raw = [raw]
+                if not isinstance(raw, list):
+                    return []
+                return [n for n in raw if _valid_assignee(n)]
+
+            assigned_checked = _to_filtered_list(
+                filters.get("assigned_to"), [])
+            assigned_known = _to_filtered_list(
+                filters.get("assigned_to_known"), assigned_checked)
             merged = list(assigned_known)
             for name in assigned_checked:
                 if name not in merged:
@@ -828,6 +841,27 @@ class MainWindow(QMainWindow):
                 self.filter_assigned.addItem(item)
             self.filter_assigned.blockSignals(False)
             self._update_toggle_btn_text()
+
+            # 恢复日期筛选状态
+            date_from = filters.get("date_from")
+            date_to = filters.get("date_to")
+            has_date = bool(date_from or date_to)
+            self.filter_date_mode.blockSignals(True)
+            self.filter_date_mode.setCurrentIndex(1 if has_date else 0)
+            self.filter_date_mode.blockSignals(False)
+            if has_date:
+                for attr, val in [("date_from", date_from), ("date_to", date_to)]:
+                    if val is None:
+                        continue
+                    if isinstance(val, datetime.date):
+                        qd = QDate(val.year, val.month, val.day)
+                    elif isinstance(val, str):
+                        qd = QDate.fromString(val, "yyyy-MM-dd")
+                    else:
+                        continue
+                    if qd.isValid():
+                        getattr(self, f"filter_{attr}").setDate(qd)
+            self._on_date_mode_changed(1 if has_date else 0)
         else:
             jira_cfg = self.config.get("jira", {})
             self.edit_zentao_base_url.setText(jira_cfg.get("base_url", ""))
@@ -902,10 +936,13 @@ class MainWindow(QMainWindow):
             checked_assigned = []
             all_assigned = []
             for i in range(self.filter_assigned.count()):
-                item = self.filter_assigned.item(i)
-                all_assigned.append(item.text())
-                if item.checkState() == Qt.Checked:
-                    checked_assigned.append(item.text())
+                text = self.filter_assigned.item(i).text()
+                # 过滤无效条目（None序列化残留、空字符串、null- 前缀等）
+                if not text or text == "null" or text.startswith("null-"):
+                    continue
+                all_assigned.append(text)
+                if self.filter_assigned.item(i).checkState() == Qt.Checked:
+                    checked_assigned.append(text)
             filters["assigned_to"] = checked_assigned if checked_assigned else None
             # 完整列表（含未勾选项），用于 resolve_assigned_to 做后缀歧义检测
             filters["assigned_to_known"] = all_assigned if all_assigned else None
@@ -1116,9 +1153,13 @@ class MainWindow(QMainWindow):
                   self.edit_tb_creator_id, self.edit_tb_belong_project]:
             w.setEnabled(enabled)
         # 同步/AI 开关
-        for chk in [self.chk_reopen, self.chk_ai_analysis, self.chk_fault_pattern,
-                     self.chk_specialized_prompt, self.chk_knowledge_base]:
+        for chk in [self.chk_reopen, self.chk_ai_analysis]:
             chk.setEnabled(enabled)
+        # AI 子开关：仅当 AI 总开关开启时才可启用
+        ai_on = self.chk_ai_analysis.isChecked()
+        for chk in [self.chk_fault_pattern, self.chk_specialized_prompt,
+                     self.chk_knowledge_base]:
+            chk.setEnabled(enabled and ai_on)
 
     def _start_worker(self, worker):
         # 防止并发：已有任务运行中时拒绝新任务

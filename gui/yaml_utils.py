@@ -2,6 +2,9 @@
 
 import re
 
+# 日期格式字符串（会被 PyYAML 误解析为 datetime.date，必须加引号保护）
+_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
 
 def update_yaml_values(file_path: str, updates: dict):
     """更新 YAML 文件中指定 key 的值，保留注释和文件格式
@@ -158,6 +161,9 @@ def _strip_trailing_list_items(lines: list, key_line: int, indent: str):
 def _replace_list_value(lines: list, key_line: int, indent: str,
                         key: str, values: list) -> list:
     """替换列表类型的值，保留 key 行，替换其下的 - item 行"""
+    # 重写 key 行为纯 key:（清除旧的标量值如 null/None 残留）
+    lines[key_line] = f"{indent}{key}:\n"
+
     # 找到列表项的结束位置
     item_indent = indent + "  "
     end = key_line + 1
@@ -185,9 +191,12 @@ def _format_value(value) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    # 字符串：含特殊字符时加引号
+    # 字符串：含特殊字符或日期格式时加引号
     s = str(value)
     if not s or s in ("null", "true", "false", "yes", "no"):
+        return f'"{s}"'
+    # 日期格式字符串必须加引号，否则 PyYAML 会解析为 datetime.date
+    if _DATE_RE.match(s):
         return f'"{s}"'
     if any(c in s for c in ':#{}[]&*!|>\'"%@`'):
         return f'"{s}"'
