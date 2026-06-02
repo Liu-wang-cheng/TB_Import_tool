@@ -1,8 +1,8 @@
 {
   "version": "1.8",
-  "sha256": "dc3c87b63c07cdf6a727df4d2e2d3bd8ea8c0226737ce74adab502ee3cbf866c",
+  "sha256": "80b481f1d72acd81d4c5a1a5a50939a94ee73d76b161066041455f909fdb9879",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.8/SmartDefectPlatform.zip",
   "release_date": "2026-06-02",
-  "release_notes": "v1.8: 修复配置持久化(YAML null写入)、云版认证静默失败、CPAX去重检测、日期筛选GUI恢复、指派人null-前缀(yaml_utils标量→列表不清除旧值)、云版纯名字指派人过滤、AI子开关置灰、日期字符串PyYAML误解析datetime.date等20+项问题",
+  "release_notes": "v1.8: 修复YAML标量→列表null残留、PyYAML日期误解析、日期筛选GUI恢复、云版&自建版认证错误凭证静默通过、AI子开关置灰、云版纯名字指派人过滤、CPAX去重等20+项问题",
   "min_version": "1.0"
 }
