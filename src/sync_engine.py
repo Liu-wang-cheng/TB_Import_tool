@@ -926,22 +926,16 @@ class SyncEngine:
         if active:
             return active[0]
 
-        # Tier 1.5: VLNS/CPAX 编号精确搜索
+        # Tier 1.5: VLNS/CPAX 编号精确匹配（按 taskIdentifier 直接查 TB）
         vlns_numbers = self.source.extract_vlns_numbers(bug.id)
         for num in vlns_numbers:
-            results = self.teambition.search_tasks(
-                f"VLNS-{num}") or []
-            results += self.teambition.search_tasks(
-                f"CPAX-{num}") or []
-            for task in results:
-                if getattr(task, 'isArchived', False):
-                    continue
-                if not self._match_project(task, self.project_name):
-                    continue
-                if task.taskIdentifier == f"VLNS-{num}" or \
-                   task.taskIdentifier == f"CPAX-{num}":
-                    logger.info("VLNS/CPAX 编号精确匹配: %s → TB %s",
-                                num, task.taskId[:16])
+            for prefix in ("VLNS", "CPAX"):
+                identifier = f"{prefix}-{num}"
+                task = self.teambition.get_task_by_identifier(identifier)
+                if task and not getattr(task, 'isArchived', False) \
+                        and self._match_project(task, self.project_name):
+                    logger.info("VLNS/CPAX 精确匹配: %s → TB %s",
+                                identifier, task.taskId[:16])
                     return task
 
         # Tier 2: 标题模糊匹配

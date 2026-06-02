@@ -245,6 +245,20 @@ class TeambitionClient:
             return self._parse_task(result)
         return None
 
+    def get_task_by_identifier(self, identifier: str) -> Optional[TeambitionTask]:
+        """按任务显示 ID（如 VLNS-66259）查找任务"""
+        pid = self.project_id
+        data = self._request(
+            "GET", f"/v3/project/{pid}/task/query",
+            params={"uniqueId": identifier, "pageSize": 1},
+        )
+        result = data.get("result", [])
+        if isinstance(result, list) and result:
+            return self._parse_task(result[0])
+        elif isinstance(result, dict) and result:
+            return self._parse_task(result)
+        return None
+
     def search_tasks(self, keyword: str,
                      project_id: Optional[str] = None) -> List[TeambitionTask]:
         pid = project_id or self.project_id
