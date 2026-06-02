@@ -1297,7 +1297,14 @@ class SyncEngine:
             if self.extraction_enabled and sn_value in ("/", "", "-"):
                 from src.extractor import extract_sn
                 patterns = getattr(self, '_sn_patterns', None)
+                # 从重现步骤提取
                 extracted = extract_sn(bug.steps, patterns)
+                # 兜底：从附件文件名提取（如 48HCNFBN0049X-2026-...）
+                if not extracted and bug.files:
+                    file_names = " ".join(
+                        f.get("title", "") or f.get("name", "")
+                        for f in bug.files if isinstance(f, dict))
+                    extracted = extract_sn(file_names, patterns)
                 if extracted:
                     sn_value = extracted
             # LLM 兜底：正则未提取到时，调用 LLM 分析
