@@ -1337,25 +1337,16 @@ class SyncEngine:
         return f"{tag}{base}"
 
     def _build_note(self, bug: ZentaoBug) -> str:
-        """构建 Teambition 备注（对应禅道重现步骤），移除内联图片"""
+        """构建 Teambition 备注（对应禅道重现步骤），转为 TB 兼容格式"""
         parts = []
         steps = bug.steps.strip()
         if steps:
-            # 移除 <img> 标签，保留文字，替换为图片文件名
-            if "<img" in steps:
-                soup = BeautifulSoup(steps, "html.parser")
-                for img in soup.find_all("img"):
-                    src = img.get("src", "")
-                    match = re.search(r'file-read[_-](\d+)', src)
-                    if not match:
-                        match = re.search(r'/file/download/(\d+)', src)
-                    if match:
-                        file_id = match.group(1)
-                        img.replace_with(f"image_{file_id}.png")
-                    else:
-                        img.replace_with("[图片]")
-                steps = html.unescape(str(soup))
-            parts.append(steps)
+            # 将禅道 HTML 转换为 TB 兼容的纯文本格式
+            text = self._html_to_text(steps)
+            if text:
+                # 用 <pre> 包裹保留原始换行和间距，TB 渲染更可靠
+                parts.append(f"<pre style=\"white-space:pre-wrap;"
+                            f"font-family:inherit;\">{text}</pre>")
 
         # 来源信息作为备注末尾的元数据
         severity_name = SEVERITY_NAMES.get(str(bug.severity), bug.severity)
@@ -1453,20 +1444,59 @@ class SyncEngine:
 
     @staticmethod
     def _html_to_text(html: str) -> str:
-        """将禅道 HTML 评论转为 TB 可读的纯文本"""
+        """将禅道 HTML 转为 TB 可读的纯文本，特别处理表格"""
         if not html or "<" not in html:
             return html
         try:
             soup = BeautifulSoup(html, "html.parser")
-            # 处理未被替换的图片（无 file_id 的情况）
+            # 处理表格：转为 Markdown 风格的表格文本
+            for table in soup.find_all("table"):
+                rows = table.find_all("tr")
+                if not rows:
+                    table.replace_with("")
+                    continue
+                lines = []
+                max_cols = 0
+                all_cells = []
+                for tr in rows:
+                    cells = [c.get_text(strip=True) for c in tr.find_all(["td", "th"])]
+                    all_cells.append(cells)
+                    max_cols = max(max_cols, len(cells))
+                if max_cols == 0:
+                    table.replace_with("")
+                    continue
+                # 生成等宽文本表格（TB 用 <pre> 包裹）
+                col_widths = [0] * max_cols
+                for cells in all_cells:
+                    for i, c in enumerate(cells):
+                        col_widths[i] = max(col_widths[i], len(c))
+                for i, cells in enumerate(all_cells):
+                    padded = cells + [""] * (max_cols - len(cells))
+                    row = " | ".join(
+                        c.ljust(col_widths[j]) for j, c in enumerate(padded))
+                    lines.append(row)
+                    if i == 0:
+                        sep = "-+-".join("-" * col_widths[j] for j in range(max_cols))
+                        lines.append(sep)
+                table.replace_with("\n" + "\n".join(lines) + "\n")
+
+            # 处理未被替换的图片
             for img in soup.find_all("img"):
                 img.replace_with("[图片]")
-            # 处理未被替换的视频标签
+            # 处理视频标签
             for video in soup.find_all("video"):
                 video.replace_with("[视频]")
             # 处理换行
             for tag in soup.find_all(["br", "p", "div"]):
                 tag.insert_after("\n")
+            # 有序列表：保留编号，每项后加换行
+            for ol in soup.find_all("ol"):
+                for i, li in enumerate(ol.find_all("li"), 1):
+                    li.insert_before(f"\n{i}. ")
+            # 无序列表：加项目符号
+            for ul in soup.find_all("ul"):
+                for li in ul.find_all("li"):
+                    li.insert_before("\n- ")
             text = soup.get_text()
             # 清理多余空行
             lines = [l.strip() for l in text.splitlines()]
