@@ -139,11 +139,26 @@ class TestDRCTimeExtraction:
         task = type('T', (), {
             'id': '1',
             'content': '发生时间: 2026-06-02 10:30',
+            'created': '2026-06-02T10:00:00.000Z',
             'customfields': [],
         })()
         t = _extract_time_from_task(task)
         assert t is not None
         assert t.hour == 2  # 10:30 北京时间 → 02:30 UTC
+
+    def test_future_date_rejected(self):
+        """未来日期（如6月3日，但任务6月2日创建）应被跳过"""
+        from src.log_analysis_integration import _extract_time_from_task
+        task = type('T', (), {
+            'id': '1',
+            'content': 'something 2026-06-03 00:13 unrelated',
+            'created': '2026-06-02T10:00:00.000Z',
+            'customfields': [],
+        })()
+        t = _extract_time_from_task(task)
+        # 不应返回6月3日的时间，应回退到创建时间(6月2日00:00 UTC)
+        assert t is not None
+        assert t.day == 2  # 回退到创建日期，不是6月3日
 
 
 class TestTimeNormalize:

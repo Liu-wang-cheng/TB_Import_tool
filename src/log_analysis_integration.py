@@ -162,26 +162,52 @@ def _extract_time_from_task(task: "TeambitionTask") -> Optional[datetime]:
 
     # 以下时间均为用户手动填写的北京时间，需 -8h 转 UTC
 
+    # 获取任务创建时间作为合理性上界
+    _task_created_utc = None
+    if task.created:
+        try:
+            _task_created_utc = (datetime.fromisoformat(
+                task.created.replace("Z", "+00:00"))
+                .astimezone(timezone.utc))
+        except ValueError:
+            pass
+
+    def _is_plausible(dt_naive: datetime) -> bool:
+        """日期不应超过任务创建日期+1天（北京时区）"""
+        if _task_created_utc is None:
+            return True
+        max_dt = (_task_created_utc + timedelta(hours=8)).replace(tzinfo=None)
+        max_dt = max_dt + timedelta(days=1)
+        return dt_naive <= max_dt
+
     # 2. 标准格式 YYYY-MM-DD HH:MM:SS 或 YYYY/MM/DD HH:MM:SS
-    m = re.search(r"(\d{4}[/-]\d{2}[/-]\d{2}\s+\d{2}:\d{2}:\d{2})", search_text)
-    if m:
+    for m in re.finditer(
+            r"(\d{4}[/-]\d{2}[/-]\d{2}\s+\d{2}:\d{2}:\d{2})", search_text):
         try:
             ts_str = m.group(1)
             sep = "/" if "/" in ts_str else "-"
             dt = datetime.strptime(ts_str, f"%Y{sep}%m{sep}%d %H:%M:%S")
+            if not _is_plausible(dt):
+                continue
             utc_dt = (dt - timedelta(hours=8)).replace(tzinfo=timezone.utc)
-            logger.info("从标准格式提取时间: %s 北京时间 → %s UTC", dt.strftime("%Y-%m-%d %H:%M:%S"), utc_dt.strftime("%Y-%m-%d %H:%M:%S"))
+            logger.info("从标准格式提取时间: %s 北京时间 → %s UTC",
+                        dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        utc_dt.strftime("%Y-%m-%d %H:%M"))
             return utc_dt
         except ValueError:
             pass
 
     # 3. 标准格式 YYYY-MM-DD HH:MM（无秒）
-    m = re.search(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", search_text)
-    if m:
+    for m in re.finditer(
+            r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", search_text):
         try:
             dt = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M")
+            if not _is_plausible(dt):
+                continue
             utc_dt = (dt - timedelta(hours=8)).replace(tzinfo=timezone.utc)
-            logger.info("从标准格式(无秒)提取时间: %s 北京时间 → %s UTC", dt.strftime("%Y-%m-%d %H:%M"), utc_dt.strftime("%Y-%m-%d %H:%M"))
+            logger.info("从标准格式(无秒)提取时间: %s 北京时间 → %s UTC",
+                        dt.strftime("%Y-%m-%d %H:%M"),
+                        utc_dt.strftime("%Y-%m-%d %H:%M"))
             return utc_dt
         except ValueError:
             pass
