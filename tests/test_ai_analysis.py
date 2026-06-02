@@ -116,6 +116,36 @@ class TestSNExtractionInLogAnalysis:
         assert _extract_sn_from_task(task) is None
 
 
+class TestDRCTimeExtraction:
+    """DRC 文件名时间戳优先提取"""
+
+    def test_drc_filename_time_utc(self):
+        from src.log_analysis_integration import _extract_time_from_task
+        task = type('T', (), {
+            'id': '1',
+            'content': '【禅道16376】机器触发电池高温报警',
+            'customfields': [{
+                'title': '日志附件', 'type': 'text',
+                'value': 'record_20260602_155412_192.168.121.121_2026L014E403300002_8.1.21.drc'
+            }],
+        })()
+        t = _extract_time_from_task(task)
+        assert t is not None
+        assert t.day == 2, f"应为6月2日, 实为{t.day}日"
+        assert t.hour == 15, f"应为15:54, 实为{t.hour}:{t.minute}"
+
+    def test_text_time_fallback(self):
+        from src.log_analysis_integration import _extract_time_from_task
+        task = type('T', (), {
+            'id': '1',
+            'content': '发生时间: 2026-06-02 10:30',
+            'customfields': [],
+        })()
+        t = _extract_time_from_task(task)
+        assert t is not None
+        assert t.hour == 2  # 10:30 北京时间 → 02:30 UTC
+
+
 class TestTimeNormalize:
     """时间标准化（sync_engine）"""
 
