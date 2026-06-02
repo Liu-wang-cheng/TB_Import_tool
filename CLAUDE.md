@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-Python GUI/CLI 工具，将禅道（Zentao，自建开源版）的 Bug 缺陷同步到 Teambition（TB）。
+Python GUI/CLI 工具，将禅道（Zentao，自建开源版 + 云版 chandao.com）/ Jira 缺陷同步到 Teambition（TB）。
 面向扫地机器人软件测试工程师，支持按条件筛选、去重、双向标题标注、字段映射、附件和评论同步。
 
 ## 常用命令
@@ -123,11 +123,13 @@ docs/
 
 ## 关键技术细节
 
-- **禅道双认证**：REST API 用 Token 认证（`/api.php/v1/tokens`）；文件下载用 Session 认证（`/api-getsessionid.json` → `/user-login.json`）
+- **禅道双认证**：REST API 用 Token 认证（`/api.php/v1/tokens`）；文件下载用 Session 认证（`/api-getsessionid.json` → `/user-login.json`）。云版不支持 Token，自动切换到 Session
+- **禅道云版认证**（freedynamics.chandao.com）：Token 接口返回 `{"errcode":401}` → 触发 `_cloud_session_auth = True` → 走 Session 登录。Session 登录响应需检查多种失败格式：`result: "fail"`、`status: "fail"`、`errcode != 0`、`result: null + message`
+- **禅道客户端缓存**：`_CLIENT_CACHE` 以 `(base_url, account, password)` 为 key 缓存 ZentaoClient 单例，避免 GUI 多个入口重复认证。修改密码后自动创建新 client
 - **禅道 v1 奇怪之处**：Token 接口返回 HTTP 201；`files` 字段是 `{id: obj}` 字典而非列表；`assignedTo`/`status` 可能是嵌套字典
 - **TB 认证**：JWT 签名的 appAccessToken。企业应用安装后可直接使用应用级 token，无需 OAuth 用户 token
-- **去重策略**：第一层 = 精确搜索 `【禅道{id}】` 标签；第二层 = `difflib.SequenceMatcher` 标题模糊匹配（阈值 0.8）
-- **双向标题标注**：TB 任务标题加 `【禅道{id}】` 前缀；禅道 Bug 标题加 `【VLNS-xxxxx】` 前缀
+- **去重策略（五层）**：① 标题 VLNS/CPAX 检测 → ② 精确搜索 `【禅道{id}】` 标签 → ③ `difflib.SequenceMatcher` 标题模糊匹配（阈值 0.8） → ④ 备注/历史 VLNS/CPAX 回退检查 → ⑤ 模块/组件过滤
+- **双向标题标注**：TB 任务标题加 `【禅道{id}】` 前缀；禅道 Bug 标题加 `【VLNS-xxxxx】` 或 `【CPAX-xxxxx】` 前缀
 - **自定义字段**：严重程度(S/A/B/C)、复现概率、缺陷分类等 — 通过 `scenariofieldconfig` API 自动检测，或从配置中的中文名称解析
 - **配置解析**：`config_resolver.py` 认证后将中文名称解析为 ID。支持：`scenariofieldconfig_name` → ID、`customfields` 名称 → ID、`creator_name` → 用户 ID。`project_id` 必须直接填写 UUID（appToken 模式下无项目搜索 API）
 - **多文件配置**：`config_loader.py` 加载并合并 `configs/` 目录下的 YAML（兼容旧版单文件 `config.yaml`）
@@ -143,6 +145,13 @@ docs/
 - **打包**：`build.bat` 一键打包，只包含 5 个运行时必需文件（排除 42MB 的 PDF 和 DRC 配置 JSON）。PyInstaller 自动排除 pandas/matplotlib/PIL/pytest 等未使用库。打包前 `strip_api_key.py` 自动剥离密钥。
 - **所属项目**：AI 分析中的"所属项目"字段自动同步 TB 项目名（`teambition.yaml` 中的 `project.name`），保存时不会覆盖到配置文件。DRC 日志查询的 `drc_model` 参数自动 fallback 到该项目名。
 - **多平台支持**：通过 `source.yaml` 选择平台（zentao / jira），`source_factory.py` 创建对应适配器，`source_client.py` 定义统一接口。
+- **YAML 原地编辑**：`gui/yaml_utils.py` 的 `update_yaml_values()` 通过正则匹配修改 YAML 文件，保留注释和格式。关键函数：
+  - `_replace_list_value()`: **标量→列表时强制重写 key 行为 `key:`，清除旧值（如 `null`），否则 PyYAML 将续行合并为畸形字符串**
+  - `_format_value()`: **日期格式字符串 `YYYY-MM-DD` 自动加引号，防止 PyYAML 误解析为 `datetime.date`**
+  - `_strip_trailing_list_items()`: 列表→标量时清除旧的 `- item` 行
+- **GUI 日期筛选**：`QDateEdit` 默认值 `QDate.currentDate()`（非 minimumDate 2000-01-01），`specialValueText("不限")` 仅在日期等于 minimumDate 时显示。日期恢复需同时兼容 `str` 和 `datetime.date`（PyYAML 解析结果）
+- **GUI `_set_busy()` AI 子开关交互**：任务完成后 `_set_busy(False)` 恢复控件时，AI 子开关需额外判断 `chk_ai_analysis.isChecked()`。若 AI 总开关关闭，子开关保持 disabled
+- **指派人过滤（云版）**：`_resolve_assigned_to_cloud()` 处理纯名字→云版用户映射时，需后缀匹配 `_cloud_user_name_to_account` 的 key（如 "邓建和" → "部门-邓建和" → account）。`_passes_filters_with_assignees()` 也需做 `-` 后缀二次匹配
 
 ## 依赖
 
