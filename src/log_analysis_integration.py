@@ -188,10 +188,11 @@ def _extract_time_from_task(task: "TeambitionTask") -> Optional[datetime]:
             pass
 
     def _is_plausible(dt_naive: datetime) -> bool:
-        """日期不应超过创建日期+1天"""
+        """dt_naive 是北京时间，不应超过任务创建日期(北京)+1天"""
         if _task_created_utc is None:
             return True
-        max_dt = _task_created_utc.replace(tzinfo=None) + timedelta(days=1)
+        created_bj = _task_created_utc + timedelta(hours=8)
+        max_dt = (created_bj + timedelta(days=1)).replace(tzinfo=None)
         return dt_naive <= max_dt
 
     # 2. 标准格式 YYYY-MM-DD HH:MM:SS 或 YYYY/MM/DD HH:MM:SS
@@ -237,8 +238,11 @@ def _extract_time_from_task(task: "TeambitionTask") -> Optional[datetime]:
         if m:
             try:
                 month, day, hour, minute = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-                now = datetime.now(timezone.utc)
-                dt = datetime(now.year, month, day, hour, minute, 0)
+                # 用任务创建年份作为参考（处理跨年边界）
+                ref_year = (_task_created_utc + timedelta(hours=8)).year if _task_created_utc else datetime.now(timezone.utc).year
+                dt = datetime(ref_year, month, day, hour, minute, 0)
+                if not _is_plausible(dt):
+                    continue
                 utc_dt = (dt - timedelta(hours=8)).replace(tzinfo=timezone.utc)
                 logger.info("从简写格式提取时间: %s 北京时间 → %s UTC", dt.strftime("%m-%d %H:%M"), utc_dt.strftime("%m-%d %H:%M"))
                 return utc_dt
@@ -334,9 +338,8 @@ def _extract_fw_from_task(task: "TeambitionTask") -> str:
     m = re.search(r"AR-[\d.]+-[\d.]+-\d+-\w+-[\da-f]+", task.content)
     if m:
         return m.group(0)
-
-    # 3. 尝试从标题推断完整固件版本
-    m = re.search(r"AR-[\d.]+-[\d.]+-\d+-\w+-[\da-f]+", task.content)
+    # 也从备注中查找
+    m = re.search(r"AR-[\d.]+-[\d.]+-\d+-\w+-[\da-f]+", task.note or "")
     if m:
         return m.group(0)
 
@@ -765,7 +768,7 @@ class LogAnalysisIntegration:
             rewritten = self._rewrite_analysis(
                 analysis, defect_info, log_summary, rewrite_reason,
                 pattern_hints=pattern_hints, system_prompt=system_prompt,
-                domain_knowledge=domain_knowledge, mandatory_signals=anomaly_hints,
+                domain_knowledge=domain_knowledge, mandatory_signals=mandatory_signals,
             )
             if rewritten:
                 analysis = rewritten
@@ -797,6 +800,7 @@ class LogAnalysisIntegration:
                     logger.info("判断需要视觉分析，但任务中无可用视频/图片附件，回退到纯日志分析")
 
         # ── 二次综合：日志 + 视觉 ──
+        vision_analysis = ""
         if vision_raw:
             combined = self.analyzer.analyze_combined(defect_info, analysis, vision_raw)
             if combined:
@@ -806,8 +810,6 @@ class LogAnalysisIntegration:
                 )
             else:
                 vision_analysis = "\n\n## 视觉分析\n\n" + vision_raw
-        else:
-            vision_analysis = ""
 
         # ── 低置信度自动重试：扩大时间窗口重新分析 ──
         _RETRY_WINDOWS = [30, 60]

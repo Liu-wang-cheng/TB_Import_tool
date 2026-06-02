@@ -2,7 +2,7 @@
 
 注意：代码中硬编码的兜底 LLM api_key 不需要清除。
 清除范围：classifier.llm.api_key、web_cookies、github_token。
-保留：DRC 服务器凭证（团队共享日志服务器），云版 Web Cookie。
+保留：DRC 服务器凭证（团队共享日志服务器）。
 """
 import os
 import yaml

@@ -883,7 +883,6 @@ class SyncEngine:
                     if retry_id:
                         try:
                             self.teambition.update_task_status(task_id, retry_id)
-                            self._reopen_status_id = retry_id
                             logger.info("[重新激活] Bug#%d → TB %s (按任务工作流)",
                                         bug.id, task_id)
                             reopened = True

@@ -74,7 +74,10 @@ def export_bugs(config: dict, output_path: str = ""):
     logger.info("过滤后待导出 %d 条", len(bugs))
 
     tb_cfg = config.get("teambition", {})
-    severity_map = tb_cfg.get("severity_map", {"1": "A", "2": "B", "3": "C", "4": "C"})
+    severity_map = tb_cfg.get("severity_map", {
+        "1": "A", "2": "B", "3": "C", "4": "C",
+        "致命": "S", "严重": "A", "一般": "B", "建议": "C", "轻微": "C",
+    })
     type_category_map = tb_cfg.get("type_category_map", {})
     default_reproduction = tb_cfg.get("default_reproduction", "中概率")
 
