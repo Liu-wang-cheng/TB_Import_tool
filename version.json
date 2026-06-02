@@ -1,8 +1,8 @@
 {
   "version": "1.8",
-  "sha256": "5fad85214f7be71c8c0315924fc7ab9f43585babc44a216af5da529d5cbcc63c",
+  "sha256": "ee0a7c270b0c8ff9e63ca01a067809333be56d44dd10816910bef8654fe67e41",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.8/SmartDefectPlatform.zip",
-  "release_date": "2026-06-01",
-  "release_notes": "v1.8: 修复配置持久化、YAML null写入、云版分页/用户映射、打包脚本密钥清除等 10+ 项问题",
+  "release_date": "2026-06-02",
+  "release_notes": "v1.8: 修复配置持久化(YAML null写入/列表清理)、云版认证静默失败(0条Bug)、CPAX去重检测、打包脚本密钥清除(嵌套classifier.llm.api_key)、dingtalk.yaml版本控制、ai_analysis.yaml备份恢复等15+项问题",
   "min_version": "1.0"
 }
