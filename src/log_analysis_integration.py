@@ -146,6 +146,20 @@ def _extract_time_from_task(task: "TeambitionTask") -> Optional[datetime]:
         except ValueError:
             pass
 
+    # 1.5 DRC 文件名中的时间戳（如 record_20260602_155412_...）
+    m = re.search(r'record[_-](\d{8})[_-](\d{6})', search_text)
+    if m:
+        try:
+            date_str = m.group(1)  # 20260602
+            time_str = m.group(2)  # 155412
+            dt = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
+            # DRC 文件名时间戳是 UTC
+            utc_dt = dt.replace(tzinfo=timezone.utc)
+            logger.info("从 DRC 文件名提取时间: %s UTC", utc_dt.strftime("%Y-%m-%d %H:%M:%S"))
+            return utc_dt
+        except ValueError:
+            pass
+
     # 以下时间均为用户手动填写的北京时间，需 -8h 转 UTC
 
     # 2. 标准格式 YYYY-MM-DD HH:MM:SS 或 YYYY/MM/DD HH:MM:SS
