@@ -1254,6 +1254,14 @@ class ZentaoClient:
             text, re.IGNORECASE)
         if match:
             return match.group(1).upper()
+        # 4. DRC/附件文件名中的 SN：数字开头+字母混合（如 2026L014E403300002、48HCNFBN0049X）
+        match = re.search(
+            r'(?:^|[_\s\-.])'
+            r'(\d{2,}[A-Z][A-Z0-9]{3,})'
+            r'(?:[_\s\-.]|$)',
+            text, re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
         return "/"
 
     @staticmethod

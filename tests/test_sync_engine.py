@@ -239,6 +239,115 @@ class TestBuildNote:
         assert "<pre" not in note  # no pre for empty steps
 
 
+class TestSNExtraction:
+    """SN 编码提取"""
+
+    def test_sn_prefix_colon(self):
+        from src.zentao_client import ZentaoClient
+        assert ZentaoClient._extract_sn("SN:48HCNFBN0049X") == "48HCNFBN0049X"
+
+    def test_sn_prefix_chinese(self):
+        from src.zentao_client import ZentaoClient
+        assert ZentaoClient._extract_sn("SN码：ABC123456") == "ABC123456"
+
+    def test_sn_hq_format(self):
+        from src.zentao_client import ZentaoClient
+        assert ZentaoClient._extract_sn("HQ5S00700002HC261300069") == "HQ5S00700002HC261300069"
+
+    def test_sn_filename_format(self):
+        from src.zentao_client import ZentaoClient
+        assert ZentaoClient._extract_sn("48HCNFBN0049X-2026-06-02.zip") == "48HCNFBN0049X"
+
+    def test_sn_filename_with_scv5(self):
+        from src.zentao_client import ZentaoClient
+        sn = ZentaoClient._extract_sn(
+            "48HCNFBN0049X-2026-06-02-16-04-56.scv5 steps text")
+        assert sn == "48HCNFBN0049X"
+
+    def test_sn_not_found(self):
+        from src.zentao_client import ZentaoClient
+        assert ZentaoClient._extract_sn("no serial here") == "/"
+
+    def test_sn_drc_filename_format(self):
+        from src.zentao_client import ZentaoClient
+        sn = ZentaoClient._extract_sn(
+            "record_20260602_155412_192.168.121.121_2026L014E403300002_8.1.21.drc")
+        assert sn == "2026L014E403300002"
+
+    def test_sn_empty_text(self):
+        from src.zentao_client import ZentaoClient
+        assert ZentaoClient._extract_sn("") == "/"
+
+    def test_sn_from_task_customfield_hq(self):
+        from src.log_analysis_integration import _extract_sn_from_task
+        task = type('Task', (), {
+            'content': 'test',
+            'customfields': [{'value': 'HQ5S00700002HC261300069'}],
+        })()
+        sn = _extract_sn_from_task(task)
+        assert sn == 'HQ5S00700002HC261300069'
+
+    def test_sn_from_task_customfield_non_hq(self):
+        from src.log_analysis_integration import _extract_sn_from_task
+        task = type('Task', (), {
+            'content': 'test',
+            'customfields': [{'value': '48HCNFBN0049X'}],
+        })()
+        sn = _extract_sn_from_task(task)
+        assert sn == '48HCNFBN0049X'
+
+    def test_sn_from_task_date_excluded(self):
+        from src.log_analysis_integration import _extract_sn_from_task
+        task = type('Task', (), {
+            'id': '1',
+            'content': 'test bug',
+            'customfields': [{'value': '2026-06-03 00:13'}],
+        })()
+        sn = _extract_sn_from_task(task)
+        assert sn is None  # date should NOT be treated as SN
+
+    def test_sn_from_task_title(self):
+        from src.log_analysis_integration import _extract_sn_from_task
+        task = type('Task', (), {
+            'id': '1',
+            'content': '48HCNFBN0049X machine issue',
+            'customfields': [],
+        })()
+        sn = _extract_sn_from_task(task)
+        assert sn == '48HCNFBN0049X'
+
+    def test_sn_from_task_drc_filename(self):
+        from src.log_analysis_integration import _extract_sn_from_task
+        task = type('Task', (), {
+            'id': '1',
+            'content': 'record_20260602_155412_192.168.121.121_2026L014E403300002_8.1.21.drc',
+            'customfields': [],
+        })()
+        sn = _extract_sn_from_task(task)
+        assert sn == '2026L014E403300002'
+
+
+class TestCloudTitleUpdate:
+    """云版标题修改"""
+
+    def test_cloud_post_called(self):
+        from unittest.mock import Mock
+        from src.zentao_client import ZentaoClient
+        client = ZentaoClient.__new__(ZentaoClient)
+        client._cloud_session_auth = True
+        client.base_url = "https://cloud.example.com"
+        client.api_delay = 0
+        client._http = Mock()
+        client._session_logged_in = True
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.text = '{"data": {"title": "updated"}}'
+        client._http.post.return_value = mock_resp
+
+        client.update_bug_title(12345, "new title")
+        client._http.post.assert_called_once()
+
+
 class TestTitleCleaning:
     """CPAX/VLNS 标题清理"""
 

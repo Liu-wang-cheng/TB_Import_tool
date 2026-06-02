@@ -39,6 +39,7 @@ LOG_WINDOW_MINUTES = 10
 
 def _extract_sn_from_task(task: "TeambitionTask") -> Optional[str]:
     """从 TB 任务自定义字段中提取设备 SN。"""
+    _date_re = re.compile(r'^\d{4}[-/]\d{2}[-/]\d{2}')
     for cf in task.customfields:
         val = cf.get("value", "")
         if isinstance(val, list):
@@ -46,15 +47,22 @@ def _extract_sn_from_task(task: "TeambitionTask") -> Optional[str]:
         if not val:
             continue
         s = str(val).strip()
-        # HQ 格式（如 HQ5S00700002HC261300069）
-        if len(s) >= 10 and (s.upper().startswith("HQ") or s[0].isdigit()):
+        # 排除日期格式（如 2026-06-03 00:13）
+        if _date_re.match(s):
+            continue
+        # HQ 格式（如 HQ5S00700002HC261300069）或数字开头+字母混合
+        if len(s) >= 10 and (s.upper().startswith("HQ") or
+                              (s[0].isdigit() and re.search(r'[A-Z]', s, re.IGNORECASE))):
             return s
     # 尝试从标题中提取
     m = re.search(r"HQ\S{10,}", task.content)
     if m:
         return m.group(0)
-    # 尝试提取非 HQ 格式 SN（如 48HCNFBN0049X）
-    m = re.search(r"\b([0-9]{2,}[A-Z]{2,}[0-9A-Z]{4,})\b", task.content, re.IGNORECASE)
+    # 尝试提取非 HQ 格式 SN（如 48HCNFBN0049X、2026L014E403300002）
+    m = re.search(r"(?:^|[_\s\-.])"
+                   r"(\d{2,}[A-Z][A-Z0-9]{3,})"
+                   r"(?:[_\s\-.]|$)",
+                   task.content, re.IGNORECASE)
     if m:
         return m.group(1).upper()
     return None
