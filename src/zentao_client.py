@@ -960,12 +960,46 @@ class ZentaoClient:
 
     # ── 文件下载 ──────────────────────────────────────
 
+    def _download_file(self, url_stem: str, timeout: int = 60) -> requests.Response:
+        """下载文件，依次尝试 cookie / session / token / 无认证"""
+        # 云版：cookie 认证
+        if self._cloud_session_auth:
+            return self._http.get(f"{self.base_url}/{url_stem}", timeout=timeout)
+
+        # 自建版：依次尝试 session → token → 无认证
+        tried = []
+        # 1) session 认证
+        try:
+            self._ensure_session()
+            if self._session_id:
+                resp = self._http.get(
+                    f"{self.base_url}/{url_stem}",
+                    params={"zentaosid": self._session_id}, timeout=timeout)
+                if resp.status_code == 200:
+                    return resp
+                tried.append(f"session={resp.status_code}")
+        except ZentaoAPIError:
+            tried.append("session=fail")
+
+        # 2) token 认证
+        self._ensure_token()
+        if self._token:
+            resp = self._http.get(
+                f"{self.base_url}/{url_stem}",
+                headers={"Token": self._token}, timeout=timeout)
+            if resp.status_code == 200:
+                return resp
+            tried.append(f"token={resp.status_code}")
+
+        # 3) 无认证兜底
+        resp = self._http.get(f"{self.base_url}/{url_stem}", timeout=timeout)
+        if resp.status_code != 200:
+            logger.warning("文件下载失败 %s (尝试: %s)", url_stem, ", ".join(tried))
+        return resp
+
     def download_attachment(self, file_id: int,
                             filename: str = "") -> AttachmentFile:
-        self._ensure_session()
-        url = f"{self.base_url}/file-download-{file_id}.html"
-        resp = self._http.get(url, params={"zentaosid": self._session_id},
-                              timeout=60)
+        resp = self._download_file(f"file-download-{file_id}.html")
         if resp.status_code != 200:
             raise ZentaoAPIError(resp.status_code, "下载附件失败",
                                  f"/file-download-{file_id}")
@@ -985,10 +1019,7 @@ class ZentaoClient:
         )
 
     def download_image(self, file_id: int) -> AttachmentFile:
-        self._ensure_session()
-        url = f"{self.base_url}/file-read-{file_id}.html"
-        resp = self._http.get(url, params={"zentaosid": self._session_id},
-                              timeout=60)
+        resp = self._download_file(f"file-read-{file_id}.html")
         if resp.status_code != 200:
             raise ZentaoAPIError(resp.status_code, "下载图片失败",
                                  f"/file-read-{file_id}")
