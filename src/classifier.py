@@ -335,7 +335,7 @@ class SimilarityClassifier:
         """去掉标题中的标签、编号、版本号等噪音"""
         clean = re.sub(r'【[^】]*】', '', title)
         clean = re.sub(r'#?\d{4,}\s*', '', clean)
-        clean = re.sub(r'VLNS-\d+', '', clean)
+        clean = re.sub(r'(?:VLNS|CPAX)-\d+', '', clean)
         clean = re.sub(r'MPPFW-\d+', '', clean)
         clean = re.sub(r'禅道\d+', '', clean)
         clean = re.sub(r'SS\d+-\d+', '', clean)

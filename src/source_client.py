@@ -39,7 +39,7 @@ class SourceClient(Protocol):
         ...
 
     def check_bug_has_vlns(self, bug_id: int) -> bool:
-        """检查缺陷备注/历史中是否包含 TB 标记（VLNS 等）"""
+        """检查缺陷备注/历史中是否包含 TB 标记（VLNS / CPAX 等）"""
         ...
 
     def fetch_bug_comments(self, bug_id: int) -> List[dict]:

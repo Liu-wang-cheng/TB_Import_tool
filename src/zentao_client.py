@@ -61,8 +61,16 @@ class ZentaoClient:
         self._branch_id = branch_id
 
     def authenticate(self):
-        """认证并获取 token（公共接口）"""
+        """认证并获取 token（公共接口）
+
+        云版不支持 Token 认证时自动切换到 Session 认证并验证登录结果。
+        """
         self._ensure_token()
+        # 云版在 _ensure_token 中已标记 _cloud_session_auth，
+        # 此处需额外调用 _ensure_session 验证账号密码是否正确，
+        # 避免 credential 错误时静默返回"认证成功"
+        if self._cloud_session_auth:
+            self._ensure_session()
 
     def _ensure_token(self):
         if self._token:
@@ -116,6 +124,22 @@ class ZentaoClient:
         }, headers={"Content-Type": "application/x-www-form-urlencoded"})
         if resp.status_code != 200:
             raise ZentaoAPIError(resp.status_code, "session登录失败", "/user-login")
+        # 云版登录失败时可能仍返回 HTTP 200，需检查响应体中的实际登录结果
+        login_data = resp.json()
+        if isinstance(login_data, dict):
+            result = login_data.get("result")
+            if result and str(result).lower() in ("fail", "failed"):
+                reason = login_data.get("message", login_data.get("reason", str(login_data)))
+                raise ZentaoAPIError(resp.status_code, f"登录失败: {reason}", "/user-login")
+            # 某些版本用 status 字段
+            status = login_data.get("status")
+            if status and str(status).lower() in ("fail", "failed"):
+                reason = login_data.get("message", login_data.get("reason", str(login_data)))
+                raise ZentaoAPIError(resp.status_code, f"登录失败: {reason}", "/user-login")
+            # 云版 errcode（如 {"errcode":401,"errmsg":"密码错误"}）
+            if "errcode" in login_data and login_data["errcode"] != 0:
+                errmsg = login_data.get("errmsg", "未知错误")
+                raise ZentaoAPIError(resp.status_code, f"登录失败: [{login_data['errcode']}] {errmsg}", "/user-login")
         self._session_logged_in = True
         logger.info("禅道 Session 认证成功（用于文件下载）")
 
@@ -518,7 +542,7 @@ class ZentaoClient:
         return self._parse_bug(bug_data or {})
 
     def check_bug_has_vlns(self, bug_id: int) -> bool:
-        """检查 Bug 的备注/历史记录中是否包含 VLNS 文本"""
+        """检查 Bug 的备注/历史记录中是否包含 VLNS 或 CPAX 文本"""
         try:
             bug_data = self._get_bug_raw(bug_id, retry_on_401=False)
             if not bug_data:
@@ -526,7 +550,7 @@ class ZentaoClient:
             actions = bug_data.get("actions", [])
             if not isinstance(actions, list):
                 return False
-            return bool(re.search(r'VLNS-\d+', str(actions)))
+            return bool(re.search(r'(?:VLNS|CPAX)-\d+', str(actions)))
         except Exception as e:
             logger.debug("检查 Bug#%d 历史记录失败: %s", bug_id, e)
         return False

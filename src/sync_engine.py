@@ -661,13 +661,13 @@ class SyncEngine:
     def _sync_single_bug(self, bug: ZentaoBug,
                          dry_run: bool) -> SyncResult:
         try:
-            # VLNS 标记去重：标题中包含 VLNS 说明已导入过
+            # VLNS / CPAX 标记去重：标题中包含说明已导入过
             # 非激活状态直接跳过；激活状态走下面去重+状态校验流程（避免重复 API 调用）
-            if re.search(r'VLNS-\d+', bug.title) and bug.status != "active":
-                logger.info("[跳过-已导入] Bug#%d 标题含 VLNS 标记: %s",
+            if re.search(r'(?:VLNS|CPAX)-\d+', bug.title) and bug.status != "active":
+                logger.info("[跳过-已导入] Bug#%d 标题含 VLNS/CPAX 标记: %s",
                             bug.id, bug.title)
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
-                                  "", "标题含VLNS，已导入过")
+                                  "", "标题含VLNS/CPAX，已导入过")
 
             # 去重检查：TB 搜索（一次 API 调用）
             existing = self._find_existing_task(bug)
@@ -687,12 +687,12 @@ class SyncEngine:
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
                                   existing.taskId, "已存在")
 
-            # 检查禅道备注/历史记录中是否含 VLNS（代价较高的回退检查）
+            # 检查禅道备注/历史记录中是否含 VLNS 或 CPAX（代价较高的回退检查）
             if self.source.check_bug_has_vlns(bug.id):
-                logger.info("[跳过-已导入] Bug#%d 备注中含 VLNS 标记",
+                logger.info("[跳过-已导入] Bug#%d 备注中含 VLNS/CPAX 标记",
                             bug.id)
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
-                                  "", "备注含VLNS，已导入过")
+                                  "", "备注含VLNS/CPAX，已导入过")
 
             # 获取完整详情
             full_bug = self.source.fetch_bug_detail(bug.id)
