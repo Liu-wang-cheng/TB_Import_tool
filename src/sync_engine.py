@@ -815,6 +815,28 @@ class SyncEngine:
             logger.info("重新打开目标状态: %s",
                         status_map.get(self._reopen_status_id, self._reopen_status_id))
 
+    def _find_task_pending_status(self, task_id: str) -> str:
+        """Sfc不匹配时，获取任务自身工作流中的待处理状态ID"""
+        try:
+            task = self.teambition.get_task(task_id)
+            if not task:
+                return ""
+            # 从 taskflowId 找到对应工作流，查询其状态列表
+            taskflow_id = getattr(task, 'taskflowId', '')
+            if not taskflow_id:
+                return ""
+            statuses = self.teambition.get_taskflow_statuses(taskflow_id)
+            pending_kw = ("待处理", "进行中", "未开始", "pending", "in_progress",
+                         "todo", "重新打开", "reopen")
+            for sid, sname in statuses.items():
+                if any(kw in sname.lower() for kw in pending_kw):
+                    logger.info("任务 %s 工作流待处理状态: %s (%s)",
+                                task_id[:16], sname, sid[:8])
+                    return sid
+        except Exception as e:
+            logger.debug("查询任务工作流失败: %s", e)
+        return ""
+
     def _get_taskflow_status_name(self, status_id: str) -> str:
         """根据 taskflowstatusId 获取状态名称，用于日志"""
         if not status_id:
@@ -845,13 +867,30 @@ class SyncEngine:
                               "试运行: 重新激活")
 
         # 1. 重新打开 TB 任务
+        reopened = False
         if self._reopen_status_id:
             try:
                 self.teambition.update_task_status(task_id, self._reopen_status_id)
                 logger.info("[重新激活] Bug#%d → TB 任务 %s 已重新打开",
                             bug.id, task_id)
+                reopened = True
             except Exception as e:
-                logger.warning("重新打开 TB 任务 %s 失败: %s", task_id, e)
+                err_msg = str(e)
+                if "Sfc not match" in err_msg or "10060" in err_msg:
+                    retry_id = self._find_task_pending_status(task_id)
+                    if retry_id:
+                        try:
+                            self.teambition.update_task_status(task_id, retry_id)
+                            self._reopen_status_id = retry_id
+                            logger.info("[重新激活] Bug#%d → TB %s (按任务工作流)",
+                                        bug.id, task_id)
+                            reopened = True
+                        except Exception as e2:
+                            logger.warning("Sfc重试失败: %s", e2)
+                    else:
+                        logger.info("任务 %s 工作流无待处理状态", task_id[:16])
+                else:
+                    logger.warning("重新打开 TB 任务 %s 失败: %s", task_id, e)
         else:
             logger.warning("未找到重新打开状态，仅同步评论和附件")
 

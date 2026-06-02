@@ -635,6 +635,7 @@ class TeambitionClient:
             updated=data.get("updated") or "",
             sfcId=data.get("sfcId")
                      or data.get("scenariofieldconfigId") or "",
+            taskflowId=data.get("taskflowId") or "",
             isArchived=bool(data.get("isArchived")),
         )
 
@@ -679,6 +680,23 @@ class TeambitionClient:
             logger.warning("获取任务流状态失败: %s", e)
             self._taskflow_status_map = {}
         return self._taskflow_status_map or {}
+
+    def get_taskflow_statuses(self, taskflow_id: str) -> Dict[str, str]:
+        """获取指定任务流的状态列表 {statusId: statusName}"""
+        status_map: Dict[str, str] = {}
+        try:
+            data = self._request("GET",
+                                 f"/v3/taskflow/{taskflow_id}/status/search")
+            result = data.get("result", [])
+            if isinstance(result, list):
+                for s in result:
+                    sid = s.get("id", "")
+                    sname = s.get("name", "")
+                    if sid and sname:
+                        status_map[sid] = sname
+        except Exception as e:
+            logger.debug("查询 taskflow %s 状态失败: %s", taskflow_id, e)
+        return status_map
 
     def update_task_status(self, task_id: str, taskflowstatus_id: str):
         """更新任务工作流状态

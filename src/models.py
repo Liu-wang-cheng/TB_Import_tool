@@ -66,6 +66,7 @@ class TeambitionTask:
     created: str = ""
     updated: str = ""
     sfcId: str = ""
+    taskflowId: str = ""
     severity: str = ""
     taskType: str = ""
     reproduction: str = ""
