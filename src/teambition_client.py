@@ -420,7 +420,8 @@ class TeambitionClient:
         """
         try:
             data = self._request("GET", f"/v3/work/list",
-                                 params={"taskId": task_id, "limit": 200})
+                                 params={"projectId": self.project_id,
+                                        "taskId": task_id, "limit": 200})
             result = data.get("result", [])
             if isinstance(result, list):
                 return result

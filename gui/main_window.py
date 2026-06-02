@@ -1399,9 +1399,19 @@ class MainWindow(QMainWindow):
     def _on_full_sync(self):
         self._refresh_status_codes()
         self._apply_filters_to_config()
+        # 获取目标项目名称用于确认提示
+        tb_cfg = self.config.get("teambition", {})
+        project_cfg = tb_cfg.get("project", {})
+        project_name = (
+            project_cfg.get("name", "")
+            or tb_cfg.get("belong_project_value", "")
+            or tb_cfg.get("project_name", "")
+            or "目标项目"
+        )
         reply = QMessageBox.question(
             self, "确认同步",
-            "确定要正式同步吗？\n此操作将在 Teambition 中创建任务。",
+            f"确定要正式同步到 {project_name} 项目吗？\n\n"
+            f"此操作将在 Teambition「{project_name}」项目中创建/更新任务。",
             QMessageBox.Yes | QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
