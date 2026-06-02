@@ -46,7 +46,9 @@ class SyncEngine:
         tb_cfg = config.get("teambition", {})
         self.user_mapping: Dict[str, str] = tb_cfg.get("user_mapping", {})
         self.severity_map: Dict[str, str] = tb_cfg.get("severity_map", {
-            "1": "S", "2": "A", "3": "B", "4": "C",
+            "1": "A", "2": "B", "3": "C", "4": "C",
+            # 中文名保持 SABC 原有映射
+            "致命": "S", "严重": "A", "一般": "B", "建议": "C", "轻微": "C",
         })
         self.type_category_map: Dict[str, str] = tb_cfg.get("type_category_map", {})
         self.assignee_category_map: Dict[str, str] = tb_cfg.get("assignee_category_map", {})
@@ -1066,8 +1068,20 @@ class SyncEngine:
     # ── 字段映射 ──────────────────────────────────────
 
     def _map_severity(self, severity: str) -> str:
-        """禅道严重程度(1-4) → Teambition严重程度(S/A/B/C)"""
-        return self.severity_map.get(str(severity), "B")
+        """禅道严重程度 → TB严重程度
+        中文名: 致命→S, 严重→A, 一般→B, 建议/轻微→C
+        数字: 1→A, 2→B, 3→C, 4→C
+        字母: A→A, B→B, C→C, D/S→C"""
+        s = str(severity)
+        mapped = self.severity_map.get(s)
+        if mapped is not None:
+            return mapped
+        # 没在 map 中的直接匹配字母等级
+        if s.upper() in ("A", "B", "C"):
+            return s.upper()
+        if s.upper() in ("S", "D", "E", "F"):
+            return "C"
+        return "C"
 
     def _map_assignee(self, assigned_to: str) -> Optional[str]:
         creator_id = self.teambition.operator_id
@@ -1325,7 +1339,10 @@ class SyncEngine:
                         pass
                 found_time = extract_datetime(bug.steps, reference_date)
             if not found_time and bug.openedDate:
-                found_time = self._convert_to_cst(bug.openedDate)
+                # openedDate 本身就是北京时间，直接取前16字符 YYYY-MM-DD HH:MM
+                dt_str = bug.openedDate.strip()
+                if len(dt_str) >= 16:
+                    found_time = dt_str[:16]
             if found_time:
                 fields.append({
                     "cfId": self.cf_ids["found_time"],

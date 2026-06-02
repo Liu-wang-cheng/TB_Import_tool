@@ -54,15 +54,29 @@ def _extract_sn_from_task(task: "TeambitionTask") -> Optional[str]:
         if len(s) >= 10 and (s.upper().startswith("HQ") or
                               (s[0].isdigit() and re.search(r'[A-Z]', s, re.IGNORECASE))):
             return s
-    # 尝试从标题中提取
-    m = re.search(r"HQ\S{10,}", task.content)
+    # 构建搜索文本：标题 + 所有 customfield 值
+    search_parts = [task.content]
+    for cf in task.customfields:
+        val = cf.get("value", "")
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict):
+                    search_parts.append(item.get("title", ""))
+                else:
+                    search_parts.append(str(item))
+        elif isinstance(val, str):
+            search_parts.append(val)
+    search = " ".join(search_parts)
+
+    # 尝试从搜索文本中提取 HQ 格式 SN
+    m = re.search(r"HQ\S{10,}", search, re.IGNORECASE)
     if m:
         return m.group(0)
     # 尝试提取非 HQ 格式 SN（如 48HCNFBN0049X、2026L014E403300002）
     m = re.search(r"(?:^|[_\s\-.])"
                    r"(\d{2,}[A-Z][A-Z0-9]{3,})"
                    r"(?:[_\s\-.]|$)",
-                   task.content, re.IGNORECASE)
+                   search, re.IGNORECASE)
     if m:
         return m.group(1).upper()
     return None
@@ -99,7 +113,22 @@ def _extract_time_from_task(task: "TeambitionTask") -> Optional[datetime]:
     # 统一全角标点
     search_text = search_text.replace("：", ":").replace("／", "/").replace("，", ",").replace("-", "-")
 
-    # 0. 从 customfield 中提取明确标记为"缺陷时间"的字段
+    # 0. DRC 文件名中的时间戳（如 record_20260602_155412_...）——机器本地时间（北京），最高优先级
+    m = re.search(r'record[_-](\d{8})[_-](\d{6})', search_text)
+    if m:
+        try:
+            date_str = m.group(1)  # 20260602
+            time_str = m.group(2)  # 155412
+            dt_bj = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
+            utc_dt = (dt_bj - timedelta(hours=8)).replace(tzinfo=timezone.utc)
+            logger.info("从 DRC 文件名提取时间: %s 北京时间 → %s UTC",
+                        dt_bj.strftime("%Y-%m-%d %H:%M:%S"),
+                        utc_dt.strftime("%Y-%m-%d %H:%M"))
+            return utc_dt
+        except ValueError:
+            pass
+
+    # 1. 从 customfield 中提取明确标记为"缺陷时间"的字段
     _TIME_FIELD_KEYWORDS = ["时间", "发生", "缺陷", "故障", "异常"]
     _EXCLUDE_TIME_KEYWORDS = ["截止", "计划", "完成", "截止日", "到期", "截至", "期限"]
 
@@ -146,22 +175,6 @@ def _extract_time_from_task(task: "TeambitionTask") -> Optional[datetime]:
         except ValueError:
             pass
 
-    # 1.5 DRC 文件名中的时间戳（如 record_20260602_155412_...）——机器本地时间（北京）
-    m = re.search(r'record[_-](\d{8})[_-](\d{6})', search_text)
-    if m:
-        try:
-            date_str = m.group(1)  # 20260602
-            time_str = m.group(2)  # 155412
-            dt_bj = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
-            # DRC 文件名使用的是机器本地时间（北京时间），转 UTC
-            utc_dt = (dt_bj - timedelta(hours=8)).replace(tzinfo=timezone.utc)
-            logger.info("从 DRC 文件名提取时间: %s 北京时间 → %s UTC",
-                        dt_bj.strftime("%Y-%m-%d %H:%M:%S"),
-                        utc_dt.strftime("%Y-%m-%d %H:%M"))
-            return utc_dt
-        except ValueError:
-            pass
-
     # 以下时间均为用户手动填写的北京时间，需 -8h 转 UTC
 
     # 获取任务创建时间作为合理性上界
@@ -175,11 +188,10 @@ def _extract_time_from_task(task: "TeambitionTask") -> Optional[datetime]:
             pass
 
     def _is_plausible(dt_naive: datetime) -> bool:
-        """日期不应超过任务创建日期+1天（北京时区）"""
+        """日期不应超过创建日期+1天"""
         if _task_created_utc is None:
             return True
-        max_dt = (_task_created_utc + timedelta(hours=8)).replace(tzinfo=None)
-        max_dt = max_dt + timedelta(days=1)
+        max_dt = _task_created_utc.replace(tzinfo=None) + timedelta(days=1)
         return dt_naive <= max_dt
 
     # 2. 标准格式 YYYY-MM-DD HH:MM:SS 或 YYYY/MM/DD HH:MM:SS
@@ -245,15 +257,14 @@ def _extract_time_from_task(task: "TeambitionTask") -> Optional[datetime]:
         except ValueError:
             pass
 
-    # 6. 回退到创建时间（TB 创建时间是 UTC，无需转换）
-    # 若创建时间存在，取其日期部分作为缺陷日期，时间设为 00:00
+    # 6. 回退到创建时间，直接用不转换
     if task.created:
         try:
             dt = datetime.fromisoformat(task.created.replace("Z", "+00:00"))
             created_dt = dt.astimezone(timezone.utc)
-            fallback_dt = created_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-            logger.info("无明确缺陷时间，回退到创建时间日期: %s", fallback_dt.strftime("%Y-%m-%d %H:%M UTC"))
-            return fallback_dt
+            logger.info("无明确缺陷时间，回退到创建时间: %s UTC",
+                        created_dt.strftime("%Y-%m-%d %H:%M"))
+            return created_dt
         except ValueError:
             pass
 
@@ -280,9 +291,15 @@ def _extract_fw_from_task(task: "TeambitionTask") -> str:
                         m = re.search(r"AR-[\d.]+-[\d.]+-\d+-\w+-[\da-f]+", item_title)
                         if m:
                             return m.group(0)
+                        # 从 DRC 文件名末尾提取 FW（如 ..._8.1.21.drc）
+                        m = re.search(r'_(\d+\.\d+\.\d+)\.drc$', item_title)
+                        if m:
+                            return m.group(1)
                     # 收集简短版本号（如 2.1.42）用于后续匹配
-                    if re.match(r"\d+\.\d+\.\d+", item_title):
-                        short_ver = item_title
+                    if not short_ver:
+                        m = re.search(r'\d+\.\d+\.\d+', item_title)
+                        if m:
+                            short_ver = m.group(0)
         if isinstance(val, str) and "record_" in val:
             m = re.search(r"AR-[\d.]+-[\d.]+-\d+-\w+-[\da-f]+", val)
             if m:

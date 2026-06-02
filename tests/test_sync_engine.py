@@ -362,3 +362,45 @@ class TestTitleCleaning:
         title = "【CPAX-67890】另一个Bug"
         clean = re.sub(r'(?:VLNS|CPAX)-\d+', '', title).strip()
         assert "CPAX" not in clean
+
+
+class TestSeverityMapping:
+    """严重程度映射 (TB 不使用 S 等级)"""
+
+    def make_engine(self, severity_map=None):
+        from src.sync_engine import SyncEngine
+        e = SyncEngine.__new__(SyncEngine)
+        e.severity_map = severity_map or {"1": "A", "2": "B", "3": "C", "4": "C"}
+        return e
+
+    def test_numeric_1234(self):
+        e = self.make_engine()
+        assert e._map_severity("1") == "A"
+        assert e._map_severity("2") == "B"
+        assert e._map_severity("3") == "C"
+        assert e._map_severity("4") == "C"
+
+    def test_letter_ABCD(self):
+        e = self.make_engine()
+        assert e._map_severity("A") == "A"
+        assert e._map_severity("B") == "B"
+        assert e._map_severity("C") == "C"
+        assert e._map_severity("D") == "C"
+
+    def test_letter_S(self):
+        e = self.make_engine({"1": "A", "2": "B", "3": "C", "4": "C"})
+        # S 作为输入（字母等级） → 输出 C
+        assert e._map_severity("S") == "C"
+
+    def test_text_severity(self):
+        e = self.make_engine({"致命": "S", "严重": "A", "一般": "B", "建议": "C", "轻微": "C"})
+        assert e._map_severity("致命") == "S"  # 中文名保留S
+        assert e._map_severity("严重") == "A"
+        assert e._map_severity("一般") == "B"
+        assert e._map_severity("建议") == "C"
+        assert e._map_severity("轻微") == "C"
+
+    def test_unknown_defaults_to_c(self):
+        e = self.make_engine()
+        assert e._map_severity("未知") == "C"
+        assert e._map_severity("") == "C"

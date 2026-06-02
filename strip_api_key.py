@@ -1,6 +1,8 @@
 """打包前清理配置中的敏感字段。由 build.bat 自动调用。
 
-注意：代码中硬编码的兜底 LLM api_key 不需要清除，这里清除的是用户个人配置中的敏感字段。
+注意：代码中硬编码的兜底 LLM api_key 不需要清除。
+清除范围：classifier.llm.api_key、web_cookies、github_token。
+保留：DRC 服务器凭证（团队共享日志服务器），云版 Web Cookie。
 """
 import os
 import yaml
@@ -35,10 +37,8 @@ def _strip_ai_analysis(path):
         data = yaml.safe_load(f) or {}
     changed = False
     if isinstance(data, dict):
-        for key in ('drc_username', 'drc_password'):
-            if key in data:
-                data[key] = ''
-                changed = True
+        # 注意：DRC 服务器凭证（drc_server/drc_username/drc_password）
+        # 是团队共享的日志服务器账号，需要保留在打包程序中
         if 'web_cookies' in data:
             data['web_cookies'] = {}
             changed = True
