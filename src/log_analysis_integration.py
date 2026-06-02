@@ -146,16 +146,18 @@ def _extract_time_from_task(task: "TeambitionTask") -> Optional[datetime]:
         except ValueError:
             pass
 
-    # 1.5 DRC 文件名中的时间戳（如 record_20260602_155412_...）
+    # 1.5 DRC 文件名中的时间戳（如 record_20260602_155412_...）——机器本地时间（北京）
     m = re.search(r'record[_-](\d{8})[_-](\d{6})', search_text)
     if m:
         try:
             date_str = m.group(1)  # 20260602
             time_str = m.group(2)  # 155412
-            dt = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
-            # DRC 文件名时间戳是 UTC
-            utc_dt = dt.replace(tzinfo=timezone.utc)
-            logger.info("从 DRC 文件名提取时间: %s UTC", utc_dt.strftime("%Y-%m-%d %H:%M:%S"))
+            dt_bj = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
+            # DRC 文件名使用的是机器本地时间（北京时间），转 UTC
+            utc_dt = (dt_bj - timedelta(hours=8)).replace(tzinfo=timezone.utc)
+            logger.info("从 DRC 文件名提取时间: %s 北京时间 → %s UTC",
+                        dt_bj.strftime("%Y-%m-%d %H:%M:%S"),
+                        utc_dt.strftime("%Y-%m-%d %H:%M"))
             return utc_dt
         except ValueError:
             pass

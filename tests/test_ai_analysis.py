@@ -131,8 +131,8 @@ class TestDRCTimeExtraction:
         })()
         t = _extract_time_from_task(task)
         assert t is not None
-        assert t.day == 2, f"应为6月2日, 实为{t.day}日"
-        assert t.hour == 15, f"应为15:54, 实为{t.hour}:{t.minute}"
+        assert t.day == 2
+        assert t.hour == 7  # 15:54 北京 → 07:54 UTC
 
     def test_text_time_fallback(self):
         from src.log_analysis_integration import _extract_time_from_task
