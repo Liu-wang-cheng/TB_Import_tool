@@ -1019,28 +1019,6 @@ class SyncEngine:
         return False
 
     @staticmethod
-    def _convert_to_cst(dt_str: str) -> str:
-        """将 ISO 8601 时间字符串转为北京时间 YYYY-MM-DD HH:mm"""
-        if not dt_str:
-            return ""
-        try:
-            # 处理带 Z 后缀的 UTC 格式
-            dt_str = dt_str.strip()
-            if dt_str.endswith("Z"):
-                dt_str = dt_str[:-1] + "+00:00"
-            # Python 3.7+ 支持 fromisoformat
-            dt = datetime.fromisoformat(dt_str)
-            # 如果没有时区信息，假设是 UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            # 转为 UTC+8
-            cst = dt.astimezone(timezone(timedelta(hours=8)))
-            return cst.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            # 降级：直接截断字符串
-            return dt_str[:16].replace("T", " ") if len(dt_str) >= 16 else dt_str
-
-    @staticmethod
     def _normalize_dt(dt_str: str) -> str:
         """将各种时间格式统一为 CST 的 YYYY-MM-DD HH:MM:SS，用于比较"""
         if not dt_str:
@@ -1072,7 +1050,10 @@ class SyncEngine:
         中文名: 致命→S, 严重→A, 一般→B, 建议/轻微→C
         数字: 1→A, 2→B, 3→C, 4→C
         字母: A→A, B→B, C→C, D/S→C"""
-        s = str(severity)
+        s = str(severity).strip() if severity else ""
+        if not s:
+            logger.warning("严重程度为空，默认返回C")
+            return "C"
         mapped = self.severity_map.get(s)
         if mapped is not None:
             return mapped
@@ -1339,8 +1320,8 @@ class SyncEngine:
                         pass
                 found_time = extract_datetime(bug.steps, reference_date)
             if not found_time and bug.openedDate:
-                # openedDate 本身就是北京时间，直接取前16字符 YYYY-MM-DD HH:MM
-                dt_str = bug.openedDate.strip()
+                # openedDate 本身就是北京时间，提取 YYYY-MM-DD HH:MM
+                dt_str = bug.openedDate.strip().replace("T", " ")
                 if len(dt_str) >= 16:
                     found_time = dt_str[:16]
             if found_time:
