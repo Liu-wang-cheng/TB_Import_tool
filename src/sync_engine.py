@@ -1652,7 +1652,7 @@ class SyncEngine:
         for idx, f in enumerate(bug.files, 1):
             file_id = str(f.get("id", ""))
             filename = f.get("title", f.get("name", ""))
-            size = f.get("size", 0)
+            size = int(f.get("size", 0) or 0)
             if not file_id:
                 continue
             # 跳过已上传的附件（按文件名匹配）

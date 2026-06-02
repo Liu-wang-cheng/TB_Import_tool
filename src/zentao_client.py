@@ -263,6 +263,34 @@ class ZentaoClient:
             inner = json.loads(inner)
         return inner
 
+    def _cloud_json_post(self, path: str, data: dict = None) -> dict:
+        """调用禅道云版 Web JSON 端点（POST），返回内层 data dict"""
+        self._ensure_session()
+        url = f"{self.base_url}/{path}"
+        resp = self._http.post(url, data=data, timeout=30)
+        if resp.status_code >= 400:
+            raise ZentaoAPIError(resp.status_code, resp.text[:500], f"/{path}")
+        time.sleep(self.api_delay)
+        text = resp.text.strip()
+        if text.startswith("{") and "}{" in text:
+            depth = 0
+            for i, c in enumerate(text):
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        text = text[:i + 1]
+                        break
+        try:
+            inner = json.loads(text)
+        except (ValueError, json.JSONDecodeError):
+            return {}
+        result = inner.get("data", inner)
+        if isinstance(result, str):
+            result = json.loads(result)
+        return result
+
     def _cloud_get_browse(self, product_id: int, params: dict = None) -> dict:
         """获取云版 Bug 浏览页 JSON 数据（含 bugs、modules、users 等），结果缓存
 
@@ -685,7 +713,9 @@ class ZentaoClient:
 
     def update_bug_title(self, bug_id: int, new_title: str):
         if self._cloud_session_auth:
-            logger.warning("云版暂不支持修改 Bug 标题，请手动操作 (Bug#%d)", bug_id)
+            self._cloud_json_post(f"bug-edit-{bug_id}.json",
+                                  data={"title": new_title})
+            logger.info("云版 Bug#%d 标题已更新: %s", bug_id, new_title)
             return
         path = f"/api.php/v1/bugs/{bug_id}"
         self._request("PUT", path, json={"title": new_title})
