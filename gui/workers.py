@@ -500,14 +500,18 @@ class UpdateDownloadWorker(QThread):
 
             # 按镜像速度顺序构建下载 URL 列表
             download_urls = []
-            seen_prefixes = set()
+            seen_urls = set()
             for mirror in [self.best_mirror] + [
                 m for m in self.sorted_mirrors if m.success and m != self.best_mirror
             ]:
                 url = build_download_url(info.download_url, mirror.download_prefix)
-                if url not in seen_prefixes:
+                if url not in seen_urls:
                     download_urls.append((mirror.name, url))
-                    seen_prefixes.add(url)
+                    seen_urls.add(url)
+            # 始终追加 GitHub 直连作为最终兜底（镜像可能不代理 Release 大文件）
+            if info.download_url not in seen_urls:
+                download_urls.append(("GitHub直连", info.download_url))
+                seen_urls.add(info.download_url)
 
             downloaded = False
             last_error = ""
