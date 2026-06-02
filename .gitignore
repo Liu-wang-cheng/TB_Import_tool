@@ -57,3 +57,10 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# 集成测试凭据（不入库）
+tests/.env_test.json
+
+# 诊断/探针脚本（含临时凭据，不入库）
+tools/test_download.py
+tools/probe_instances.py
