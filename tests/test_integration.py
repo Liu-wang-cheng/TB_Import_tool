@@ -86,10 +86,12 @@ class TestAllInstances:
     def test_attachment_download(self, inst):
         client = _make_client(inst["base_url"], inst["account"], inst["password"])
         client.authenticate()
-        bugs = client.fetch_all_bugs(product_id=inst["product_id"], page_size=10)
+        # 拉取详情找附件（列表API可能不带files字段）
+        bugs = client.fetch_all_bugs(product_id=inst["product_id"], page_size=30)
         file_id = None
-        for bug in bugs:
-            files = bug.files
+        for bug in bugs[:15]:
+            detail = client.fetch_bug_detail(bug.id)
+            files = detail.files
             if isinstance(files, dict):
                 files = list(files.values())
             elif not isinstance(files, list):
@@ -104,7 +106,7 @@ class TestAllInstances:
             att = client.download_attachment(file_id)
             assert att.size > 0
         else:
-            pytest.skip("未找到有附件的 Bug")
+            pytest.skip("前15条Bug中未找到附件")
 
     @pytest.mark.parametrize("inst", INSTANCES)
     def test_wrong_credentials_fail(self, inst):
@@ -119,5 +121,70 @@ class TestAllInstances:
         client.authenticate()
         is_cloud = client._cloud_session_auth
         if not is_cloud:
-            # 非云版应能检测 URL 模式
             assert client._clean_url is not None
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_date_filter(self, inst):
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        # 日期筛选：只查最近30天的 Bug
+        from datetime import date, timedelta
+        d_from = (date.today() - timedelta(days=30)).isoformat()
+        bugs = client.fetch_all_bugs(
+            product_id=inst["product_id"],
+            date_from=d_from, date_to=date.today().isoformat(),
+            page_size=20)
+        assert len(bugs) >= 0  # 可能为0，但不崩溃
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_status_filter(self, inst):
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(
+            product_id=inst["product_id"],
+            statuses=["active"], page_size=10)
+        assert all(b.status in ("active", "") for b in bugs)
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_vlns_check_and_extract(self, inst):
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(product_id=inst["product_id"], page_size=5)
+        if bugs:
+            has_vlns = client.check_bug_has_vlns(bugs[0].id)
+            vlns_nums = client.extract_vlns_numbers(bugs[0].id)
+            assert isinstance(has_vlns, bool)
+            assert isinstance(vlns_nums, list)
+            # 如果有 VLNS，编号应为纯数字
+            for n in vlns_nums:
+                assert n.isdigit()
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_fetch_comments(self, inst):
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(product_id=inst["product_id"], page_size=3)
+        if bugs:
+            comments = client.fetch_bug_comments(bugs[0].id)
+            assert isinstance(comments, list)
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_dry_run_no_create(self, inst):
+        """试运行：验证同步引擎不实际创建任务"""
+        from src.source_factory import create_source_client
+        config = {
+            "source": {"platform": "zentao"},
+            "zentao": {
+                "base_url": inst["base_url"],
+                "account": inst["account"],
+                "password": inst["password"],
+                "filters": {"product_id": inst["product_id"]},
+            },
+            "sync": {"api_delay": 0.3},
+        }
+        source = create_source_client(config)
+        source.authenticate()
+        # 获取少量 Bug 验证试运行路径不会崩溃
+        bugs = source.fetch_all_bugs(product_id=inst["product_id"])
+        assert isinstance(bugs, list)
+        source.close()

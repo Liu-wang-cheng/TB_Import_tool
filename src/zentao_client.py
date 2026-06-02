@@ -90,6 +90,9 @@ class ZentaoClient:
         云版不支持 Token 认证时自动切换到 Session 认证并验证登录结果。
         """
         self._ensure_token()
+        # 探测 URL 模式（clean/dynamic），后续文件下载需要
+        if not self._cloud_session_auth:
+            self._probe_clean_url()
         # 云版在 _ensure_token 中已标记 _cloud_session_auth，
         # 此处需额外调用 _ensure_session 验证账号密码是否正确，
         # 避免 credential 错误时静默返回"认证成功"
