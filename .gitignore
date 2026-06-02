@@ -64,3 +64,11 @@ tests/.env_test.json
 # 诊断/探针脚本（含临时凭据，不入库）
 tools/test_download.py
 tools/probe_instances.py
+tools/test_ai_analysis_bug16376.py
+
+# 文档生成工具/截图（辅助工具，不入库）
+tools/capture_screenshots.py
+tools/generate_tutorial.py
+tools/generate_tutorial_simple.py
+tools/generate_tutorial_word.py
+tools/translate_mrt.py
