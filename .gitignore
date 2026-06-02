@@ -1,5 +1,6 @@
 # 凭证和配置（含敏感信息，不提交）
 configs/*.yaml
+!configs/dingtalk.yaml
 
 # 训练数据和模型（协同学习共享文件除外）
 data/*
