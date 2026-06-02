@@ -966,14 +966,14 @@ class ZentaoClient:
     # ── 文件下载 ──────────────────────────────────────
 
     def _download_file(self, url_stem: str, timeout: int = 60) -> requests.Response:
-        """下载文件，依次尝试 cookie / session / token / 无认证"""
+        """下载文件，依次尝试 cookie / session / token / login-session / 无认证"""
         # 云版：cookie 认证
         if self._cloud_session_auth:
             return self._http.get(f"{self.base_url}/{url_stem}", timeout=timeout)
 
-        # 自建版：依次尝试 session → token → 无认证
+        # 自建版：依次尝试多种认证方式
         tried = []
-        # 1) session 认证
+        # 1) /api-getsessionid 获取 session
         try:
             self._ensure_session()
             if self._session_id:
@@ -996,7 +996,30 @@ class ZentaoClient:
                 return resp
             tried.append(f"token={resp.status_code}")
 
-        # 3) 无认证兜底
+        # 3) 登录页模拟获取 session cookie
+        try:
+            login_url = f"{self.base_url}/user-login.html"
+            login_resp = self._http.get(login_url, timeout=timeout)
+            if login_resp.status_code == 200:
+                # 获取登录页返回的 session cookie
+                login_data = {
+                    "account": self.account,
+                    "password": self.password,
+                }
+                login_resp2 = self._http.post(
+                    f"{self.base_url}/user-login.html",
+                    data=login_data, timeout=timeout,
+                    allow_redirects=True)
+                if login_resp2.status_code == 200:
+                    resp = self._http.get(
+                        f"{self.base_url}/{url_stem}", timeout=timeout)
+                    if resp.status_code == 200:
+                        return resp
+                    tried.append(f"login-session={resp.status_code}")
+        except Exception:
+            tried.append("login-session=fail")
+
+        # 4) 无认证兜底
         resp = self._http.get(f"{self.base_url}/{url_stem}", timeout=timeout)
         if resp.status_code != 200:
             logger.warning("文件下载失败 %s (尝试: %s)", url_stem, ", ".join(tried))
