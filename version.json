@@ -1,8 +1,8 @@
 {
   "version": "1.9",
-  "sha256": "c9cdbb69e5351d184ee275de53ea1b463ad91e387229101cd171d6ea70a0e049",
+  "sha256": "8b974e73f0889b0d913e97f07112ef38b8f38359d7a645419cc24f061a2c0696",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v1.9/SmartDefectPlatform.zip",
   "release_date": "2026-06-02",
-  "release_notes": "v1.9: 附件下载适配clean/dynamic URL模式(4种认证)、云版标题修改(cloud JSON POST)、SN提取覆盖非HQ格式(文件名模式)、VLNS/CPAX任务ID精确搜索(uniqueId API)、HTML表格/列表→TB文本格式、云版/自建版认证错误凭证检测、YAML标量→列表null残留修复、自动更新GitHub直连兜底等30+项修复",
+  "release_notes": "v1.9: 附件下载适配clean/dynamic URL(4种认证)、云版标题修改、SN提取覆盖4类格式(HQ/文件名/DRC)、AI子开关置灰、YAML null残留、CPAX去重、VLNS精确搜索、HTML表格转换、自动更新GitHub直连兜底、184单元+33集成测试",
   "min_version": "1.0"
 }
