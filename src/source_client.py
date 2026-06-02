@@ -42,6 +42,10 @@ class SourceClient(Protocol):
         """检查缺陷备注/历史中是否包含 TB 标记（VLNS / CPAX 等）"""
         ...
 
+    def extract_vlns_numbers(self, bug_id: int) -> List[str]:
+        """从备注/历史中提取 VLNS/CPAX 编号列表（用于精确搜索 TB 任务）"""
+        ...
+
     def fetch_bug_comments(self, bug_id: int) -> List[dict]:
         """获取评论/备注列表，返回 [{actor, date, action, comment}, ...]"""
         ...

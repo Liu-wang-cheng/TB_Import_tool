@@ -687,12 +687,6 @@ class SyncEngine:
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
                                   existing.taskId, "已存在")
 
-            # 检查禅道备注/历史记录中是否含 VLNS 或 CPAX
-            # 仅当 TB 仍存在对应任务时才跳过（避免 TB 任务已删除后无法重新导入）
-            if self.source.check_bug_has_vlns(bug.id):
-                logger.warning("[提醒] Bug#%d 备注中含 VLNS/CPAX 历史标记，"
-                             "但 TB 未找到对应任务，将继续导入", bug.id)
-
             # 获取完整详情
             full_bug = self.source.fetch_bug_detail(bug.id)
 
@@ -926,12 +920,29 @@ class SyncEngine:
         # Tier 1: 精确匹配 【禅道{id}】
         tag = f"【禅道{bug.id}】"
         results = self.teambition.search_tasks(tag)
-        # 过滤已归档任务，且所属项目必须匹配
         active = [t for t in results
                   if not getattr(t, 'isArchived', False)
                   and self._match_project(t, self.project_name)]
         if active:
             return active[0]
+
+        # Tier 1.5: VLNS/CPAX 编号精确搜索
+        vlns_numbers = self.source.extract_vlns_numbers(bug.id)
+        for num in vlns_numbers:
+            results = self.teambition.search_tasks(
+                f"VLNS-{num}") or []
+            results += self.teambition.search_tasks(
+                f"CPAX-{num}") or []
+            for task in results:
+                if getattr(task, 'isArchived', False):
+                    continue
+                if not self._match_project(task, self.project_name):
+                    continue
+                if task.taskIdentifier == f"VLNS-{num}" or \
+                   task.taskIdentifier == f"CPAX-{num}":
+                    logger.info("VLNS/CPAX 编号精确匹配: %s → TB %s",
+                                num, task.taskId[:16])
+                    return task
 
         # Tier 2: 标题模糊匹配
         base_title = bug.get_base_title()

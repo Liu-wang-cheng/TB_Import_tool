@@ -47,6 +47,9 @@ class ZentaoAdapter:
     def check_bug_has_vlns(self, bug_id: int) -> bool:
         return self._client.check_bug_has_vlns(bug_id)
 
+    def extract_vlns_numbers(self, bug_id: int) -> List[str]:
+        return self._client.extract_vlns_numbers(bug_id)
+
     def fetch_bug_comments(self, bug_id: int) -> List[dict]:
         return self._client.fetch_bug_comments(bug_id)
 

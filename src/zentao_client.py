@@ -598,17 +598,22 @@ class ZentaoClient:
 
     def check_bug_has_vlns(self, bug_id: int) -> bool:
         """检查 Bug 的备注/历史记录中是否包含 VLNS 或 CPAX 文本"""
+        return len(self.extract_vlns_numbers(bug_id)) > 0
+
+    def extract_vlns_numbers(self, bug_id: int) -> List[str]:
+        """从 Bug 备注/历史记录中提取 VLNS/CPAX 编号列表（去重）"""
         try:
             bug_data = self._get_bug_raw(bug_id, retry_on_401=False)
             if not bug_data:
-                return False
+                return []
             actions = bug_data.get("actions", [])
             if not isinstance(actions, list):
-                return False
-            return bool(re.search(r'(?:VLNS|CPAX)-\d+', str(actions)))
+                return []
+            matches = re.findall(r'(?:VLNS|CPAX)-(\d+)', str(actions))
+            return list(dict.fromkeys(matches))  # 去重保序
         except Exception as e:
-            logger.debug("检查 Bug#%d 历史记录失败: %s", bug_id, e)
-        return False
+            logger.debug("提取 Bug#%d VLNS/CPAX 编号失败: %s", bug_id, e)
+        return []
 
     def fetch_bug_comments(self, bug_id: int) -> List[dict]:
         """获取 Bug 的备注/评论列表
