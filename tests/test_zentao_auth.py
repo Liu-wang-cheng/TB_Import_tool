@@ -369,3 +369,130 @@ class TestPassesFiltersSelfHosted:
         )
         assert client._passes_filters(
             bug, None, None, None, ["me"])
+
+
+class TestFileDownload:
+    """_download_file 多模式下载 & URL 探测"""
+
+    def make_client(self, cloud=False, clean_url=None):
+        from src.zentao_client import ZentaoClient
+        c = ZentaoClient.__new__(ZentaoClient)
+        c.base_url = "http://test.local"
+        c.account = "testuser"
+        c.password = "testpass"
+        c._cloud_session_auth = cloud
+        c._clean_url = clean_url
+        c._session_logged_in = True
+        c._session_id = "sid123"
+        c._token = "tok456"
+        c.api_delay = 0
+        c._http = Mock()
+        return c
+
+    def test_cloud_download_uses_cookie(self):
+        c = self.make_client(cloud=True)
+        c._http.get.return_value = Mock(
+            status_code=200, content=b"filedata",
+            headers={"Content-Type": "application/zip"})
+        att = c.download_attachment(123, "test.zip")
+        assert att.size == 8
+
+    def test_build_url_dynamic(self):
+        c = self.make_client(clean_url=False)
+        result = c._build_url(
+            "/file-download-1.html",
+            "/index.php?m=file&f=download&fileID=1")
+        assert "index.php" in result
+
+    def test_build_url_clean(self):
+        c = self.make_client(clean_url=True)
+        result = c._build_url(
+            "/file-download-1.html",
+            "/index.php?m=file&f=download&fileID=1")
+        assert result == "/file-download-1.html"
+
+    def test_build_url_session(self):
+        c = self.make_client(clean_url=False)
+        result = c._build_url(
+            "/api-getsessionid.json",
+            "/index.php?m=api&f=getsessionid")
+        assert "index.php" in result
+
+    def test_build_url_login(self):
+        c = self.make_client(clean_url=False)
+        result = c._build_url(
+            "/user-login.json",
+            "/index.php?m=user&f=login")
+        assert "index.php" in result
+
+    def test_download_attachment_uses_build_url(self):
+        c = self.make_client(clean_url=False)
+        c._http.get.return_value = Mock(
+            status_code=200, content=b"x" * 100,
+            headers={"Content-Type": "application/zip"})
+        att = c.download_attachment(123, "test.zip")
+        assert att.size == 100
+
+    def test_download_image_uses_build_url(self):
+        c = self.make_client(clean_url=False)
+        c._http.get.return_value = Mock(
+            status_code=200, content=b"img",
+            headers={"Content-Type": "image/png"})
+        att = c.download_image(456)
+        assert att.filename == "image_456.png"
+
+    def test_download_attachment_404_raises(self):
+        c = self.make_client(clean_url=False)
+        c._http.get.return_value = Mock(status_code=404)
+        with pytest.raises(ZentaoAPIError):
+            c.download_attachment(1, "f.zip")
+
+    def test_size_conversion_int(self):
+        """size 字段为字符串时正确转换为 int"""
+        c = self.make_client(clean_url=False)
+        c._http.get.return_value = Mock(
+            status_code=200, content=b"x" * 1024,
+            headers={"Content-Type": "application/octet-stream"})
+        att = c.download_attachment(1, "test.bin")
+        assert att.size == 1024
+        assert isinstance(att.size, int)
+
+
+class TestFileUpload:
+    """TB 附件上传"""
+
+    def test_upload_missing_credentials_returns_none(self):
+        """upload-token 缺少必要参数时返回 None"""
+        from src.models import AttachmentFile
+        from src.teambition_client import TeambitionClient
+        c = TeambitionClient(
+            app_id="test_app", app_secret="test_secret",
+            org_id="org123", project_id="proj456",
+        )
+        c._access_token = "test_token"
+        # 返回不完整的 upload-token（缺少 Bucket/Key）
+        c._request = Mock(return_value={"result": {
+            "downloadUrl": "",
+            "token": "",
+            "upload": {},
+            "sdk": {"credentials": {}},
+        }})
+        att = AttachmentFile("test.drc", "application/octet-stream",
+                             b"data", 4)
+        result = c.upload_attachment("task_001", att)
+        assert result is None
+
+    def test_upload_api_error_returns_none(self):
+        from src.models import AttachmentFile
+        from src.teambition_client import TeambitionClient
+        c = TeambitionClient(
+            app_id="test_app", app_secret="test_secret",
+            org_id="org123", project_id="proj456",
+        )
+        c._access_token = "test_token"
+        c._request = Mock(side_effect=Exception("Upload failed"))
+
+        att = AttachmentFile("test.drc", "application/octet-stream",
+                             b"data", 4)
+        result = c.upload_attachment("task_001", att)
+        assert result is None
