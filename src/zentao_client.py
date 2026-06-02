@@ -32,6 +32,7 @@ class ZentaoClient:
         self._token: Optional[str] = None
         self._session_id: Optional[str] = None
         self._session_logged_in = False
+        self._clean_url = None  # None=未检测, True=伪静态, False=index.php模式
         self._cloud_session_auth = False  # 禅道云版：用 session 代替 token 认证
         self._branch_id = 0  # 分支ID，云版 URL 解析时设置，自建版忽略
         self._http = requests.Session()
@@ -59,6 +60,29 @@ class ZentaoClient:
     def set_branch_id(self, branch_id: int):
         """设置分支ID（云版 URL 解析时使用）"""
         self._branch_id = branch_id
+
+    def _probe_clean_url(self) -> bool:
+        """探测禅道实例是否启用 clean URL（伪静态）"""
+        if self._clean_url is not None:
+            return self._clean_url
+        try:
+            resp = self._http.get(
+                f"{self.base_url}/index.php?m=api&f=getsessionid",
+                timeout=5)
+            self._clean_url = (resp.status_code != 200)
+        except Exception:
+            self._clean_url = False
+        logger.debug("禅道 URL 模式: %s",
+                     "伪静态(clean)" if self._clean_url else "index.php(动态)")
+        return self._clean_url
+
+    def _build_url(self, clean: str, dynamic: str) -> str:
+        """根据 URL 模式构建正确的请求路径"""
+        if self._cloud_session_auth:
+            return clean
+        if self._probe_clean_url():
+            return clean
+        return dynamic
 
     def authenticate(self):
         """认证并获取 token（公共接口）
@@ -125,12 +149,18 @@ class ZentaoClient:
     def _ensure_session(self):
         if self._session_logged_in:
             return
-        # 获取 session ID
-        url = f"{self.base_url}/api-getsessionid.json"
+        # 获取 session ID（兼容伪静态和动态URL）
+        session_path = self._build_url(
+            "/api-getsessionid.json",
+            "/index.php?m=api&f=getsessionid")
+        url = f"{self.base_url}{session_path}"
         resp = self._http.get(url)
         if resp.status_code != 200:
-            raise ZentaoAPIError(resp.status_code, "获取session失败", "/api-getsessionid")
-        data = resp.json()
+            raise ZentaoAPIError(resp.status_code, "获取session失败", session_path)
+        try:
+            data = resp.json()
+        except Exception:
+            raise ZentaoAPIError(resp.status_code, "获取session失败(非JSON)", session_path)
         # data["data"] 可能是 JSON 字符串或 dict
         inner = data.get("data", {})
         if isinstance(inner, str):
@@ -145,7 +175,10 @@ class ZentaoClient:
             raise ZentaoAPIError(resp.status_code, f"未解析到sessionID: {resp.text[:200]}", "/api-getsessionid")
 
         # 用 session 登录（POST 避免密码暴露在 URL 参数中）
-        url = f"{self.base_url}/user-login.json"
+        login_path = self._build_url(
+            "/user-login.json",
+            "/index.php?m=user&f=login")
+        url = f"{self.base_url}{login_path}"
         resp = self._http.post(url, data={
             "account": self.account,
             "password": self.password,
@@ -965,11 +998,13 @@ class ZentaoClient:
 
     # ── 文件下载 ──────────────────────────────────────
 
-    def _download_file(self, url_stem: str, timeout: int = 60) -> requests.Response:
-        """下载文件，依次尝试 cookie / session / token / login-session / 无认证"""
+    def _download_file(self, file_stem: str, timeout: int = 60) -> requests.Response:
+        """下载文件，依次尝试 cookie / session / token / login-session / 无认证
+        file_stem: 不含 base_url 的相对路径（由调用方通过 _build_url 构建）
+        """
         # 云版：cookie 认证
         if self._cloud_session_auth:
-            return self._http.get(f"{self.base_url}/{url_stem}", timeout=timeout)
+            return self._http.get(f"{self.base_url}/{file_stem}", timeout=timeout)
 
         # 自建版：依次尝试多种认证方式
         tried = []
@@ -978,7 +1013,7 @@ class ZentaoClient:
             self._ensure_session()
             if self._session_id:
                 resp = self._http.get(
-                    f"{self.base_url}/{url_stem}",
+                    f"{self.base_url}/{file_stem}",
                     params={"zentaosid": self._session_id}, timeout=timeout)
                 if resp.status_code == 200:
                     return resp
@@ -990,7 +1025,7 @@ class ZentaoClient:
         self._ensure_token()
         if self._token:
             resp = self._http.get(
-                f"{self.base_url}/{url_stem}",
+                f"{self.base_url}/{file_stem}",
                 headers={"Token": self._token}, timeout=timeout)
             if resp.status_code == 200:
                 return resp
@@ -998,21 +1033,19 @@ class ZentaoClient:
 
         # 3) 登录页模拟获取 session cookie
         try:
-            login_url = f"{self.base_url}/user-login.html"
+            login_path = self._build_url(
+                "/user-login.html",
+                "/index.php?m=user&f=login")
+            login_url = f"{self.base_url}{login_path}"
             login_resp = self._http.get(login_url, timeout=timeout)
             if login_resp.status_code == 200:
-                # 获取登录页返回的 session cookie
-                login_data = {
-                    "account": self.account,
-                    "password": self.password,
-                }
                 login_resp2 = self._http.post(
-                    f"{self.base_url}/user-login.html",
-                    data=login_data, timeout=timeout,
-                    allow_redirects=True)
+                    login_url,
+                    data={"account": self.account, "password": self.password},
+                    timeout=timeout, allow_redirects=True)
                 if login_resp2.status_code == 200:
                     resp = self._http.get(
-                        f"{self.base_url}/{url_stem}", timeout=timeout)
+                        f"{self.base_url}/{file_stem}", timeout=timeout)
                     if resp.status_code == 200:
                         return resp
                     tried.append(f"login-session={resp.status_code}")
@@ -1020,14 +1053,17 @@ class ZentaoClient:
             tried.append("login-session=fail")
 
         # 4) 无认证兜底
-        resp = self._http.get(f"{self.base_url}/{url_stem}", timeout=timeout)
+        resp = self._http.get(f"{self.base_url}/{file_stem}", timeout=timeout)
         if resp.status_code != 200:
-            logger.warning("文件下载失败 %s (尝试: %s)", url_stem, ", ".join(tried))
+            logger.warning("文件下载失败 %s (尝试: %s)", file_stem, ", ".join(tried))
         return resp
 
     def download_attachment(self, file_id: int,
                             filename: str = "") -> AttachmentFile:
-        resp = self._download_file(f"file-download-{file_id}.html")
+        path = self._build_url(
+            f"/file-download-{file_id}.html",
+            f"/index.php?m=file&f=download&fileID={file_id}")
+        resp = self._download_file(path.lstrip("/"))
         if resp.status_code != 200:
             raise ZentaoAPIError(resp.status_code, "下载附件失败",
                                  f"/file-download-{file_id}")
@@ -1047,7 +1083,10 @@ class ZentaoClient:
         )
 
     def download_image(self, file_id: int) -> AttachmentFile:
-        resp = self._download_file(f"file-read-{file_id}.html")
+        path = self._build_url(
+            f"/file-read-{file_id}.html",
+            f"/index.php?m=file&f=read&fileID={file_id}")
+        resp = self._download_file(path.lstrip("/"))
         if resp.status_code != 200:
             raise ZentaoAPIError(resp.status_code, "下载图片失败",
                                  f"/file-read-{file_id}")
