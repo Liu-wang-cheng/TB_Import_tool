@@ -246,17 +246,25 @@ class TeambitionClient:
         return None
 
     def get_task_by_identifier(self, identifier: str) -> Optional[TeambitionTask]:
-        """按任务显示 ID（如 VLNS-66259）查找任务"""
+        """按任务显示 ID（如 VLNS-66259）精确查找任务"""
         pid = self.project_id
+        # TB API 的 uniqueId 参数只接受纯数字，去掉前缀
+        num = identifier.replace("VLNS-", "").replace("CPAX-", "")
         data = self._request(
             "GET", f"/v3/project/{pid}/task/query",
-            params={"uniqueId": identifier, "pageSize": 1},
+            params={"uniqueId": num, "pageSize": 5},
         )
         result = data.get("result", [])
-        if isinstance(result, list) and result:
-            return self._parse_task(result[0])
+        if isinstance(result, list):
+            for item in result:
+                task = self._parse_task(item)
+                # TB 存储的是纯数字，需精确比对
+                if task and task.taskIdentifier == num:
+                    return task
         elif isinstance(result, dict) and result:
-            return self._parse_task(result)
+            task = self._parse_task(result)
+            if task and task.taskIdentifier == num:
+                return task
         return None
 
     def search_tasks(self, keyword: str,

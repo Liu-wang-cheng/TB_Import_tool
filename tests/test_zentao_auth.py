@@ -496,3 +496,47 @@ class TestFileUpload:
                              b"data", 4)
         result = c.upload_attachment("task_001", att)
         assert result is None
+
+
+class TestGetTaskByIdentifier:
+    """get_task_by_identifier 精确匹配"""
+
+    def _make_tb_client(self):
+        from src.teambition_client import TeambitionClient
+        c = TeambitionClient(
+            app_id="t", app_secret="s", org_id="o", project_id="p")
+        c._access_token = "tok"
+        return c
+
+    def _make_task_dict(self, **kwargs):
+        d = {"id": "t1", "taskId": "t1", "uniqueId": "66352",
+             "content": "bug", "note": "", "priority": 0, "executorId": "",
+             "tagIds": [], "customfields": [], "taskflowstatusId": "s1",
+             "created": "", "updated": "", "sfcId": "s", "isArchived": False}
+        d.update(kwargs)
+        return d
+
+    def test_exact_match_returns_task(self):
+        c = self._make_tb_client()
+        c._request = Mock(return_value={"result": [
+            self._make_task_dict(uniqueId=66352)]})
+        task = c.get_task_by_identifier("VLNS-66352")
+        assert task is not None
+        assert task.taskIdentifier == "66352"
+        assert task.content == "bug"
+
+    def test_partial_match_rejected(self):
+        c = self._make_tb_client()
+        c._request = Mock(return_value={"result": [
+            self._make_task_dict(uniqueId=66365)]})
+        task = c.get_task_by_identifier("VLNS-66352")
+        assert task is None
+
+    def test_empty_result_returns_none(self):
+        from src.teambition_client import TeambitionClient
+        c = TeambitionClient(
+            app_id="t", app_secret="s", org_id="o", project_id="p")
+        c._access_token = "tok"
+        c._request = Mock(return_value={"result": []})
+        task = c.get_task_by_identifier("VLNS-99999")
+        assert task is None
