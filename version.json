@@ -1,8 +1,8 @@
 {
   "version": "2.0",
-  "sha256": "69ada9118ec3409a089c7a2c3c2d9464eeb35758ccb6c10df3c7e8ab3f3294ff",
+  "sha256": "36c733bd53c69955b82af2279d9331151fe9813101bea9ad64f0db119a6013cd",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.0/SmartDefectPlatform.zip",
   "release_date": "2026-06-03",
-  "release_notes": "v2.0: 复现概率从禅道frequency读取+ZentaoBug补充字段+回归测试+严重程度配置更新",
+  "release_notes": "v2.0: get_task_by_identifier精确匹配+TBAPI模糊查询绕过+频率字段+严重程度配置+代码审查修复+207单元测试",
   "min_version": "1.0"
 }
