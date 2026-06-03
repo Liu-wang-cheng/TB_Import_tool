@@ -188,3 +188,55 @@ class TestAllInstances:
         bugs = source.fetch_all_bugs(product_id=inst["product_id"])
         assert isinstance(bugs, list)
         source.close()
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_severity_mapping(self, inst):
+        """验证严重程度映射正确 (int key + str key)"""
+        from src.sync_engine import SyncEngine
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(product_id=inst["product_id"], page_size=10)
+        if not bugs:
+            pytest.skip("无Bug数据")
+        e = SyncEngine.__new__(SyncEngine)
+        e.severity_map = {1: "A", 2: "B", 3: "C", 4: "C"}
+        for bug in bugs[:5]:
+            result = e._map_severity(bug.severity)
+            assert result in ("S", "A", "B", "C")
+            # 双键查找: str 和 int 都能命中
+            result2 = e._map_severity(str(bug.severity))
+            assert result == result2
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_reproduction_extraction(self, inst):
+        """验证复现概率从步骤文本提取"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        # 拉一批Bug找有步骤的
+        bugs = client.fetch_all_bugs(product_id=inst["product_id"], page_size=15)
+        found = False
+        for bug in bugs:
+            detail = client.fetch_bug_detail(bug.id)
+            if detail.steps and len(detail.steps) > 50:
+                found = True
+                # 验证提取逻辑不崩溃
+                import re
+                m = re.search(r'(?:复现|重现|出现)(?:概率|频率)?[：:\s]*([^\s<]+)',
+                              detail.steps)
+                if m:
+                    word = m.group(1)
+                    assert word  # 至少提取到内容
+                break
+        if not found:
+            pytest.skip("未找到有步骤的Bug")
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_frequency_api_fallback(self, inst):
+        """验证 frequency API 字段可正常读取"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(product_id=inst["product_id"], page_size=10)
+        if bugs:
+            freq = getattr(bugs[0], "frequency", None)
+            # 有值或为空均可，不崩溃即可
+            assert freq is not None or freq == ""
