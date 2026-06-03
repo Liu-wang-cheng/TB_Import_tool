@@ -1053,7 +1053,9 @@ class SyncEngine:
         if not s:
             logger.warning("严重程度为空，默认返回C")
             return "C"
-        mapped = self.severity_map.get(s)
+        # YAML 可能解析 key 为 int 或 str，双键查找
+        mapped = self.severity_map.get(s) or self.severity_map.get(
+            int(s) if s.isdigit() else s)
         if mapped is not None:
             return mapped
         # 没在 map 中的直接匹配字母等级
@@ -1291,8 +1293,28 @@ class SyncEngine:
         if self.cf_ids.get("reproduction"):
             repro_map = {"1": "必现", "2": "高概率", "3": "中概率", "4": "低概率",
                          "必现": "必现", "高概率": "高概率", "中概率": "中概率", "低概率": "低概率"}
-            raw = getattr(bug, "frequency", "") or ""
-            repro = repro_map.get(str(raw), self.default_reproduction)
+            repro = None
+            # 1) 优先从重现步骤文本中提取
+            import re as _re
+            steps_text = bug.steps or ""
+            m = _re.search(r'(?:复现|重现|出现)(?:概率|频率)?[：:\s]*([^\s<]+)',
+                          steps_text)
+            if not m:
+                m = _re.search(r'(?:必现|高概率|中概率|低概率|偶尔|随机|必现)',
+                              steps_text)
+            if m:
+                word = m.group(1) if m.lastindex else m.group(0)
+                repro = repro_map.get(word) or (
+                    repro_map.get(int(word)) if word.isdigit() else word)
+            # 2) API frequency 兜底
+            if not repro:
+                raw = getattr(bug, "frequency", "") or ""
+                s_raw = str(raw).strip()
+                repro = repro_map.get(s_raw) or (
+                    repro_map.get(int(s_raw)) if s_raw.isdigit() else None)
+            # 3) 配置默认值
+            if not repro:
+                repro = self.default_reproduction
             fields.append({
                 "cfId": self.cf_ids["reproduction"],
                 "value": [repro],

@@ -404,3 +404,33 @@ class TestSeverityMapping:
         e = self.make_engine()
         assert e._map_severity("未知") == "C"
         assert e._map_severity("") == "C"
+
+    def test_yaml_int_key(self):
+        """YAML 解析 {1: 'A'} 后 _map_severity('2') 应正确匹配"""
+        e = self.make_engine({1: "A", 2: "B", 3: "C", 4: "C"})
+        assert e._map_severity("1") == "A"
+        assert e._map_severity("2") == "B"
+        assert e._map_severity("3") == "C"
+        assert e._map_severity("4") == "C"
+
+    def test_reproduction_from_steps(self):
+        """复现概率优先从步骤文本提取"""
+        from src.sync_engine import SyncEngine
+        from src.models import ZentaoBug
+        e = SyncEngine.__new__(SyncEngine)
+        e.cf_ids = {"reproduction": "cf_repro"}
+        e.default_reproduction = "中概率"
+
+        # 测试从步骤提取
+        bug = ZentaoBug(
+            id=1, title="t", severity="2", pri="2", type="bug",
+            status="active", steps="复现概率：必现", assignedTo="",
+            assignedToAccount="", openedBy="", openedByAccount="",
+            openedDate="", product="", productName="", project="",
+            projectName="", module="", moduleName="", openedBuild="",
+            snCode="", frequency="", files=[],
+        )
+        fields = e._build_customfields(bug, "A", "test")
+        repro_cf = [f for f in fields if f["cfId"] == "cf_repro"]
+        assert len(repro_cf) == 1
+        assert repro_cf[0]["value"] == ["必现"]
