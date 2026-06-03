@@ -220,13 +220,14 @@ class TestBuildNote:
         engine = SyncEngine.__new__(SyncEngine)
         engine.severity_map = {"1": "S", "2": "A", "3": "B", "4": "C"}
         engine._html_to_text = SyncEngine._html_to_text
+        engine._clean_html_for_tb = SyncEngine._clean_html_for_tb
         engine._map_severity = lambda s: engine.severity_map.get(str(s), "B")
 
         note = engine._build_note(bug)
-        assert "<pre" in note
+        assert "<table" in note  # table preserved as HTML
         assert "步骤" in note
         assert "开机" in note
-        assert "<table" not in note  # table should be converted to text
+        assert "border-collapse" in note  # clean styling applied
 
     def test_note_empty_steps(self):
         bug = self.make_bug(steps="")

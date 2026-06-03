@@ -1420,12 +1420,12 @@ class SyncEngine:
         parts = []
         steps = bug.steps.strip()
         if steps:
-            # 将禅道 HTML 转换为 TB 兼容的纯文本格式
-            text = self._html_to_text(steps)
-            if text:
-                # 用 <pre> 包裹保留原始换行和间距，TB 渲染更可靠
-                parts.append(f"<pre style=\"white-space:pre-wrap;"
-                            f"font-family:inherit;\">{text}</pre>")
+            # 清理禅道 HTML 保留表格结构，TB 渲染更清晰
+            cleaned = self._clean_html_for_tb(steps)
+            if cleaned:
+                parts.append(
+                    '<div style="color:#1f2937;font-size:14px;'
+                    'line-height:1.8;">' + cleaned + '</div>')
 
         # 来源信息作为备注末尾的元数据
         severity_name = SEVERITY_NAMES.get(str(bug.severity), bug.severity)
@@ -1582,6 +1582,37 @@ class SyncEngine:
             return "\n".join(l for l in lines if l)
         except Exception:
             return html
+
+    @staticmethod
+    def _clean_html_for_tb(steps: str) -> str:
+        """清理禅道 HTML 保留表格结构，适配 TB 渲染"""
+        if not steps or "<" not in steps:
+            return steps
+        try:
+            soup = BeautifulSoup(steps, "html.parser")
+            # 移除 Zentao 的 inline styles, class, width 等
+            for tag in soup.find_all(True):
+                for attr in list(tag.attrs):
+                    if attr in ("style", "class", "width", "height",
+                                "cellpadding", "cellspacing", "border",
+                                "align", "valign", "colspan"):
+                        del tag[attr]
+                # span 无意义，保留文本
+                if tag.name == "span":
+                    tag.unwrap()
+            # 图片替换
+            for img in soup.find_all("img"):
+                img.replace_with("[图片]")
+            # 表格添加简洁样式
+            for table in soup.find_all("table"):
+                table["style"] = ("border-collapse:collapse;width:100%;"
+                                  "border:1px solid #d1d5db;")
+                for td in table.find_all(["td", "th"]):
+                    td["style"] = ("border:1px solid #d1d5db;padding:4px 8px;"
+                                   "text-align:left;vertical-align:top;")
+            return str(soup)
+        except Exception:
+            return steps
 
     def _replace_comment_media_with_filenames(
             self, comment: str, media_map: Dict[str, str],
