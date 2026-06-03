@@ -1,8 +1,8 @@
 {
   "version": "2.0",
-  "sha256": "950f24752441add413bdbcd43a9cb51175ab92bb34d8f7ad93c52ed75b8796a5",
+  "sha256": "80e1e876d9432d62694f25492425d3287dcc3b2dc8cb156761d51ba6210b2c58",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.0/SmartDefectPlatform.zip",
   "release_date": "2026-06-03",
-  "release_notes": "v2.0: severity双键查找+复现概率步骤文本提取+YAML int-key修复+精确匹配+209单元+42集成=251测试",
+  "release_notes": "v2.0: HTML表格保留+黑色字体+复现概率分数格式+附件限制移除+209测试",
   "min_version": "1.0"
 }
