@@ -37,7 +37,6 @@ class SyncEngine:
         self.dedup_threshold = sync_cfg.get("dedup_threshold", 0.8)
         self.batch_size = sync_cfg.get("batch_size", 20)
         self.sync_attachments = sync_cfg.get("sync_attachments", True)
-        self.max_attachment_size_mb = sync_cfg.get("max_attachment_size_mb", 50)
         self.dry_run = sync_cfg.get("dry_run", False)
         self.attachment_retries = sync_cfg.get("attachment_retries", 3)
         self.reactivate_closed = sync_cfg.get("reactivate_closed", False)
@@ -1292,17 +1291,24 @@ class SyncEngine:
             })
         if self.cf_ids.get("reproduction"):
             repro_map = {"1": "必现", "2": "高概率", "3": "中概率", "4": "低概率",
-                         "必现": "必现", "高概率": "高概率", "中概率": "中概率", "低概率": "低概率"}
+                         "必现": "必现", "高概率": "高概率", "中概率": "中概率", "低概率": "低概率",
+                         "1/1": "必现", "2/2": "必现", "2/3": "高概率", "1/2": "中概率",
+                         "1/3": "低概率", "0/1": "低概率"}
             repro = None
             # 1) 优先从重现步骤文本中提取
             import re as _re
             steps_text = bug.steps or ""
-            m = _re.search(r'(?:复现|重现|出现)(?:概率|频率)?[：:\s]*([^\s<]+)',
-                          steps_text)
-            if not m:
-                m = _re.search(r'(?:必现|高概率|中概率|低概率|偶尔|随机|必现)',
-                              steps_text)
+            # 先匹配分数格式（概率|1/1）
+            m = _re.search(r'概率[：:\s|]*(\d+/\d+)', steps_text)
             if m:
+                repro = repro_map.get(m.group(1))
+            if not repro:
+                m = _re.search(r'(?:复现|重现)(?:概率|频率)[：:\s]*([^\s<]+)',
+                              steps_text)
+            if not repro and not m:
+                m = _re.search(r'(?:必现|高概率|中概率|低概率|偶尔|随机)',
+                              steps_text)
+            if m and not repro:
                 word = m.group(1) if m.lastindex else m.group(0)
                 repro = repro_map.get(word) or (
                     repro_map.get(int(word)) if word.isdigit() else word)
@@ -1730,9 +1736,6 @@ class SyncEngine:
                 skipped += 1
                 continue
             size_mb = size / 1024 / 1024
-            if size > self.max_attachment_size_mb * 1024 * 1024:
-                logger.warning("附件过大跳过: %s (%.1f MB)", filename, size_mb)
-                continue
             logger.info("下载附件 [%d/%d]: %s (%.1f MB)",
                         idx, total_files, filename, size_mb)
 
