@@ -1289,9 +1289,13 @@ class SyncEngine:
                 "value": [severity],
             })
         if self.cf_ids.get("reproduction"):
+            repro_map = {"1": "必现", "2": "高概率", "3": "中概率", "4": "低概率",
+                         "必现": "必现", "高概率": "高概率", "中概率": "中概率", "低概率": "低概率"}
+            raw = getattr(bug, "frequency", "") or ""
+            repro = repro_map.get(str(raw), self.default_reproduction)
             fields.append({
                 "cfId": self.cf_ids["reproduction"],
-                "value": [self.default_reproduction],
+                "value": [repro],
             })
         if self.cf_ids.get("category"):
             fields.append({

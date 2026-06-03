@@ -1203,6 +1203,7 @@ class ZentaoClient:
             moduleName=module_name,
             openedBuild=build_info,
             snCode=sn_code,
+            frequency=str(data.get("frequency", "")),
             files=ZentaoClient._normalize_files(data.get("files", [])),
         )
 

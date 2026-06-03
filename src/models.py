@@ -69,6 +69,7 @@ class TeambitionTask:
     taskflowId: str = ""
     severity: str = ""
     taskType: str = ""
+    frequency: str = ""  # 复现概率 (1必现/2高概率/3中概率/4低概率)
     reproduction: str = ""
     defectCategory: str = ""
     project: str = ""
