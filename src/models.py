@@ -36,6 +36,7 @@ class ZentaoBug:
     moduleName: str = ""
     openedBuild: str = ""
     snCode: str = ""
+    frequency: str = ""
     files: list = field(default_factory=list)
 
     def get_base_title(self) -> str:

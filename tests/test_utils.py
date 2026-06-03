@@ -150,10 +150,28 @@ class TestModels:
             status="active", steps="", assignedTo="", assignedToAccount="",
             openedBy="", openedByAccount="", openedDate="",
             product="1", productName="", project="", projectName="",
-            module="", moduleName="", openedBuild="", snCode="", files=[],
+            module="", moduleName="", openedBuild="", snCode="",
+            frequency="", files=[],
         )
         assert bug.id == 1
         assert bug.title == "test"
+        assert bug.frequency == ""
+
+    def test_zentao_bug_all_fields_constructable(self):
+        """确保所有字段可构造（防止新增字段遗漏dataclass定义）"""
+        from src.models import ZentaoBug
+        bug = ZentaoBug(
+            id=60323, title="test bug", severity="2", pri="2", type="firmware",
+            status="active", steps="<p>steps</p>", assignedTo="童祝明",
+            assignedToAccount="tongzhuming", openedBy="陈达文",
+            openedByAccount="chendawen", openedDate="2026-06-03T01:19:27Z",
+            product="381", productName="RZW32-1BD", project="595",
+            projectName="RZW32-1BD", module="2091",
+            moduleName="EB技术设计阶段", openedBuild="1.6.43",
+            snCode="48HCNFCN0076X", frequency="2", files=[],
+        )
+        assert bug.snCode == "48HCNFCN0076X"
+        assert bug.frequency == "2"
 
     def test_attachment_file(self):
         from src.models import AttachmentFile
