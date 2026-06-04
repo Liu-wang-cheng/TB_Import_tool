@@ -152,6 +152,8 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
 
     # 统一清理（不带 HTML 剥离，保持纯文本 & 空白归一化）
     clean = clean_template_text(text, strip_html=False)
+    # 将 <br> 归一化为空格，避免模板格式中日期时间被 <br> 分隔导致匹配失败
+    clean = re.sub(r'<br\s*/?>', ' ', clean)
 
     # 0. 优先匹配模板格式 "时间：6/3 20:40" 或 "时间: 6/3 20：47"
     ref_year = reference_date.year if reference_date else None

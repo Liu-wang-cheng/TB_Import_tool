@@ -1915,7 +1915,7 @@ class SyncEngine:
             if not raw:
                 return []
             for cf in raw.get("customfields", []):
-                if cf.get("customfieldId") == cf_id or cf.get("id") == cf_id:
+                if cf.get("cfId") == cf_id or cf.get("customfieldId") == cf_id:
                     val = cf.get("value", [])
                     if isinstance(val, list):
                         return val
