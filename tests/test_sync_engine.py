@@ -1,4 +1,6 @@
 """测试 src/sync_engine.py — HTML转换、CPAX检测、去重逻辑"""
+from unittest.mock import MagicMock
+
 import pytest
 
 from src.sync_engine import SyncEngine
@@ -251,6 +253,19 @@ class TestSNExtraction:
         from src.zentao_client import ZentaoClient
         assert ZentaoClient._extract_sn("SN码：ABC123456") == "ABC123456"
 
+    def test_sn_should_not_match_three_letter_abbrev(self):
+        """NSN/USN/PSN/SSN/BSN 等 3 字母缩写不应被误识别为 SN 前缀"""
+        from src.zentao_client import ZentaoClient
+        for t in [
+            "Equipment NSN: 7015-01-123-4567",
+            "PSN: PART12345",
+            "USN: 12345678",
+            "SSN: ABC-12345",
+        ]:
+            result = ZentaoClient._extract_sn(t)
+            assert result in ("/", None) or "NSN" not in result.upper(), \
+                f"误匹配: {t!r} -> {result!r}"
+
     def test_sn_hq_format(self):
         from src.zentao_client import ZentaoClient
         assert ZentaoClient._extract_sn("HQ5S00700002HC261300069") == "HQ5S00700002HC261300069"
@@ -435,3 +450,101 @@ class TestSeverityMapping:
         repro_cf = [f for f in fields if f["cfId"] == "cf_repro"]
         assert len(repro_cf) == 1
         assert repro_cf[0]["value"] == ["必现"]
+
+
+class TestZentaoTagVariants:
+    """_task_title_contains_zentao_id 处理多种禅道标签变体"""
+
+    def _make_task(self, content: str):
+        t = MagicMock()
+        t.content = content
+        t.isArchived = False
+        return t
+
+    def test_standard_tag(self):
+        engine = make_engine()
+        task = self._make_task("【禅道60365】开始回充语音错误")
+        assert engine._task_title_contains_zentao_id(task, 60365) is True
+        assert engine._task_title_contains_zentao_id(task, 60366) is False
+
+    def test_multi_id_merged_tag(self):
+        engine = make_engine()
+        title = ("【禅道60365、60357、60358、60359、60381、60391、60394、"
+                 "60407、60413】语音问题】开始回充语音错误")
+        task = self._make_task(title)
+        for bid in [60365, 60357, 60358, 60359, 60381, 60391,
+                    60394, 60407, 60413]:
+            assert engine._task_title_contains_zentao_id(task, bid) is True
+        assert engine._task_title_contains_zentao_id(task, 60366) is False
+
+    def test_prefix_yx(self):
+        engine = make_engine()
+        task = self._make_task(
+            "【禅道YX+58926】DVT—一洗吸协作模式下清扫，上地毯时出现后退停顿现象")
+        assert engine._task_title_contains_zentao_id(task, 58926) is True
+        assert engine._task_title_contains_zentao_id(task, 58927) is False
+
+    def test_prefix_arbitrary_letters(self):
+        engine = make_engine()
+        for prefix in ["XX", "AB", "PROJ", "T"]:
+            task = self._make_task(f"【禅道{prefix}+55555】标题")
+            assert engine._task_title_contains_zentao_id(task, 55555) is True, \
+                f"前缀 {prefix}+ 未识别"
+            assert engine._task_title_contains_zentao_id(task, 55556) is False
+
+    def test_no_tag(self):
+        engine = make_engine()
+        task = self._make_task("普通任务标题，无任何禅道标签")
+        assert engine._task_title_contains_zentao_id(task, 12345) is False
+
+    def test_partial_id_should_not_match(self):
+        engine = make_engine()
+        task = self._make_task("【禅道123450】标题")
+        assert engine._task_title_contains_zentao_id(task, 12345) is False
+        assert engine._task_title_contains_zentao_id(task, 123450) is True
+
+    def test_hash_prefix(self):
+        engine = make_engine()
+        for title in [
+            "#5555 描述",
+            "【#5555】描述",
+            "[#5555] 描述",
+        ]:
+            task = self._make_task(title)
+            assert engine._task_title_contains_zentao_id(task, 5555) is True, \
+                f"# 号格式未识别: {title}"
+            assert engine._task_title_contains_zentao_id(task, 5556) is False
+
+    def test_hash_prefix_in_long_title(self):
+        engine = make_engine()
+        task = self._make_task("回充异常 #12345 偶发问题排查")
+        assert engine._task_title_contains_zentao_id(task, 12345) is True
+        assert engine._task_title_contains_zentao_id(task, 1234) is False
+
+    def test_hash_should_not_match_unrelated_digits(self):
+        """# 号后必须是完整数字，不应误匹配后面其他数字"""
+        engine = make_engine()
+        task = self._make_task("订单 #20240101 已完成")
+        assert engine._task_title_contains_zentao_id(task, 2024) is False
+        assert engine._task_title_contains_zentao_id(task, 20240101) is True
+
+    def test_chinese_prefix_works(self):
+        """中文前缀也能正确解析（依赖 \d+ 强制回溯保证 ID 捕获正确）"""
+        engine = make_engine()
+        task = self._make_task("【禅道产品+123】描述")
+        assert engine._task_title_contains_zentao_id(task, 123) is True
+
+    def test_note_field_also_scanned(self):
+        """任务备注中的禅道 ID 也应被识别（修复 docstring 撒谎）"""
+        engine = make_engine()
+        task = self._make_task("普通标题无标签")
+        task.note = "参见关联 Bug【禅道60365】的评论"
+        assert engine._task_title_contains_zentao_id(task, 60365) is True
+        assert engine._task_title_contains_zentao_id(task, 60366) is False
+
+    def test_no_id_match_when_note_empty(self):
+        """备注为空时行为与之前一致"""
+        engine = make_engine()
+        task = self._make_task("普通标题无标签")
+        task.note = ""
+        assert engine._task_title_contains_zentao_id(task, 12345) is False

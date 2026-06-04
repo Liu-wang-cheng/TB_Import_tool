@@ -6,10 +6,30 @@ from datetime import datetime
 from typing import Callable, List, Optional
 
 
+# ── 模板文本清理 ──────────────────────────────────
+
+def clean_template_text(text: str, strip_html: bool = True) -> str:
+    """统一清理禅道 Bug 步骤里的 HTML 标签、&nbsp; 实体和多余空白。
+
+    模板格式常含 `<br>` / `&nbsp;` 和多空格，提取前必须先归一化。
+    各模块 (extract_sn / extract_datetime / zentao_client._extract_sn /
+    sync_engine 自定义字段提取) 都需要相同处理，集中到此处避免漂移。
+    """
+    if not text:
+        return ""
+    if strip_html:
+        text = re.sub(r'<[^>]+>', ' ', text)
+    text = text.replace('&nbsp;', ' ').replace('&#160;', ' ')
+    return re.sub(r'\s+', ' ', text).strip()
+
+
 # ── SN 提取 ───────────────────────────────────────
 
 # HCT 扫地机 SN 格式：HQ 开头 + 数字/字母，长度 ≥12
 DEFAULT_SN_PATTERNS = [
+    # 模板格式：SN码：48HCNFCN0054X 或 样机编号/SN码：48H-CN-FAN0052X
+    # (?<![A-Za-z]) 防止 NSN/USN/PSN/SSN/BSN 等 3 字母缩写误匹配
+    r'(?:样机编号(?:/SN码)?|SN码|(?<![A-Za-z])SN)\s*[:：]\s*([A-Za-z0-9\-]{8,})',
     r'\b(HQ[0-9A-Z]{10,})\b',
     r'\b([A-Z]{2}[0-9]{2}[A-Z][0-9]{4}[A-Z]{2}[0-9]{8,})\b',
 ]
@@ -59,9 +79,10 @@ def extract_sn(text: str, patterns: list = None) -> Optional[str]:
     """从文本中提取 SN 编码，返回第一个匹配结果。"""
     if not text:
         return None
+    clean = clean_template_text(text, strip_html=True)
     patterns = patterns or DEFAULT_SN_PATTERNS
     for pat in patterns:
-        for match in re.finditer(pat, text, re.IGNORECASE):
+        for match in re.finditer(pat, clean, re.IGNORECASE):
             sn = match.group(1).upper()
             if sn in SN_BLACKLIST:
                 continue
@@ -115,6 +136,7 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
     """从文本中提取日期时间，返回 YYYY-MM-DD HH:MM 格式。
 
     支持的格式：
+      - 模板格式: 时间：6/3 20:40 或 时间：6/3  20：47（测试模板常见格式）
       - 完整日期时间: 2026-05-08 20:31 / 2026/05/08 20:31
       - 缩写年份: 26-05-08 / 206.5.8
       - M/D 格式: 5/7 20:31（用 reference_date 补全年份）
@@ -128,9 +150,28 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
     if not text:
         return None
 
-    # 先清理 HTML 实体和多余空白
-    clean = text.replace('&nbsp;', ' ')
-    clean = re.sub(r'\s+', ' ', clean)
+    # 统一清理（不带 HTML 剥离，保持纯文本 & 空白归一化）
+    clean = clean_template_text(text, strip_html=False)
+
+    # 0. 优先匹配模板格式 "时间：6/3 20:40" 或 "时间: 6/3 20：47"
+    ref_year = reference_date.year if reference_date else None
+    if ref_year and 2020 <= ref_year <= 2035:
+        tpl = re.search(
+            r'时间[：:]\s*(\d{1,2})/(\d{1,2})\s*(\d{1,2})[：:](\d{2})',
+            clean)
+        if tpl:
+            mon, day, hour, minute = (
+                int(tpl.group(1)), int(tpl.group(2)),
+                int(tpl.group(3)), int(tpl.group(4)))
+            if 1 <= mon <= 12 and 1 <= day <= 31 \
+                    and 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{ref_year:04d}-{mon:02d}-{day:02d} {hour:02d}:{minute:02d}"
+        # 模板格式无时间部分 "时间：6/3"
+        tpl2 = re.search(r'时间[：:]\s*(\d{1,2})/(\d{1,2})(?!\s*\d)', clean)
+        if tpl2:
+            mon, day = int(tpl2.group(1)), int(tpl2.group(2))
+            if 1 <= mon <= 12 and 1 <= day <= 31:
+                return f"{ref_year:04d}-{mon:02d}-{day:02d} 00:00"
 
     best_result = None
     best_score = 0  # 优先选择有时间的、年份完整的

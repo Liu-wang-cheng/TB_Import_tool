@@ -594,10 +594,14 @@ class ZentaoClient:
 
         if statuses and bug.status not in statuses:
             return False
-        if date_from and str(date_from) > bug.openedDate[:10]:
-            return False
-        if date_to and str(date_to) < bug.openedDate[:10]:
-            return False
+        if date_from or date_to:
+            if not bug.openedDate or len(bug.openedDate) < 10:
+                return False
+            bug_date = bug.openedDate[:10]
+            if date_from and str(date_from) > bug_date:
+                return False
+            if date_to and str(date_to) < bug_date:
+                return False
         if resolved_assignees:
             if bug.assignedToAccount in resolved_assignees \
                     or bug.assignedTo in resolved_assignees:
@@ -969,6 +973,7 @@ class ZentaoClient:
         all_bugs = []
         page = 1
         raw_total = 0
+        consecutive_empty = 0
         t0 = time.time()
         while True:
             bugs, total = self.fetch_bugs(
@@ -979,13 +984,16 @@ class ZentaoClient:
             )
             all_bugs.extend(bugs)
             raw_total = total if total is not None else raw_total
-            # 终止条件：API 返回的总数已被本次循环覆盖（按页码计算，避免被
-            # 客户端筛选后的空页误判为没有更多数据）
-            # 兜底：如果当前页返回0条且raw_total>0，也终止（避免无限循环）
+            # 终止条件1：API 总数已全部拉取（按页码×页大小覆盖）
             if raw_total <= 0 or page * page_size >= raw_total:
                 break
+            # 终止条件2：连续3页客户端筛选后0条 → 后续页大概率也无数据
             if not bugs:
-                break
+                consecutive_empty += 1
+                if consecutive_empty >= 3:
+                    break
+            else:
+                consecutive_empty = 0
             page += 1
         logger.info(
             "从禅道获取到 %d 条Bug（API共 %d 条，筛选后 %d 条，耗时 %.1fs，%d 页 × %d）",
@@ -1233,16 +1241,20 @@ class ZentaoClient:
         """从文本中提取 SN 编码，如 SN：0004、SN:12345
 
         匹配优先级：
-        1. SN/SN码/设备SN 后跟冒号或空格
+        1. SN/SN码/样机编号SN码 后跟冒号或空格
         2. HQ 开头 + 数字/字母（扫地机设备 SN 格式）
         3. 文件名中的 SN 模式（如 48HCNFBN0049X-2026-...）
         找不到时返回 '/'。
         """
         if not text:
             return "/"
-        # 1. 匹配 SN/SN码/设备SN 后跟冒号或空格
-        match = re.search(r'(?:设备)?SN(?:码)?\s*[:：]\s*([A-Za-z0-9\-_]+)',
-                          text, re.IGNORECASE)
+        from src.extractor import clean_template_text
+        clean = clean_template_text(text, strip_html=True)
+        # 1. 匹配 SN/SN码/样机编号SN码 后跟冒号或空格
+        # (?<![A-Za-z]) 防止 NSN/USN/PSN/SSN/BSN 等 3 字母缩写误匹配
+        match = re.search(
+            r'(?:样机编号(?:/SN码)?|设备SN|SN码|(?<![A-Za-z])SN)\s*[:：]\s*([A-Za-z0-9\-_]+)',
+            clean, re.IGNORECASE)
         if match:
             return match.group(1)
         # 2. 匹配 HQ 开头的设备 SN（如 HQ5S00700002HC261300069）

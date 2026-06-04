@@ -189,7 +189,8 @@ class TeambitionClient:
                     priority: int = 0,
                     tasklist_id: Optional[str] = None,
                     stage_id: Optional[str] = None,
-                    customfields: Optional[list] = None) -> tuple:
+                    customfields: Optional[list] = None,
+                    involve_member_ids: Optional[list] = None) -> tuple:
         body = {
             "projectId": self.project_id,
             "content": content,
@@ -206,6 +207,8 @@ class TeambitionClient:
             body["scenariofieldconfigId"] = self.scenariofieldconfig_id
         if customfields:
             body["customfields"] = customfields
+        if involve_member_ids:
+            body["involveMembers"] = involve_member_ids
 
         data = self._request("POST", "/v3/task/create", json=body)
         result = data.get("result", data)

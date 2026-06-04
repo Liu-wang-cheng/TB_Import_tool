@@ -270,6 +270,20 @@ class SimilarityClassifier:
             self.train(self._samples)
             logger.info("TF-IDF 增量学习: 新增 %d 条样本", len(new))
 
+    @staticmethod
+    def _get_app_version() -> str:
+        """读取当前应用版本号"""
+        try:
+            if getattr(sys, 'frozen', False):
+                base = sys._MEIPASS
+            else:
+                base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            vpath = os.path.join(base, "VERSION")
+            with open(vpath, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception:
+            return ""
+
     def save(self, path: str = None):
         """保存训练好的模型到磁盘"""
         if not self._trained:
@@ -289,20 +303,49 @@ class SimilarityClassifier:
             "saved_time": self._saved_time,
             "centroids": self._centroids,
             "centroid_labels": self._centroid_labels,
+            "app_version": self._get_app_version(),
         }
         with open(path, "wb") as f:
             pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-        logger.info("TF-IDF 模型已保存: %s (%d 条样本, %d 个质心)",
-                     path, len(self._samples), len(self._centroid_labels))
+        logger.info("TF-IDF 模型已保存: %s (%d 条样本, %d 个质心, v%s)",
+                     path, len(self._samples), len(self._centroid_labels),
+                     data["app_version"])
+
+    def _resolve_model_path(self) -> str:
+        """解析模型文件路径，优先使用本地 data/，其次从 _internal/data/ 复制。"""
+        import shutil
+        local_path = os.path.join(self._cache_dir, self._CACHE_FILENAME)
+        if os.path.exists(local_path):
+            return local_path
+        # 打包模式：从 _internal/data/ 原子复制到本地 data/（更新后首次运行）
+        if getattr(sys, 'frozen', False):
+            bundled = os.path.join(sys._MEIPASS, 'data', self._CACHE_FILENAME)
+            if os.path.exists(bundled):
+                os.makedirs(self._cache_dir, exist_ok=True)
+                tmp_path = local_path + '.tmp'
+                try:
+                    shutil.copy2(bundled, tmp_path)
+                    os.replace(tmp_path, local_path)
+                    logger.info("从更新包复制 TF-IDF 模型: %s → %s",
+                                bundled, local_path)
+                except Exception:
+                    # 部分复制时清理
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                    return local_path
+                return local_path
+        return local_path
 
     def load(self, path: str = None) -> bool:
-        """从磁盘加载模型，返回是否成功"""
-        path = path or os.path.join(self._cache_dir, self._CACHE_FILENAME)
+        """从磁盘加载模型，返回是否成功。"""
+        if path is None:
+            path = self._resolve_model_path()
         if not os.path.exists(path):
             return False
         try:
             with open(path, "rb") as f:
                 data = pickle.load(f)
+
             self._samples = data["samples"]
             self._vectorizer = data["vectorizer"]
             self._tfidf_matrix = data["tfidf_matrix"]
@@ -316,8 +359,10 @@ class SimilarityClassifier:
             else:
                 self._compute_centroids()
             self._trained = True
-            logger.info("TF-IDF 模型已加载: %s (%d 条样本, %d 个质心)",
-                         path, len(self._samples), len(self._centroid_labels))
+            saved_version = data.get("app_version", "")
+            logger.info("TF-IDF 模型已加载: %s (%d 条样本, %d 个质心, v%s)",
+                         path, len(self._samples), len(self._centroid_labels),
+                         saved_version)
             return True
         except Exception as e:
             logger.warning("TF-IDF 模型加载失败: %s", e)
@@ -332,17 +377,31 @@ class SimilarityClassifier:
 
     @staticmethod
     def _clean_title(title: str) -> str:
-        """去掉标题中的标签、编号、版本号等噪音"""
+        """去掉标题中的标签、编号、版本号、SN编码、日期时间等噪音"""
         clean = re.sub(r'【[^】]*】', '', title)
-        clean = re.sub(r'#?\d{4,}\s*', '', clean)
+        # TB 任务编号
         clean = re.sub(r'(?:VLNS|CPAX)-\d+', '', clean)
         clean = re.sub(r'MPPFW-\d+', '', clean)
+        # 禅道/Bug 编号
         clean = re.sub(r'禅道\d+', '', clean)
         clean = re.sub(r'SS\d+-\d+', '', clean)
         clean = re.sub(r'Bug\s*\d+', '', clean, flags=re.IGNORECASE)
         clean = re.sub(r'P\d+-Bug\s*', '', clean, flags=re.IGNORECASE)
-        clean = re.sub(r'V?\d+\.\d+\.\d+[\w]*', '', clean)
-        clean = re.sub(r'^\d+[.、)\s]+', '', clean)
+        # #号前缀编号（#5555）
+        clean = re.sub(r'#\d{3,}\s*', '', clean)
+        # 版本号 V1.2.3 / 1.2.3（不加 [\w]* 避免 1.5倍 等被误删）
+        clean = re.sub(r'V?\d+\.\d+\.\d+', '', clean)
+        # 日期 YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD
+        clean = re.sub(r'\d{4}[-/.]\d{1,2}[-/.]\d{1,2}', '', clean)
+        # 时间 HH:MM / HH：MM
+        clean = re.sub(r'\d{1,2}[：:]\d{2}(?::\d{2})?', '', clean)
+        # SN 编码：长字母数字串（≥8字符，无中文）
+        clean = re.sub(r'\b[A-Za-z0-9\-]{10,}\b', '', clean)
+        # 独立数字（≥3位，可能是编号/ID）
+        clean = re.sub(r'(?<![A-Za-z])\d{3,}(?![A-Za-z])', '', clean)
+        # 前导序号（如 "1. xxx" "2、xxx"，要求分隔符后有空白，避免误删 "1.5倍"）
+        clean = re.sub(r'^\d{1,2}[.、)]\s+', '', clean)
+        # 多余空白
         clean = re.sub(r'\s{2,}', ' ', clean)
         return clean.strip()
 

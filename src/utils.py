@@ -29,10 +29,13 @@ def apply_module_filter(bugs, module_filter: str,
                         fetch_detail_fn: Optional[Callable] = None,
                         progress_fn: Optional[Callable[[int, int], None]] = None,
                         module_id_set: Optional[set] = None,
-                        max_workers: int = 5):
+                        max_workers: int = 5,
+                        treat_digit_as_name: bool = False):
     """根据 module_filter 在内存中筛选 Bug 列表。
 
-    - 数字（模块ID）：直接比对 bug.module，零额外请求。
+    - 数字（模块ID）：默认直接比对 bug.module，零额外请求。
+      设置 treat_digit_as_name=True 时跳过该快路径，进入名称子串匹配
+      （用于 sync_engine 的"数字当名称"兜底场景）。
     - 名称（模块名）：
       - 若 module_id_set 已由调用方预解析（含空集合），按 ID 集合过滤，零额外请求。
       - 否则用线程池并发调用 fetch_detail_fn(bug_id) 拉详情再做子串匹配。
@@ -45,7 +48,7 @@ def apply_module_filter(bugs, module_filter: str,
     if not mf or not bugs:
         return bugs
 
-    if mf.isdigit():
+    if mf.isdigit() and not treat_digit_as_name:
         return [b for b in bugs if str(b.module) == mf]
 
     # 调用方已通过模块 API 预解析了名称→ID集合（空集合也视为预解析成功）

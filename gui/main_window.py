@@ -341,6 +341,14 @@ class MainWindow(QMainWindow):
 
         tb_form.addSpacing(16)
 
+        tb_form.addWidget(QLabel("参与者:"))
+        self.edit_tb_participants = QLineEdit()
+        self.edit_tb_participants.setPlaceholderText("多人用逗号分隔")
+        self.edit_tb_participants.setMaximumWidth(200)
+        tb_form.addWidget(self.edit_tb_participants)
+
+        tb_form.addSpacing(16)
+
         tb_form.addWidget(QLabel("所属项目:"))
         self.edit_tb_belong_project = QLineEdit()
         self.edit_tb_belong_project.setPlaceholderText("项目名")
@@ -901,6 +909,9 @@ class MainWindow(QMainWindow):
             or tb_cfg.get("project_name", "")
         )
         self.edit_tb_belong_project.setText(project_val)
+        # 参与者
+        participants = tb_cfg.get("participant_names", "")
+        self.edit_tb_participants.setText(participants)
 
     def _apply_filters_to_config(self):
         """将筛选面板的值写回 config dict"""
@@ -984,6 +995,7 @@ class MainWindow(QMainWindow):
         tb_cfg = self.config.setdefault("teambition", {})
         tb_cfg["creator_name"] = self.edit_tb_creator.text().strip()
         tb_cfg["creator_id"] = self.edit_tb_creator_id.text().strip()
+        tb_cfg["participant_names"] = self.edit_tb_participants.text().strip()
         tb_cfg["belong_project_value"] = self.edit_tb_belong_project.text().strip()
         # 同步更新目标项目名称
         project_name = self.edit_tb_belong_project.text().strip()
@@ -1046,6 +1058,7 @@ class MainWindow(QMainWindow):
             update_yaml_values(tb_path, {
                 "creator_name": tb_cfg.get("creator_name"),
                 "creator_id": tb_cfg.get("creator_id"),
+                "participant_names": tb_cfg.get("participant_names"),
                 "belong_project_value": tb_cfg.get("belong_project_value"),
                 "project.name": tb_cfg.get("project", {}).get("name"),
             })
@@ -1150,7 +1163,8 @@ class MainWindow(QMainWindow):
         # 凭证输入
         for w in [self.edit_zentao_base_url, self.edit_zentao_account,
                   self.edit_zentao_password, self.edit_tb_creator,
-                  self.edit_tb_creator_id, self.edit_tb_belong_project]:
+                  self.edit_tb_creator_id, self.edit_tb_participants,
+                  self.edit_tb_belong_project]:
             w.setEnabled(enabled)
         # 同步/AI 开关
         for chk in [self.chk_reopen, self.chk_ai_analysis]:

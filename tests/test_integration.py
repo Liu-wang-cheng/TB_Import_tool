@@ -240,3 +240,225 @@ class TestAllInstances:
             freq = getattr(bugs[0], "frequency", None)
             # 有值或为空均可，不崩溃即可
             assert freq is not None or freq == ""
+
+    # ── 新增集成测试：覆盖更多产品功能 ──────────────────────
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_assignee_filter(self, inst):
+        """验证指派人筛选：用当前账号作为指派人筛选条件"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(
+            product_id=inst["product_id"],
+            assigned_to=[inst["account"]],
+            page_size=20)
+        assert isinstance(bugs, list)
+        for bug in bugs:
+            assert isinstance(bug.id, int)
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_multi_status_filter(self, inst):
+        """验证多状态筛选：同时指定 active + confirmed"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(
+            product_id=inst["product_id"],
+            statuses=["active", "confirmed"],
+            page_size=10)
+        assert isinstance(bugs, list)
+        for bug in bugs:
+            assert bug.status in ("active", "confirmed", "")
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_date_boundary_same_day(self, inst):
+        """验证日期边界：date_from == date_to 为同一天"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        from datetime import date, timedelta
+        # 用 30 天前的日期，大概率有数据
+        target = (date.today() - timedelta(days=30)).isoformat()
+        bugs = client.fetch_all_bugs(
+            product_id=inst["product_id"],
+            date_from=target, date_to=target,
+            page_size=20)
+        assert isinstance(bugs, list)
+        for bug in bugs:
+            assert bug.openedDate[:10] == target
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_pagination_small_page(self, inst):
+        """验证分页功能：用小 page_size 强制多页拉取"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(
+            product_id=inst["product_id"],
+            page_size=3)
+        assert isinstance(bugs, list)
+        # 至少能拉取到数据且不崩溃
+        assert len(bugs) > 0
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_fetch_status_groups(self, inst):
+        """验证动态状态码分组：open/closed 状态归类"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        groups = client.fetch_status_groups()
+        assert "open" in groups
+        assert "closed" in groups
+        assert isinstance(groups["open"], list)
+        assert isinstance(groups["closed"], list)
+        assert len(groups["open"]) > 0 or len(groups["closed"]) > 0
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_resolve_module_ids_by_name(self, inst):
+        """验证模块名称解析为 ID 集合"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        # 直接从模块 API 获取真实模块名（列表 API 不返回 moduleName）
+        modules = client.fetch_product_modules(inst["product_id"])
+        if not modules:
+            pytest.skip("该产品无模块数据")
+        # 取第一个模块的名称测试
+        module_name = modules[0].get("name", "")
+        if not module_name:
+            pytest.skip("模块名称为空")
+        result = client.resolve_module_ids_by_name(
+            inst["product_id"], module_name)
+        # 自建版无父子层级 → 返回 None（回退逐条比对）
+        # 云版扁平模块 → 返回 set（ID 集合）
+        assert result is None or isinstance(result, set)
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_resolve_module_name(self, inst):
+        """验证模块 ID 转名称"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(
+            product_id=inst["product_id"], page_size=20)
+        if not bugs:
+            pytest.skip("无Bug数据")
+        # 找一个有 module ID 的 bug
+        for bug in bugs:
+            if bug.module and str(bug.module).isdigit() and int(bug.module) > 0:
+                name = client.resolve_module_name(
+                    inst["product_id"], int(bug.module))
+                assert isinstance(name, str)
+                break
+        else:
+            pytest.skip("未找到有模块ID的Bug")
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_empty_openeddate_no_crash(self, inst):
+        """验证空 openedDate 不崩溃（BUG 3 修复）"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        from src.models import ZentaoBug
+        # 构造 openedDate 为空的 Bug 对象
+        bug = ZentaoBug(
+            id=99999, title="test", severity="1", pri="1", type="bug",
+            status="active", steps="", assignedTo="", assignedToAccount="",
+            openedBy="", openedByAccount="", openedDate="",
+            product=str(inst["product_id"]), productName="", project="",
+            projectName="", module="", moduleName="", openedBuild="",
+            snCode="", frequency="", files=[],
+        )
+        # 空日期 + 日期筛选 → 不崩溃
+        assert not client._passes_filters_with_assignees(
+            bug, None, "2026-01-01", "2026-12-31", set())
+        # 短日期也应安全
+        bug2 = ZentaoBug(
+            id=99998, title="test", severity="1", pri="1", type="bug",
+            status="active", steps="", assignedTo="", assignedToAccount="",
+            openedBy="", openedByAccount="", openedDate="2026",
+            product=str(inst["product_id"]), productName="", project="",
+            projectName="", module="", moduleName="", openedBuild="",
+            snCode="", frequency="", files=[],
+        )
+        assert not client._passes_filters_with_assignees(
+            bug2, None, "2026-01-01", "2026-12-31", set())
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_bug_detail_field_completeness(self, inst):
+        """验证 Bug 详情字段完整性：files/steps/snCode 等字段正确填充"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(
+            product_id=inst["product_id"], page_size=15)
+        if not bugs:
+            pytest.skip("无Bug数据")
+        detail = client.fetch_bug_detail(bugs[0].id)
+        assert detail.id == bugs[0].id
+        assert isinstance(detail.title, str)
+        assert len(detail.title) > 0
+        assert isinstance(detail.severity, str)
+        assert isinstance(detail.status, str)
+        assert isinstance(detail.steps, str)
+        # files 应为 dict 或 list（禅道 v1 返回 dict）
+        assert isinstance(detail.files, (dict, list))
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_download_image(self, inst):
+        """验证图片下载功能"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(
+            product_id=inst["product_id"], page_size=50)
+        image_id = None
+        for bug in bugs[:45]:
+            detail = client.fetch_bug_detail(bug.id)
+            files = detail.files
+            if isinstance(files, dict):
+                files = list(files.values())
+            elif not isinstance(files, list):
+                continue
+            for f in files:
+                if isinstance(f, dict) and f.get("id"):
+                    ext = (f.get("title", "") or f.get("name", "")).rsplit(".", 1)[-1].lower()
+                    if ext in ("png", "jpg", "jpeg", "gif", "bmp"):
+                        image_id = int(f["id"])
+                        break
+            if image_id:
+                break
+        if image_id:
+            att = client.download_image(image_id)
+            assert att.size > 0
+            assert att.filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp"))
+        else:
+            pytest.skip("前15条Bug中未找到图片附件")
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_search_product(self, inst):
+        """验证产品搜索功能"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        # 搜索当前 product_id 对应的产品名
+        bugs = client.fetch_all_bugs(
+            product_id=inst["product_id"], page_size=1)
+        if bugs and bugs[0].productName:
+            pid = client.search_product(bugs[0].productName)
+            assert pid is None or isinstance(pid, int)
+        else:
+            # 无 Bug 时用空字符串搜索，不应崩溃
+            pid = client.search_product("")
+            assert pid is None
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_source_factory_creates_client(self, inst):
+        """验证 source_factory 能正确创建禅道客户端"""
+        from src.source_factory import create_source_client
+        config = {
+            "source": {"platform": "zentao"},
+            "zentao": {
+                "base_url": inst["base_url"],
+                "account": inst["account"],
+                "password": inst["password"],
+                "filters": {"product_id": inst["product_id"]},
+            },
+            "sync": {"api_delay": 0.3},
+        }
+        source = create_source_client(config)
+        assert source is not None
+        source.authenticate()
+        bugs = source.fetch_all_bugs(product_id=inst["product_id"])
+        assert isinstance(bugs, list)
+        source.close()

@@ -15,10 +15,11 @@ from bs4 import BeautifulSoup
 
 from src.log_analysis_integration import LogAnalysisIntegration
 from src.models import (BUG_TYPE_NAMES, SEVERITY_NAMES, SyncAction, SyncResult,
-                        SyncStats, ZentaoBug)
+                        SyncStats, TeambitionTask, ZentaoBug)
 from src.source_client import SourceClient
 from src.teambition_client import TeambitionClient
-from src.utils import extract_department_prefix, resolve_assigned_to
+from src.utils import (apply_module_filter, extract_department_prefix,
+                     resolve_assigned_to)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class SyncEngine:
         self.source_tag_in_tb = sync_cfg.get("zentao_tag_in_tb", "【禅道{bug_id}】")
         self.tb_tag_in_zentao = sync_cfg.get("teambition_tag_in_zentao", "【TB-{task_id}】")
         self.dedup_threshold = sync_cfg.get("dedup_threshold", 0.8)
+        self.loose_tag_dedup = sync_cfg.get("loose_tag_dedup", True)
         self.batch_size = sync_cfg.get("batch_size", 20)
         self.sync_attachments = sync_cfg.get("sync_attachments", True)
         self.dry_run = sync_cfg.get("dry_run", False)
@@ -72,7 +74,7 @@ class SyncEngine:
         if "classifier" in classifier_cfg and "enabled" not in classifier_cfg:
             classifier_cfg = classifier_cfg["classifier"]
         if classifier_cfg.get("enabled", False):
-            from src.classifier import BugClassifier
+            from src.classifier import BugClassifier, SimilarityClassifier
             self.classifier = BugClassifier(config)
             logger.info("AI 缺陷分类器已启用")
         else:
@@ -116,6 +118,12 @@ class SyncEngine:
         self._sn_patterns_loaded: bool = False
         if self._tb_project_id:
             self._load_sn_patterns_for_project(self._tb_project_id)
+
+        # 参与者：配置中的中文名列表，运行时解析为 ID
+        participant_str = tb_cfg.get("participant_names", "")
+        self._participant_names = [n.strip() for n in participant_str.split(",")
+                                    if n.strip()] if participant_str else []
+        self._participant_ids: List[str] = []
 
         # AI 日志分析集成（可选）
         ai_cfg = config.get("ai_analysis", {})
@@ -169,8 +177,19 @@ class SyncEngine:
         if self.module_filter and bugs:
             mf = self.module_filter.strip()
             if mf.isdigit():
-                bugs = [b for b in bugs if str(b.module) == mf]
-                logger.info("模块ID '%s' 预过滤后剩余 %d 条", mf, len(bugs))
+                # 数字ID：先按 module ID 快路径过滤；零结果时兜底为名称子串匹配
+                id_filtered = [b for b in bugs if str(b.module) == mf]
+                if id_filtered:
+                    bugs = id_filtered
+                    logger.info("模块ID '%s' 预过滤后剩余 %d 条", mf, len(bugs))
+                else:
+                    # 数字当名称子串匹配：调用 utils 的并发详情拉取路径
+                    bugs = apply_module_filter(
+                        bugs, mf,
+                        fetch_detail_fn=self.source.fetch_bug_detail,
+                        treat_digit_as_name=True,
+                    )
+                    logger.info("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
             elif filters.get("product_id"):
                 t0 = time.time()
                 self._module_id_set = self.source.resolve_module_ids_by_name(
@@ -218,8 +237,20 @@ class SyncEngine:
         # 构建拼音索引（英文名自动匹配 TB 中文成员）
         self._build_pinyin_member_index()
 
-        # 从当前 Bug 列表 + 已有 TB 任务中预学习经办人映射
+        # 预解析指派人 → TB 执行人映射（拼音匹配）
         self._preload_assignee_mapping(bugs)
+
+        # 解析参与者名称 → ID
+        if self._participant_names:
+            for name in self._participant_names:
+                uid = self.teambition.search_member(name)
+                if uid:
+                    self._participant_ids.append(uid)
+                    logger.info("参与者映射: %s → %s", name, uid)
+                else:
+                    logger.warning("参与者 '%s' 未找到对应 TB 用户", name)
+            logger.info("共解析到 %d/%d 个参与者",
+                         len(self._participant_ids), len(self._participant_names))
 
         # 初始化 TB 任务流状态映射（用于状态对比日志和重新激活）
         self._init_taskflow_status_map()
@@ -310,25 +341,32 @@ class SyncEngine:
                 if not page_token or not fields:
                     break
 
+            # 自定义字段名 → 内部 key 的映射表
+            # 容错：fname.strip() 容忍首尾空白；fname == 期望名 容忍变体字符。
+            # 例外：原"复现步骤"被"复现"误匹配为"复现概率"的问题用 strip + 等值匹配解决
+            cf_name_map = {
+                "严重程度": "severity",
+                "复现概率": "reproduction",
+                "缺陷分类": "category",
+                "所属版本": "version",
+                "产生时间": "found_time",
+                "SN编码": "sn_code",
+                "所属项目": "belong_project",
+                "日志附件": "attachment",
+            }
+            detected_names = set()
             for f in all_fields:
-                fname = f.get("name", "")
+                fname = (f.get("name", "") or "").strip()
                 fid = f.get("id", "")
-                if "严重程度" in fname and not self.cf_ids.get("severity"):
-                    self.cf_ids["severity"] = fid
-                elif "复现概率" in fname and not self.cf_ids.get("reproduction"):
-                    self.cf_ids["reproduction"] = fid
-                elif "缺陷分类" in fname and not self.cf_ids.get("category"):
-                    self.cf_ids["category"] = fid
-                elif fname == "所属版本" and not self.cf_ids.get("version"):
-                    self.cf_ids["version"] = fid
-                elif "产生时间" in fname and not self.cf_ids.get("found_time"):
-                    self.cf_ids["found_time"] = fid
-                elif "SN编码" in fname and not self.cf_ids.get("sn_code"):
-                    self.cf_ids["sn_code"] = fid
-                elif "所属项目" in fname and not self.cf_ids.get("belong_project"):
-                    self.cf_ids["belong_project"] = fid
-                elif "日志附件" in fname and not self.cf_ids.get("attachment"):
-                    self.cf_ids["attachment"] = fid
+                key = cf_name_map.get(fname)
+                if key and not self.cf_ids.get(key):
+                    self.cf_ids[key] = fid
+                    detected_names.add(fname)
+            # 警告：配置期望但未检测到的字段（防止 TB 改名后静默失败）
+            missing = set(cf_name_map.keys()) - detected_names
+            if missing:
+                logger.warning("以下自定义字段未在 TB 找到: %s（如已重命名请同步修改 cf_name_map）",
+                               ", ".join(sorted(missing)))
             logger.info("自定义字段ID: %s", self.cf_ids)
         except Exception as e:
             logger.warning("检测自定义字段失败: %s", e)
@@ -639,9 +677,9 @@ class SyncEngine:
                             cat = first.get("title", "") if isinstance(first, dict) else (
                                 str(first) if isinstance(first, str) else "")
                             if cat and task.content:
-                                clean_title = re.sub(
-                                    r'【[^】]*】', '', task.content).strip()
-                                if clean_title:
+                                clean_title = SimilarityClassifier._clean_title(
+                                    task.content)
+                                if len(clean_title) >= 2:
                                     samples.append((clean_title, cat))
                         break
 
@@ -673,10 +711,6 @@ class SyncEngine:
             # 去重检查：TB 搜索（一次 API 调用）
             existing = self._find_existing_task(bug)
             if existing:
-                # 动态学习：记录源平台经办人 → TB 执行人映射
-                if bug.assignedTo and existing.executorId:
-                    self._learned_assignee_map.setdefault(
-                        bug.assignedTo, existing.executorId)
                 # 检查是否需要重新激活：禅道 Bug 激活但 TB 任务已关闭
                 if self.reactivate_closed and self._should_reactivate(bug, existing):
                     return self._reactivate_task(bug, existing, dry_run)
@@ -733,6 +767,7 @@ class SyncEngine:
                 note=note,
                 executor_id=executor,
                 customfields=customfields,
+                involve_member_ids=self._participant_ids or None,
             )
 
             # 双向标题同步：回写禅道标题（优先使用 taskIdentifier 如 VLNS-62575）
@@ -955,6 +990,42 @@ class SyncEngine:
 
     # ── 去重 ──────────────────────────────────────────
 
+    # 匹配 TB 标题中的禅道 ID 标签变体：
+    #   【禅道60365】             标准格式
+    #   【禅道60365、60357、…】   多 ID 合并格式
+    #   【禅道YX+58926】          带项目前缀格式（ASCII 或中文都可，回溯保证 ID 捕获正确）
+    #   #5555                    # 号前缀
+    #   【#5555】                 # 号前缀带方括号
+    _ZENTAO_TAG_RE = re.compile(
+        r'(?:【禅道'                        # 开头：【禅道
+        r'(?:[\w+]*\+)?'                   # 可选前缀如 YX+/产品+
+        r'(\d+(?:[、,，]\s*\d+)*)'         # 第一个 ID 及后续逗号分隔的 ID
+        r'】'                              # 结尾：】
+        r'|'                               # 或
+        r'#(\d+)'                          # # 号前缀 #5555
+        r')'
+    )
+
+    @staticmethod
+    def _task_title_contains_zentao_id(task: 'TeambitionTask',
+                                       bug_id: int) -> bool:
+        """检查 TB 任务的标题和备注中是否包含指定禅道 Bug ID。
+
+        同时扫描 task.content（标题）和 task.note（备注），匹配任意一处即返回 True。
+        """
+        tag_re = SyncEngine._ZENTAO_TAG_RE
+        title = getattr(task, 'content', '') or ''
+        note = getattr(task, 'note', '') or ''
+        haystack = f"{title}\n{note}" if note else title
+        for m in tag_re.finditer(haystack):
+            ids_str = m.group(1) or m.group(2)
+            if not ids_str:
+                continue
+            ids = re.split(r'[、,，]\s*', ids_str)
+            if str(bug_id) in ids:
+                return True
+        return False
+
     def _find_existing_task(self, bug: ZentaoBug):
         # Tier 1: 精确匹配 【禅道{id}】
         tag = f"【禅道{bug.id}】"
@@ -964,6 +1035,40 @@ class SyncEngine:
                   and self._match_project(t, self.project_name)]
         if active:
             return active[0]
+
+        # Tier 1.1: 宽松搜索 — 搜索 "禅道{id}" / "#{id}" 再正则校验
+        # 覆盖多条合并 (【禅道60365、60357、…】) 和带前缀 (【禅道YX+58926】、#5555)
+        # 优化：禅道 keyword 搜索为 0 结果时，跳过 #{id} 搜索（节省 1 次 API 调用）
+        if not self.loose_tag_dedup:
+            return None
+        zen_keyword = f"禅道{bug.id}"
+        zen_results = self.teambition.search_tasks(zen_keyword)
+        for task in zen_results:
+            if getattr(task, 'isArchived', False):
+                continue
+            if not self._match_project(task, self.project_name):
+                continue
+            if self._task_title_contains_zentao_id(task, bug.id):
+                task_id_disp = (task.taskId or '?')[:16]
+                logger.info("宽松标签匹配: Bug#%d → TB %s (%s)",
+                            bug.id, task_id_disp,
+                            (task.content or '')[:60])
+                return task
+        # 禅道搜索为 0 → 尝试 # 号前缀变体
+        hash_keyword = f"#{bug.id}"
+        if hash_keyword != zen_keyword:
+            hash_results = self.teambition.search_tasks(hash_keyword)
+            for task in hash_results:
+                if getattr(task, 'isArchived', False):
+                    continue
+                if not self._match_project(task, self.project_name):
+                    continue
+                if self._task_title_contains_zentao_id(task, bug.id):
+                    task_id_disp = (task.taskId or '?')[:16]
+                    logger.info("宽松标签匹配(#): Bug#%d → TB %s (%s)",
+                                bug.id, task_id_disp,
+                                (task.content or '')[:60])
+                    return task
 
         # Tier 1.5: VLNS/CPAX 编号精确匹配（按 taskIdentifier 直接查 TB）
         vlns_numbers = self.source.extract_vlns_numbers(bug.id)
@@ -1146,13 +1251,11 @@ class SyncEngine:
         return None
 
     def _preload_assignee_mapping(self, bugs: list):
-        """预学习源平台经办人 → TB 执行人映射。
+        """预解析源平台经办人 → TB 执行人映射。
 
-        从当前 Bug 列表和已有 TB 缺陷任务中学习：
-        1. 对当前 Bug 列表中的每条，通过拼音索引预先解析 assignedTo → TB userId
-        2. 扫描 TB 最近缺陷任务，用【禅道{id}】标签关联已有 bug 的 assignedTo
+        对当前 Bug 列表中每个唯一的 assignedTo 尝试拼音匹配，
+        匹配成功则缓存到 _learned_assignee_map，避免逐条重复查找。
         """
-        # 1. 拼音预匹配：对当前 Bug 列表中每个唯一的 assignedTo 尝试拼音匹配
         unique_assignees = {b.assignedTo for b in bugs if b.assignedTo}
         for name in unique_assignees:
             if name in self._learned_assignee_map:
@@ -1160,50 +1263,6 @@ class SyncEngine:
             pinyin_id = self._lookup_member_by_pinyin(name)
             if pinyin_id:
                 self._learned_assignee_map[name] = pinyin_id
-
-        # 2. 从已有 TB 任务学习：利用 bug_id 关联
-        if not bugs or not self.teambition.project_id:
-            return
-        defect_sfc_id = self.teambition.scenariofieldconfig_id
-        if not defect_sfc_id:
-            return
-
-        try:
-            # 构建 bug_id → assignedTo 快速查找
-            bug_assignee = {b.id: b.assignedTo for b in bugs if b.assignedTo}
-            if not bug_assignee:
-                return
-
-            # 拉最近 50 条 TB 任务
-            tag_re = re.compile(r'【禅道(\d+)】')
-            tasks = []
-            page_token = ""
-            while True:
-                batch, page_token = self.teambition.query_project_tasks(
-                    page_size=50, page_token=page_token, sfc_id=defect_sfc_id)
-                if not batch:
-                    break
-                tasks.extend(batch)
-                if not page_token or len(tasks) >= 50:
-                    break
-
-            learned = 0
-            for task in tasks:
-                if not task.executorId:
-                    continue
-                m = tag_re.search(task.content or "")
-                if not m:
-                    continue
-                bug_id = int(m.group(1))
-                assigned = bug_assignee.get(bug_id)
-                if assigned and assigned not in self._learned_assignee_map:
-                    self._learned_assignee_map[assigned] = task.executorId
-                    learned += 1
-
-            if learned:
-                logger.info("从已有 TB 任务学习到 %d 条经办人→执行人映射", learned)
-        except Exception as e:
-            logger.debug("预学习经办人映射失败（非致命）: %s", e)
 
     def _build_pinyin_member_index(self):
         """从 TB 成员的中文名构建拼音轮转索引。
@@ -1298,16 +1357,19 @@ class SyncEngine:
             # 1) 优先从重现步骤文本中提取
             import re as _re
             steps_text = bug.steps or ""
-            # 先匹配分数格式（概率|1/1）
-            m = _re.search(r'概率[：:\s|]*(\d+/\d+)', steps_text)
+            from src.extractor import clean_template_text
+            steps_clean = clean_template_text(steps_text, strip_html=False)
+            # 先匹配模板格式 "概率 1/1" 或 "概率|1/1" 或 "概率：1/1"
+            m = _re.search(r'概率[：:\s|]*(\d+/\d+)', steps_clean)
             if m:
                 repro = repro_map.get(m.group(1))
+            # 匹配 "复现概率：必现" 等关键词格式
             if not repro:
                 m = _re.search(r'(?:复现|重现)(?:概率|频率)[：:\s]*([^\s<]+)',
-                              steps_text)
+                              steps_clean)
             if not repro and not m:
                 m = _re.search(r'(?:必现|高概率|中概率|低概率|偶尔|随机)',
-                              steps_text)
+                              steps_clean)
             if m and not repro:
                 word = m.group(1) if m.lastindex else m.group(0)
                 repro = repro_map.get(word) or (
@@ -1330,11 +1392,23 @@ class SyncEngine:
                 "cfId": self.cf_ids["category"],
                 "value": [category],
             })
-        if self.cf_ids.get("version") and bug.openedBuild:
-            fields.append({
-                "cfId": self.cf_ids["version"],
-                "value": [bug.openedBuild],
-            })
+        if self.cf_ids.get("version"):
+            version = bug.openedBuild or ""
+            # 当 API 未返回 openedBuild 时，从 steps 模板提取
+            if not version and self.extraction_enabled and bug.steps:
+                import re as _re
+                from src.extractor import clean_template_text
+                steps_clean = clean_template_text(bug.steps, strip_html=False)
+                m = _re.search(
+                    r'(?:软件版本|固件版本)[：:\s]*(\d+\.\d+(?:\.\d+)?)',
+                    steps_clean)
+                if m:
+                    version = m.group(1)
+            if version:
+                fields.append({
+                    "cfId": self.cf_ids["version"],
+                    "value": [version],
+                })
         if self.cf_ids.get("found_time"):
             found_time = None
             if self.extraction_enabled:
