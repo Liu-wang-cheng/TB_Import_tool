@@ -1,8 +1,8 @@
 {
-  "version": "2.0",
-  "sha256": "80e1e876d9432d62694f25492425d3287dcc3b2dc8cb156761d51ba6210b2c58",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.0/SmartDefectPlatform.zip",
-  "release_date": "2026-06-03",
-  "release_notes": "v2.0: HTML表格保留+黑色字体+复现概率分数格式+附件限制移除+209测试",
+  "version": "2.1",
+  "sha256": "52cfac6b5ee5d38721c99bef1611485262108aa788827dac511efb235afd2eac",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.1/SmartDefectPlatform_v2.1.zip",
+  "release_date": "2026-06-04",
+  "release_notes": "v2.1 release",
   "min_version": "1.0"
 }
