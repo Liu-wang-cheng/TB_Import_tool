@@ -3,6 +3,6 @@
   "sha256": "52cfac6b5ee5d38721c99bef1611485262108aa788827dac511efb235afd2eac",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.1/SmartDefectPlatform_v2.1.zip",
   "release_date": "2026-06-04",
-  "release_notes": "v2.1 release",
+  "release_notes": "TF-IDF分类器标题清理增强（SN码/日期/版本号等噪音去除）+ 143条训练数据重新分类消除\"杂项&模糊地带\" + 训练模型随更新自动分发 + GUI新增TB任务参与者（多人逗号分隔）+ extract_datetime <br> 分隔修复 + 正则误删修复 + 原子文件写入 + 测试用例增至164个",
   "min_version": "1.0"
 }
