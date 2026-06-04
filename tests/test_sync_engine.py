@@ -529,7 +529,7 @@ class TestZentaoTagVariants:
         assert engine._task_title_contains_zentao_id(task, 20240101) is True
 
     def test_chinese_prefix_works(self):
-        """中文前缀也能正确解析（依赖 \d+ 强制回溯保证 ID 捕获正确）"""
+        """中文前缀也能正确解析（依赖 \\d+ 强制回溯保证 ID 捕获正确）"""
         engine = make_engine()
         task = self._make_task("【禅道产品+123】描述")
         assert engine._task_title_contains_zentao_id(task, 123) is True
@@ -548,3 +548,90 @@ class TestZentaoTagVariants:
         task = self._make_task("普通标题无标签")
         task.note = ""
         assert engine._task_title_contains_zentao_id(task, 12345) is False
+
+
+class TestCleanTitle:
+    """SimilarityClassifier._clean_title 标题噪音清理"""
+
+    def test_brackets_removed(self):
+        from src.classifier import SimilarityClassifier
+        assert "【" not in SimilarityClassifier._clean_title("【禅道123】机器回充失败")
+
+    def test_vlns_removed(self):
+        from src.classifier import SimilarityClassifier
+        assert "VLNS" not in SimilarityClassifier._clean_title("VLNS-12345清扫异常")
+
+    def test_cpax_removed(self):
+        from src.classifier import SimilarityClassifier
+        assert "CPAX" not in SimilarityClassifier._clean_title("CPAX-67890建图失败")
+
+    def test_sn_code_removed(self):
+        from src.classifier import SimilarityClassifier
+        clean = SimilarityClassifier._clean_title("HQ5S00700002HC260600无法开机")
+        assert "HQ5S007" not in clean
+        assert "无法开机" in clean
+
+    def test_date_removed(self):
+        from src.classifier import SimilarityClassifier
+        clean = SimilarityClassifier._clean_title("2026-05-08充电异常")
+        assert "2026" not in clean
+        assert "充电异常" in clean
+
+    def test_time_removed(self):
+        from src.classifier import SimilarityClassifier
+        clean = SimilarityClassifier._clean_title("20:31扫地卡住")
+        assert "20:31" not in clean
+        assert "扫地卡住" in clean
+
+    def test_hash_number_removed(self):
+        from src.classifier import SimilarityClassifier
+        clean = SimilarityClassifier._clean_title("#5555避障失败")
+        assert "#5555" not in clean
+        assert "避障失败" in clean
+
+    def test_version_removed(self):
+        from src.classifier import SimilarityClassifier
+        clean = SimilarityClassifier._clean_title("V2.3.5升级后建图异常")
+        assert "V2.3.5" not in clean
+        assert "建图异常" in clean
+
+    def test_leading_number_with_space_removed(self):
+        from src.classifier import SimilarityClassifier
+        clean = SimilarityClassifier._clean_title("1. 机器回充失败")
+        assert "1." not in clean
+        assert "机器回充失败" in clean
+
+    def test_leading_number_no_space_kept(self):
+        """1.5倍 不应被误删（分隔符后无空白）"""
+        from src.classifier import SimilarityClassifier
+        clean = SimilarityClassifier._clean_title("1.5倍建图面积")
+        assert "1.5" in clean
+
+    def test_full_noise_title(self):
+        """全噪音标题清理后仍保留核心语义"""
+        from src.classifier import SimilarityClassifier
+        clean = SimilarityClassifier._clean_title(
+            "【禅道60365】#5555 HQ5S00700002HC260600 2026-05-08 20:31 回充异常")
+        assert "回充异常" in clean
+        assert "60365" not in clean
+        assert "HQ5S" not in clean
+
+
+class TestExtractDatetimeBR:
+    """extract_datetime <br> 分隔修复"""
+
+    def test_datetime_with_br_between_date_time(self):
+        from src.extractor import extract_datetime
+        from datetime import datetime
+        result = extract_datetime(
+            "时间：6/3<br>20:40",
+            reference_date=datetime(2026, 6, 1))
+        assert result == "2026-06-03 20:40"
+
+    def test_datetime_with_br_self_closing(self):
+        from src.extractor import extract_datetime
+        from datetime import datetime
+        result = extract_datetime(
+            "时间：6/3<br/>20:47",
+            reference_date=datetime(2026, 6, 1))
+        assert result == "2026-06-03 20:47"

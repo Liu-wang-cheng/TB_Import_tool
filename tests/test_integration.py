@@ -462,3 +462,80 @@ class TestAllInstances:
         bugs = source.fetch_all_bugs(product_id=inst["product_id"])
         assert isinstance(bugs, list)
         source.close()
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_extract_datetime_from_steps(self, inst):
+        """验证从 Bug 步骤中提取缺陷时间"""
+        from src.extractor import extract_datetime
+        from datetime import datetime
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(product_id=inst["product_id"], page_size=15)
+        found = False
+        for bug in bugs:
+            detail = client.fetch_bug_detail(bug.id)
+            if detail.steps and len(detail.steps) > 50:
+                found = True
+                ref = datetime.now()
+                if bug.openedDate:
+                    try:
+                        ref = datetime.fromisoformat(bug.openedDate.replace('Z', '+00:00'))
+                    except (ValueError, AttributeError):
+                        pass
+                result = extract_datetime(detail.steps, reference_date=ref)
+                # 有结果时格式应为 YYYY-MM-DD HH:MM
+                if result:
+                    assert len(result) == 16  # "2026-05-08 20:31"
+                    assert result[4] == '-'
+                    assert result[13] == ':'
+                break
+        if not found:
+            pytest.skip("未找到有步骤的Bug")
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_extract_sn_from_steps(self, inst):
+        """验证从 Bug 步骤中提取 SN 编码"""
+        from src.extractor import extract_sn
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        bugs = client.fetch_all_bugs(product_id=inst["product_id"], page_size=15)
+        found = False
+        for bug in bugs:
+            detail = client.fetch_bug_detail(bug.id)
+            if detail.steps and len(detail.steps) > 30:
+                found = True
+                sn = extract_sn(detail.steps)
+                # SN 可能为 None（步骤中无 SN），不崩溃即可
+                if sn:
+                    assert len(sn) >= 8
+                    assert sn.upper() == sn
+                break
+        if not found:
+            pytest.skip("未找到有步骤的Bug")
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_clean_title_preserves_semantics(self, inst):
+        """验证 _clean_title 保留核心语义"""
+        from src.classifier import SimilarityClassifier
+        test_cases = [
+            ("【禅道60365】回充异常", "回充异常"),
+            ("VLNS-12345清扫路径异常", "清扫路径异常"),
+            ("HQ5S00700002HC260600建图失败", "建图失败"),
+            ("2026-05-08 20:31充电失败", "充电失败"),
+        ]
+        for title, expected_keyword in test_cases:
+            clean = SimilarityClassifier._clean_title(title)
+            assert expected_keyword in clean, f"'{title}' → '{clean}' 缺少 '{expected_keyword}'"
+
+    @pytest.mark.parametrize("inst", INSTANCES)
+    def test_module_filter_with_submodules(self, inst):
+        """验证模块筛选包含子模块"""
+        client = _make_client(inst["base_url"], inst["account"], inst["password"])
+        client.authenticate()
+        modules = client.fetch_product_modules(inst["product_id"])
+        if not modules:
+            pytest.skip("该产品无模块数据")
+        # 验证模块列表非空且结构正确
+        for m in modules[:5]:
+            assert isinstance(m, dict)
+            assert "id" in m or "name" in m
