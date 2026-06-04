@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智能缺陷管理平台 — 快速上手</title>
+<style>
+  :root { --primary: #3742fa; --danger: #e74c3c; --success: #2ed573; --gray: #57606f; --bg: #f5f6fa; --card: #fff; --border: #dcdde1; --text: #2f3542; --muted: #636e72; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "Noto Sans SC", "PingFang SC", sans-serif; background: var(--bg); color: var(--text); line-height: 1.8; }
+  .container { max-width: 860px; margin: 0 auto; padding: 40px 24px; }
+
+  h1 { font-size: 2em; text-align: center; margin-bottom: 6px; }
+  .subtitle { text-align: center; color: var(--muted); margin-bottom: 40px; font-size: 1em; }
+  h2 { font-size: 1.3em; margin: 40px 0 14px; padding-bottom: 6px; border-bottom: 2px solid var(--primary); }
+  p, li { margin-bottom: 8px; }
+
+  .screenshot { display: block; max-width: 100%; border-radius: 8px; border: 1px solid var(--border); box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin: 14px auto; }
+  .img-caption { text-align: center; color: var(--muted); font-size: 0.85em; margin-bottom: 16px; }
+
+  .tip { background: #eef2ff; border-left: 4px solid var(--primary); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; font-size: 0.95em; }
+  .warn { background: #fff8e1; border-left: 4px solid #ffa502; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; font-size: 0.95em; }
+
+  .step { display: flex; align-items: flex-start; gap: 14px; margin: 20px 0; }
+  .step-num { flex-shrink: 0; width: 32px; height: 32px; background: var(--primary); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.95em; }
+  .step-text { flex: 1; }
+  .step-text strong { display: block; font-size: 1.05em; margin-bottom: 2px; }
+
+  .flow { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; margin: 20px 0; }
+  .flow-card { background: var(--card); border: 2px solid var(--border); border-radius: 8px; padding: 10px 16px; text-align: center; font-size: 0.9em; }
+  .flow-card strong { display: block; font-size: 1em; }
+  .flow-arrow { color: var(--muted); font-size: 18px; }
+
+  .anno-box { position: relative; display: inline-block; }
+  .anno-red { border: 3px solid var(--danger) !important; border-radius: 6px; }
+
+  @media (max-width: 640px) {
+    .container { padding: 16px; }
+    .flow { flex-direction: column; }
+    .flow-arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>智能缺陷管理平台</h1>
+<p class="subtitle">把禅道 Bug 一键同步到 Teambition</p>
+
+<!-- ===== 流程概览 ===== -->
+<h2>操作流程</h2>
+<div class="flow">
+  <div class="flow-card"><strong>① 填配置</strong>账号 + 项目</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-card"><strong>② 筛缺陷</strong>URL 自动解析</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-card"><strong>③ 测连接</strong>验证配置</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-card"><strong>④ 试运行</strong>预览结果</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-card"><strong>⑤ 正式同步</strong>一键导入</div>
+</div>
+
+<!-- ===== 第一步：填配置 ===== -->
+<h2>一、填配置（只需一次）</h2>
+
+<p>所有配置都在<strong>主界面</strong>直接填，不用进任何子菜单：</p>
+<img class="screenshot" src="screenshots/01_main_window.png" alt="主界面">
+<div class="img-caption">▲ 主界面 — 一切都在这里操作</div>
+
+<table style="width:100%; border-collapse:collapse; font-size:0.9em; margin:8px 0;">
+  <tr style="background:#f1f2f6;">
+    <th style="padding:6px 10px; text-align:left; border:1px solid var(--border);">区域</th>
+    <th style="padding:6px 10px; text-align:left; border:1px solid var(--border);">填什么</th>
+  </tr>
+  <tr><td style="padding:6px 10px; border:1px solid var(--border);"><strong>禅道配置</strong></td><td style="padding:6px 10px; border:1px solid var(--border);">服务器地址、登录账号、密码</td></tr>
+  <tr><td style="padding:6px 10px; border:1px solid var(--border);"><strong>Teambition 配置</strong></td><td style="padding:6px 10px; border:1px solid var(--border);">创建人、所属项目</td></tr>
+  <tr><td style="padding:6px 10px; border:1px solid var(--border);"><strong>筛选面板</strong></td><td style="padding:6px 10px; border:1px solid var(--border);">来源URL、产品、状态、指派人、日期</td></tr>
+</table>
+<div class="tip"><strong>TB 后台凭据（App ID / Secret）已预置，无需改动。</strong>填完上面几个框就能用。</div>
+
+<!-- ===== 第二步：筛选 ===== -->
+<h2>二、筛选缺陷</h2>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-text">
+    <strong>URL 自动解析（推荐）</strong>
+    <p>在浏览器打开禅道 Bug 列表页 → 复制地址栏 URL → 粘贴到「来源URL」→ 点「解析」。产品ID、模块全部自动填好，不会出错。</p>
+  </div>
+</div>
+<img class="screenshot" src="screenshots/09_filter_panel.png" alt="筛选面板">
+<div class="img-caption">▲ 粘贴 URL 后点「解析」，下方筛选条件自动填充</div>
+
+<p>解析完成后微调一下状态（一般选「活跃」），其他留空即可。需要过滤指派人时点「添加」，按 <code>部门-姓名</code> 格式填写（部门手写，姓名填禅道里的指派人名称，如 <code>IOT-陈斌</code>）。</p>
+
+<div class="tip"><strong>手动填写也可以但不推荐：</strong>如果 URL 解析不到（比如禅道版本太老），可以手动选 产品 → 项目 → 模块。</div>
+
+<!-- ===== 第三步：同步 ===== -->
+<h2>三、执行同步</h2>
+<p>按下面顺序点四个按钮：</p>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-text">
+    <strong>测试连接</strong>
+    <p>确认禅道和 Teambition 都能连通。弹窗提示成功即可下一步。</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-text">
+    <strong>列出缺陷</strong>
+    <p>看看筛选条件会匹配到哪些 Bug。不会改任何数据，放心点。</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">3</div>
+  <div class="step-text">
+    <strong>试运行</strong>
+    <p>模拟同步，预览哪些会新建、哪些会跳过。</p>
+    <div class="warn"><strong>首次使用务必先试运行！</strong>确认结果没问题再正式同步。</div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">4</div>
+  <div class="step-text">
+    <strong>正式同步</strong>
+    <p>实际在 Teambition 创建/更新任务。同步期间不要关窗口。</p>
+  </div>
+</div>
+
+<!-- ===== 进阶功能 ===== -->
+<h2>四、进阶功能</h2>
+
+<img class="screenshot" src="screenshots/10_switches_panel.png" alt="开关面板">
+<div class="img-caption">▲ 主界面上的功能开关</div>
+
+<h3>重新打开任务</h3>
+<p>勾选主界面上的<strong>「重新打开任务」</strong>开关后，同步时会自动检测：如果禅道 Bug 仍然是活跃状态，但对应的 Teambition 任务已被关闭，工具会自动将任务重新打开并同步最新的评论和附件。</p>
+<div class="warn">反之不勾选时，已关闭的 TB 任务即使禅道 Bug 还是活跃的，也不会重新打开，仅同步评论。</div>
+
+<h3>AI 分析日志</h3>
+<p>勾选<strong>「开启AI分析日志」</strong>后，同步完成会自动从 DRC 日志服务器下载设备日志，调用大模型分析故障原因，并将分析结果写入 Teambition 任务评论。</p>
+<p>其下的三个子开关可根据需要开启：</p>
+<ul>
+  <li><strong>故障模式库</strong> — 匹配已知故障模式（如倾斜误触发、抱起未恢复），给出根因提示</li>
+  <li><strong>模块化提示词</strong> — 使用分类专属 Prompt 模板，提高分析精准度</li>
+  <li><strong>RAG知识库</strong> — 结合历史分析经验，让 AI 参考以往案例</li>
+</ul>
+<div class="tip"><strong>首次使用 AI 分析：</strong>需要先在「配置 → AI分析」中填写 DRC 服务器地址和凭证，并在「配置 → 分类器」中配置 LLM 大模型。</div>
+
+<img class="screenshot" src="screenshots/05_config_classifier.png" alt="LLM配置">
+<div class="img-caption">▲ 分类器配置页面 — LLM 大模型 API 地址和 Key</div>
+
+<p>LLM API 地址填写：<code>http://192.168.160.145:8081</code>，API Key 从管理员处获取。</p>
+
+<!-- ===== 按钮速查 ===== -->
+<h2>按钮速查</h2>
+<table style="width:100%; border-collapse:collapse; font-size:0.9em; margin:12px 0;">
+  <tr style="background:#f1f2f6;">
+    <th style="padding:8px 12px; text-align:left; border:1px solid var(--border);">按钮</th>
+    <th style="padding:8px 12px; text-align:left; border:1px solid var(--border);">作用</th>
+    <th style="padding:8px 12px; text-align:left; border:1px solid var(--border);">会改数据？</th>
+  </tr>
+  <tr>
+    <td style="padding:8px 12px; border:1px solid var(--border);"><strong>测试连接</strong></td>
+    <td style="padding:8px 12px; border:1px solid var(--border);">验证账号密码是否正确</td>
+    <td style="padding:8px 12px; border:1px solid var(--border); color:#2e7d32;">不会</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 12px; border:1px solid var(--border);"><strong>列出缺陷</strong></td>
+    <td style="padding:8px 12px; border:1px solid var(--border);">查看符合条件的 Bug 列表</td>
+    <td style="padding:8px 12px; border:1px solid var(--border); color:#2e7d32;">不会</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 12px; border:1px solid var(--border);"><strong>试运行</strong></td>
+    <td style="padding:8px 12px; border:1px solid var(--border);">模拟同步，预览结果</td>
+    <td style="padding:8px 12px; border:1px solid var(--border); color:#2e7d32;">不会</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 12px; border:1px solid var(--border); background:#fde8e8;"><strong style="color:var(--danger);">正式同步</strong></td>
+    <td style="padding:8px 12px; border:1px solid var(--border);">真实创建 TB 任务、上传附件</td>
+    <td style="padding:8px 12px; border:1px solid var(--border); color:#c62828; font-weight:600;">会！</td>
+  </tr>
+</table>
+
+<!-- ===== FAQ ===== -->
+<h2>常见问题</h2>
+
+<p><strong>Q: 连接测试失败？</strong></p>
+<p>A: 检查服务器地址是否正确（不要多空格或漏掉路径）、账号密码能否登录禅道。</p>
+
+<p><strong>Q: 同步后 TB 没看到新任务？</strong></p>
+<p>A: 看日志输出 — 如果显示「跳过-重复」，说明该 Bug 之前已同步过，去重机制避免了重复创建，可在 TB 中搜索 <code>【禅道+编号】</code> 找到已有任务。</p>
+
+<p><strong>Q: 任务重复了怎么办？</strong></p>
+<p>A: 同步靠标题里的 <code>【禅道xxxxx】</code> 标注来识别已有任务，不要手动删这个标签。</p>
+
+<p><strong>Q: 配置想重填？</strong></p>
+<p>A: 主界面上直接改就行，改了自动保存。</p>
+
+<p style="text-align:center; color:var(--muted); margin-top:40px; font-size:0.85em;">智能缺陷管理平台 v1.6 · 快速上手指南 · 2026</p>
+
+</div>
+</body>
+</html>

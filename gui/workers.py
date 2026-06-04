@@ -269,13 +269,16 @@ class ListBugsWorker(QThread):
             # 钉钉通知
             if self.dingtalk_bot:
                 try:
-                    from src.models import SEVERITY_DISPLAY_MAP
-                    severity_map = SEVERITY_DISPLAY_MAP
+                    sev_map = self.config.get("teambition", {}).get("severity_map", {})
                     lines = [f"共 {len(bugs)} 条 Bug:", "",
                              "| ID | 状态 | 严重程度 | 指派给 | 标题 |",
                              "| --- | --- | --- | --- | --- |"]
                     for bug in bugs[:20]:
-                        sev = severity_map.get(str(bug.severity), bug.severity)
+                        s = str(bug.severity).strip() if bug.severity else ""
+                        tb_sev = sev_map.get(s)
+                        if tb_sev is None and s.isdigit():
+                            tb_sev = sev_map.get(int(s))
+                        sev = f"{s}→{tb_sev}" if tb_sev is not None else s
                         assignee = bug.assignedTo[:8] if bug.assignedTo else "-"
                         title = bug.title
                         lines.append(f"| {bug.id} | {bug.status} | {sev} | {assignee} | {title} |")

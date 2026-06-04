@@ -47,9 +47,12 @@ class SyncEngine:
         tb_cfg = config.get("teambition", {})
         self.user_mapping: Dict[str, str] = tb_cfg.get("user_mapping", {})
         self.severity_map: Dict[str, str] = tb_cfg.get("severity_map", {
+            # 数字映射
             "1": "A", "2": "B", "3": "C", "4": "C",
-            # 中文名保持 SABC 原有映射
+            # 中文映射
             "致命": "S", "严重": "A", "一般": "B", "建议": "C", "轻微": "C",
+            # 字母映射
+            "A": "A", "B": "B", "C": "C", "D": "C",
         })
         self.type_category_map: Dict[str, str] = tb_cfg.get("type_category_map", {})
         self.assignee_category_map: Dict[str, str] = tb_cfg.get("assignee_category_map", {})
