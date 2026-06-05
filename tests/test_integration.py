@@ -200,6 +200,7 @@ class TestAllInstances:
             pytest.skip("无Bug数据")
         e = SyncEngine.__new__(SyncEngine)
         e.severity_map = {1: "A", 2: "B", 3: "C", 4: "C"}
+        e.severity_labels = {}
         for bug in bugs[:5]:
             result = e._map_severity(bug.severity)
             assert result in ("S", "A", "B", "C")
