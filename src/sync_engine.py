@@ -54,6 +54,7 @@ class SyncEngine:
             # 字母映射
             "A": "A", "B": "B", "C": "C", "D": "C",
         })
+        self.severity_labels: Dict[str, str] = {}  # 禅道页面翻译: {"1": "致命", ...}
         self.type_category_map: Dict[str, str] = tb_cfg.get("type_category_map", {})
         self.assignee_category_map: Dict[str, str] = tb_cfg.get("assignee_category_map", {})
         self.default_reproduction = tb_cfg.get("default_reproduction", "中概率")
@@ -164,6 +165,12 @@ class SyncEngine:
         if progress_callback:
             progress_callback(0, 0, "正在获取禅道 Bug 列表...")
         filters = self.config.get("zentao", {}).get("filters", {})
+
+        # 动态获取严重程度翻译（API返回数字，需转为页面显示的中文/字母）
+        product_id = filters.get("product_id")
+        self.severity_labels = self.source.fetch_severity_labels(product_id)
+        if self.severity_labels:
+            logger.info("禅道严重程度翻译: %s", self.severity_labels)
         assigned_to = resolve_assigned_to(filters, self.source.account)
         bugs = self.source.fetch_all_bugs(
             product_id=filters.get("product_id"),
@@ -711,6 +718,14 @@ class SyncEngine:
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
                                   "", "标题含VLNS/CPAX，已导入过")
 
+            # VLNS/CPAX 评论检测：评论中有引用说明已有 TB 任务
+            vlns_in_comments = self.source.extract_vlns_numbers(bug.id)
+            if vlns_in_comments and bug.status != "active":
+                logger.info("[跳过-评论含VLNS] Bug#%d 评论含 VLNS/CPAX 编号: %s",
+                            bug.id, vlns_in_comments)
+                return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
+                                  "", f"评论含VLNS/CPAX编号: {vlns_in_comments}")
+
             # 去重检查：TB 搜索（一次 API 调用）
             existing = self._find_existing_task(bug)
             if existing:
@@ -1006,6 +1021,8 @@ class SyncEngine:
         r'】'                              # 结尾：】
         r'|'                               # 或
         r'#(\d+)'                          # # 号前缀 #5555
+        r'|'                               # 或
+        r'(?:^|[\s【\(])禅道(\d+)'         # 无方括号: 禅道6370（行首/空格/方括号后）
         r')'
     )
 
@@ -1021,7 +1038,7 @@ class SyncEngine:
         note = getattr(task, 'note', '') or ''
         haystack = f"{title}\n{note}" if note else title
         for m in tag_re.finditer(haystack):
-            ids_str = m.group(1) or m.group(2)
+            ids_str = m.group(1) or m.group(2) or m.group(3)
             if not ids_str:
                 continue
             ids = re.split(r'[、,，]\s*', ids_str)
@@ -1153,19 +1170,43 @@ class SyncEngine:
 
     def _map_severity(self, severity: str) -> str:
         """禅道严重程度 → TB严重程度
-        中文名: 致命→S, 严重→A, 一般→B, 建议/轻微→C
-        数字: 1→A, 2→B, 3→C, 4→C
-        字母: A→A, B→B, C→C, D/S→C"""
+
+        流程：API 数字 → 禅道页面翻译 → severity_map 映射 → TB 等级
+        例如实例1: "2" → "严重" → "A"
+        例如实例2: "2" → "B" → "B"
+        例如实例3: "2" → "2" → "B"（无翻译时用数字查map）
+        """
         s = str(severity).strip() if severity else ""
         if not s:
             logger.warning("严重程度为空，默认返回C")
             return "C"
+
+        # 1. 将 API 数字值翻译为禅道页面显示的标签
+        label = self.severity_labels.get(s, s) if self.severity_labels else s
+
+        # 2. 用翻译后的标签查 severity_map
         # YAML 可能解析 key 为 int 或 str，双键查找
-        mapped = self.severity_map.get(s) or self.severity_map.get(
-            int(s) if s.isdigit() else s)
+        mapped = self.severity_map.get(label)
+        if mapped is None:
+            mapped = self.severity_map.get(
+                int(label) if label.isdigit() else label)
         if mapped is not None:
             return mapped
-        # 没在 map 中的直接匹配字母等级
+
+        # 3. 标签没匹配到，回退用原始 API 值查 map
+        if label != s:
+            mapped = self.severity_map.get(s)
+            if mapped is None:
+                mapped = self.severity_map.get(
+                    int(s) if s.isdigit() else s)
+            if mapped is not None:
+                return mapped
+
+        # 4. 没在 map 中的直接匹配字母等级
+        if label.upper() in ("A", "B", "C"):
+            return label.upper()
+        if label.upper() in ("S", "D", "E", "F"):
+            return "C"
         if s.upper() in ("A", "B", "C"):
             return s.upper()
         if s.upper() in ("S", "D", "E", "F"):
@@ -1677,9 +1718,20 @@ class SyncEngine:
                 # span 无意义，保留文本
                 if tag.name == "span":
                     tag.unwrap()
-            # 图片替换
+            # 图片替换：显示文件名而非通用的 [图片]
             for img in soup.find_all("img"):
-                img.replace_with("[图片]")
+                src = img.get("src", "")
+                fid_match = re.search(r'file-read[_-](\d+)', src) or \
+                            re.search(r'/file/download/(\d+)', src)
+                if fid_match:
+                    file_id = fid_match.group(1)
+                    img.replace_with(f"[图片: image_{file_id}.png]")
+                else:
+                    alt = img.get("alt", "") or img.get("title", "")
+                    if alt:
+                        img.replace_with(f"[图片: {alt}]")
+                    else:
+                        img.replace_with("[图片]")
             # 表格添加简洁样式
             for table in soup.find_all("table"):
                 table["style"] = ("border-collapse:collapse;width:100%;"

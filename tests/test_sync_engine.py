@@ -8,7 +8,9 @@ from src.models import ZentaoBug
 
 
 def make_engine():
-    return SyncEngine.__new__(SyncEngine)
+    e = SyncEngine.__new__(SyncEngine)
+    e.severity_labels = {}
+    return e
 
 
 class TestHtmlToText:
@@ -207,6 +209,7 @@ class TestBuildNote:
         # Need a proper SyncEngine with severity_map
         engine = SyncEngine.__new__(SyncEngine)
         engine.severity_map = {"1": "S", "2": "A", "3": "B", "4": "C"}
+        engine.severity_labels = {}
         engine._html_to_text = SyncEngine._html_to_text
         engine._map_severity = lambda s: engine.severity_map.get(str(s), "B")
 
@@ -221,6 +224,7 @@ class TestBuildNote:
         ))
         engine = SyncEngine.__new__(SyncEngine)
         engine.severity_map = {"1": "S", "2": "A", "3": "B", "4": "C"}
+        engine.severity_labels = {}
         engine._html_to_text = SyncEngine._html_to_text
         engine._clean_html_for_tb = SyncEngine._clean_html_for_tb
         engine._map_severity = lambda s: engine.severity_map.get(str(s), "B")
@@ -235,6 +239,7 @@ class TestBuildNote:
         bug = self.make_bug(steps="")
         engine = SyncEngine.__new__(SyncEngine)
         engine.severity_map = {"1": "S", "2": "A", "3": "B", "4": "C"}
+        engine.severity_labels = {}
         engine._html_to_text = SyncEngine._html_to_text
         engine._map_severity = lambda s: engine.severity_map.get(str(s), "B")
 
@@ -383,10 +388,11 @@ class TestTitleCleaning:
 class TestSeverityMapping:
     """严重程度映射 (TB 不使用 S 等级)"""
 
-    def make_engine(self, severity_map=None):
+    def make_engine(self, severity_map=None, severity_labels=None):
         from src.sync_engine import SyncEngine
         e = SyncEngine.__new__(SyncEngine)
         e.severity_map = severity_map or {"1": "A", "2": "B", "3": "C", "4": "C"}
+        e.severity_labels = severity_labels or {}
         return e
 
     def test_numeric_1234(self):
@@ -429,6 +435,36 @@ class TestSeverityMapping:
         assert e._map_severity("3") == "C"
         assert e._map_severity("4") == "C"
 
+    def test_severity_labels_translate(self):
+        """有翻译时，API 数字先翻译为页面标签再查 map"""
+        labels = {"1": "致命", "2": "严重", "3": "一般", "4": "建议"}
+        smap = {"致命": "S", "严重": "A", "一般": "B", "建议": "C",
+                "1": "A", "2": "B", "3": "C", "4": "C"}
+        e = self.make_engine(smap, labels)
+        assert e._map_severity("1") == "S"   # 1→致命→S
+        assert e._map_severity("2") == "A"   # 2→严重→A
+        assert e._map_severity("3") == "B"   # 3→一般→B
+        assert e._map_severity("4") == "C"   # 4→建议→C
+
+    def test_severity_labels_letter(self):
+        """实例2: 翻译为 A/B/C/D，map 也支持字母映射"""
+        labels = {"1": "A", "2": "B", "3": "C", "4": "D"}
+        smap = {"A": "A", "B": "B", "C": "C", "D": "C",
+                "1": "A", "2": "B", "3": "C", "4": "C"}
+        e = self.make_engine(smap, labels)
+        assert e._map_severity("1") == "A"   # 1→A→A
+        assert e._map_severity("2") == "B"   # 2→B→B
+        assert e._map_severity("3") == "C"   # 3→C→C
+        assert e._map_severity("4") == "C"   # 4→D→C
+
+    def test_severity_labels_no_translation(self):
+        """实例3: 无翻译（数字不变），仍能通过 map 映射"""
+        labels = {"1": "1", "2": "2", "3": "3", "4": "4"}
+        smap = {"1": "A", "2": "B", "3": "C", "4": "C"}
+        e = self.make_engine(smap, labels)
+        assert e._map_severity("1") == "A"   # 1→1→A
+        assert e._map_severity("2") == "B"   # 2→2→B
+
     def test_reproduction_from_steps(self):
         """复现概率优先从步骤文本提取"""
         from src.sync_engine import SyncEngine
@@ -436,6 +472,7 @@ class TestSeverityMapping:
         e = SyncEngine.__new__(SyncEngine)
         e.cf_ids = {"reproduction": "cf_repro"}
         e.default_reproduction = "中概率"
+        e.severity_labels = {}
 
         # 测试从步骤提取
         bug = ZentaoBug(

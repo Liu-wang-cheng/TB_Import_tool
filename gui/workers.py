@@ -188,6 +188,7 @@ class ListBugsWorker(QThread):
     finished = pyqtSignal(list)  # list of ZentaoBug
     progress = pyqtSignal(str)
     error = pyqtSignal(str, str)  # (message, traceback_detail)
+    severity_labels: dict = {}  # 禅道页面翻译的严重程度
 
     def __init__(self, config, dingtalk_bot=None, parent=None):
         super().__init__(parent)
@@ -212,6 +213,11 @@ class ListBugsWorker(QThread):
             filters = self.config.get("zentao", {}).get("filters", {})
             if source.source_type == "zentao":
                 normalize_zentao_filters(filters)
+
+            # 获取严重程度翻译
+            if source.source_type == "zentao":
+                self.severity_labels = source.fetch_severity_labels(
+                    filters.get("product_id"))
             assigned_to = resolve_assigned_to(filters, source.account)
 
             bugs = source.fetch_all_bugs(
@@ -270,15 +276,17 @@ class ListBugsWorker(QThread):
             if self.dingtalk_bot:
                 try:
                     sev_map = self.config.get("teambition", {}).get("severity_map", {})
+                    sev_labels = source.fetch_severity_labels(filters.get("product_id"))
                     lines = [f"共 {len(bugs)} 条 Bug:", "",
                              "| ID | 状态 | 严重程度 | 指派给 | 标题 |",
                              "| --- | --- | --- | --- | --- |"]
                     for bug in bugs[:20]:
                         s = str(bug.severity).strip() if bug.severity else ""
+                        label = sev_labels.get(s, s) if sev_labels else s
                         tb_sev = sev_map.get(s)
                         if tb_sev is None and s.isdigit():
                             tb_sev = sev_map.get(int(s))
-                        sev = f"{s}→{tb_sev}" if tb_sev is not None else s
+                        sev = f"{label}→{tb_sev}" if tb_sev is not None else label
                         assignee = bug.assignedTo[:8] if bug.assignedTo else "-"
                         title = bug.title
                         lines.append(f"| {bug.id} | {bug.status} | {sev} | {assignee} | {title} |")

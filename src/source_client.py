@@ -79,3 +79,7 @@ class SourceClient(Protocol):
     def close(self) -> None:
         """释放资源（Session 关闭等）"""
         ...
+
+    def fetch_severity_labels(self, product_id: int = None) -> Dict[str, str]:
+        """获取源平台严重程度翻译映射（如 {"1": "致命", "2": "严重"}）"""
+        ...

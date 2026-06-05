@@ -75,3 +75,6 @@ class ZentaoAdapter:
 
     def close(self) -> None:
         self._client.close()
+
+    def fetch_severity_labels(self, product_id: int = None) -> Dict[str, str]:
+        return self._client.fetch_severity_labels(product_id)

@@ -1385,10 +1385,16 @@ class MainWindow(QMainWindow):
     def _on_list_result(self, bugs):
         self.progress_bar.setValue(100)
         self._worker_finished(save_config=True)
-        severity_map = {"1": "致命", "2": "严重", "3": "一般", "4": "轻微"}
+        sev_map = self.config.get("teambition", {}).get("severity_map", {})
+        sev_labels = getattr(self._worker, 'severity_labels', {}) if self._worker else {}
         self._log(f"\n共 {len(bugs)} 条 Bug:\n")
         for bug in bugs[:100]:
-            sev = severity_map.get(str(bug.severity), bug.severity)
+            s = str(bug.severity).strip() if bug.severity else ""
+            label = sev_labels.get(s, s) if sev_labels else s
+            tb_sev = sev_map.get(s)
+            if tb_sev is None and s.isdigit():
+                tb_sev = sev_map.get(int(s))
+            sev = f"{label}→{tb_sev}" if tb_sev is not None else (label or "-")
             assignee = (bug.assignedTo or "-")
             title = bug.title or ""
             self._log(f"#{bug.id}  [{bug.status}]  [{sev}]  @{assignee}\n    {title}")

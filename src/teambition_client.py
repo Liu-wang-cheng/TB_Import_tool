@@ -249,23 +249,28 @@ class TeambitionClient:
         return None
 
     def get_task_by_identifier(self, identifier: str) -> Optional[TeambitionTask]:
-        """按任务显示 ID（如 VLNS-66259）精确查找任务"""
-        pid = self.project_id
-        # TB API 的 uniqueId 参数只接受纯数字，去掉前缀
+        """按任务显示 ID（如 VLNS-66259）精确查找任务
+
+        TB 开放 API 不支持按 uniqueId 字段精确查询：
+        - /v3/project/{pid}/task/query 的 uniqueId 参数不起作用
+        - TQL 不支持 taskIdentifier/uniqueId 字段过滤
+        - 全文搜索不搜索 uniqueId 字段
+
+        因此回退到全文搜索 + 精确匹配 taskIdentifier。
+        如果标题/内容中包含编号文本则能找到，否则无法匹配。
+        """
         num = identifier.replace("VLNS-", "").replace("CPAX-", "")
-        data = self._request(
-            "GET", f"/v3/project/{pid}/task/query",
-            params={"uniqueId": num, "pageSize": 5},
-        )
-        result = data.get("result", [])
-        if isinstance(result, list):
-            for item in result:
-                task = self._parse_task(item)
-                # TB 存储的是纯数字，需精确比对
-                if task and task.taskIdentifier == num:
-                    return task
-        elif isinstance(result, dict) and result:
-            task = self._parse_task(result)
+        prefix = "VLNS" if "VLNS" in identifier else "CPAX"
+
+        # 用 "前缀-数字" 全文搜索，再精确匹配 identifier
+        results = self.search_tasks(f"{prefix}-{num}")
+        for task in results:
+            if task and task.taskIdentifier == num:
+                return task
+
+        # 备用：搜索纯数字
+        results2 = self.search_tasks(num)
+        for task in results2:
             if task and task.taskIdentifier == num:
                 return task
         return None

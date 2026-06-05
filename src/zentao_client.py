@@ -451,6 +451,111 @@ class ZentaoClient:
             closed_codes = fallback["closed"]
         return {"open": open_codes, "closed": closed_codes}
 
+    # ── 严重程度翻译 ──────────────────────────────────────
+
+    _severity_labels_cache: dict = {}
+
+    def fetch_severity_labels(self, product_id: int = None) -> dict:
+        """获取禅道严重程度数字→页面显示翻译的映射。
+
+        例如: {"1": "致命", "2": "严重", "3": "一般", "4": "建议"}
+        或:   {"1": "A", "2": "B", "3": "C", "4": "D"}
+        或:   {"1": "1", "2": "2", "3": "3", "4": "4"} (云版无翻译)
+
+        结果按 (base_url, account) 缓存。
+        """
+        cache_key = (self.base_url, self.account)
+        if cache_key in ZentaoClient._severity_labels_cache:
+            return ZentaoClient._severity_labels_cache[cache_key]
+
+        labels = self._fetch_severity_labels_impl(product_id)
+        ZentaoClient._severity_labels_cache[cache_key] = labels
+        return labels
+
+    def _fetch_severity_labels_impl(self, product_id: int = None) -> dict:
+        """实际获取严重程度翻译"""
+        # 确定 product_id
+        if not product_id:
+            # 从已有 bug 数据推断，或使用 1
+            product_id = 1
+
+        if self._cloud_session_auth:
+            return self._fetch_severity_labels_cloud(product_id)
+        return self._fetch_severity_labels_self_hosted(product_id)
+
+    def _fetch_severity_labels_self_hosted(self, product_id: int) -> dict:
+        """自建版：从 bug-create 页面 HTML 提取 severity 选项"""
+        try:
+            self._ensure_token()
+            headers = {"Token": self._token, "X-Requested-With": "XMLHttpRequest"}
+
+            # 尝试 clean URL 和 dynamic URL
+            for path in [
+                f"/bug-create-{product_id}.html",
+                f"/index.php?m=bug&f=create&productID={product_id}",
+            ]:
+                url = f"{self.base_url}{path}"
+                resp = self._http.get(url, headers=headers, timeout=15)
+                title_match = re.search(
+                    r'<title>(.*?)</title>', resp.text[:5000] if resp.text else '',
+                    re.IGNORECASE)
+                title = title_match.group(1).strip() if title_match else ''
+
+                if '提Bug' not in title and '创建' not in title:
+                    continue
+
+                sev_match = re.search(
+                    r'name=["\']severity["\'][^>]*>(.*?)</select>',
+                    resp.text, re.DOTALL)
+                if sev_match:
+                    options = re.findall(
+                        r'<option[^>]*value=["\']([^"\'>]+)["\'][^>]*>(.*?)</option>',
+                        sev_match.group(1))
+                    if options:
+                        labels = {v: re.sub(r'<[^>]+>', '', t).strip()
+                                  for v, t in options}
+                        logger.info("自建版严重程度翻译: %s", labels)
+                        return labels
+        except Exception as e:
+            logger.debug("获取自建版严重程度翻译失败: %s", e)
+        return {}
+
+    def _fetch_severity_labels_cloud(self, product_id: int) -> dict:
+        """云版：从 bug-create 页面 HTML 提取 severity 选项"""
+        try:
+            self._ensure_session()
+            headers = {"X-Requested-With": "XMLHttpRequest"}
+
+            for path in [
+                f"/bug-create-{product_id}.html",
+                f"/index.php?m=bug&f=create&productID={product_id}",
+            ]:
+                url = f"{self.base_url}{path}"
+                resp = self._http.get(url, headers=headers, timeout=15)
+                title_match = re.search(
+                    r'<title>(.*?)</title>', resp.text[:5000] if resp.text else '',
+                    re.IGNORECASE)
+                title = title_match.group(1).strip() if title_match else ''
+
+                if '提Bug' not in title and '创建' not in title:
+                    continue
+
+                sev_match = re.search(
+                    r'name=["\']severity["\'][^>]*>(.*?)</select>',
+                    resp.text, re.DOTALL)
+                if sev_match:
+                    options = re.findall(
+                        r'<option[^>]*value=["\']([^"\'>]+)["\'][^>]*>(.*?)</option>',
+                        sev_match.group(1))
+                    if options:
+                        labels = {v: re.sub(r'<[^>]+>', '', t).strip()
+                                  for v, t in options}
+                        logger.info("云版严重程度翻译: %s", labels)
+                        return labels
+        except Exception as e:
+            logger.debug("获取云版严重程度翻译失败: %s", e)
+        return {}
+
     # ── 通用请求 ──────────────────────────────────────
 
     def _request(self, method: str, path: str,

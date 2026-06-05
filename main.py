@@ -43,7 +43,8 @@ def setup_logging(config: dict, verbose: bool = False):
     logging.getLogger().addHandler(file_handler)
 
 
-def list_bugs(source, filters: dict, severity_map: dict = None):
+def list_bugs(source, filters: dict, severity_map: dict = None,
+              severity_labels: dict = None):
     assigned_to = resolve_assigned_to(filters, zentao_account=source.account)
     bugs = source.fetch_all_bugs(
         product_id=filters.get("product_id"),
@@ -64,22 +65,24 @@ def list_bugs(source, filters: dict, severity_map: dict = None):
         module_id_set=module_id_set,
     )
     print(f"\n共 {len(bugs)} 条 Bug:\n")
-    print(f"{'ID':<8} {'状态':<10} {'严重程度':<10} {'指派给':<10} {'标题'}")
+    print(f"{'ID':<8} {'状态':<10} {'严重程度':<12} {'指派给':<10} {'标题'}")
     print("-" * 100)
     for bug in bugs:
         s = str(bug.severity).strip() if bug.severity else ""
-        # TB 等级
+        # 禅道页面翻译后的名称（致命/严重/一般/建议 或 A/B/C/D）
+        label = severity_labels.get(s, s) if severity_labels else s
+        # TB 映射等级
         tb_sev = None
         if severity_map:
             tb_sev = severity_map.get(s)
             if tb_sev is None and s.isdigit():
                 tb_sev = severity_map.get(int(s))
         if tb_sev is not None:
-            sev = f"{s}→{tb_sev}"
+            sev = f"{label}→{tb_sev}"
         else:
-            sev = s or "-"
+            sev = label or "-"
         assignee = bug.assignedTo[:8] if bug.assignedTo else "-"
-        print(f"{bug.id:<8} {bug.status:<10} {sev:<10} {assignee:<10} {bug.title}")
+        print(f"{bug.id:<8} {bug.status:<10} {sev:<12} {assignee:<10} {bug.title}")
 
 
 def main():
@@ -231,7 +234,9 @@ def main():
     # 列出Bug模式（不需要 Teambition 认证和名称解析）
     if args.list_bugs:
         severity_map = tb_cfg.get("severity_map", {})
-        list_bugs(source, filters, severity_map)
+        product_id = filters.get("product_id")
+        severity_labels = source.fetch_severity_labels(product_id)
+        list_bugs(source, filters, severity_map, severity_labels)
         if dingtalk_bot:
             try:
                 assigned_to = resolve_assigned_to(filters, source.account)
@@ -259,10 +264,11 @@ def main():
                          "| --- | --- | --- | --- | --- |"]
                 for bug in bugs[:20]:
                     s = str(bug.severity).strip() if bug.severity else ""
+                    label = severity_labels.get(s, s) if severity_labels else s
                     tb_sev = sev_map.get(s)
                     if tb_sev is None and s.isdigit():
                         tb_sev = sev_map.get(int(s))
-                    sev = f"{s}→{tb_sev}" if tb_sev is not None else s
+                    sev = f"{label}→{tb_sev}" if tb_sev is not None else label
                     assignee = bug.assignedTo[:8] if bug.assignedTo else "-"
                     title = bug.title
                     lines.append(f"| {bug.id} | {bug.status} | {sev} | {assignee} | {title} |")
