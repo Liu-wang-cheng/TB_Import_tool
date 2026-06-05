@@ -1,8 +1,8 @@
 {
-  "version": "2.1",
-  "sha256": "1099cc5337aec381fbccff60aaaeb491a5699eb36ac204607681e5afaa41848a",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.1/SmartDefectPlatform_v2.1.zip",
+  "version": "2.2",
+  "sha256": "d14c2007544e251a8e7d0b322a4c3f5fa1764f1bb664bc0c4502bed13635e236",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.2/SmartDefectPlatform.zip",
   "release_date": "2026-06-05",
-  "release_notes": "v2.1 release",
+  "release_notes": "v2.2: 动态严重程度翻译+去重修复+图片显示优化",
   "min_version": "1.0"
 }
