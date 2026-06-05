@@ -191,19 +191,31 @@ class TestAllInstances:
 
     @pytest.mark.parametrize("inst", INSTANCES)
     def test_severity_mapping(self, inst):
-        """验证严重程度映射正确 (int key + str key)"""
+        """验证严重程度映射正确：先获取禅道页面翻译，再查 severity_map"""
         from src.sync_engine import SyncEngine
         client = _make_client(inst["base_url"], inst["account"], inst["password"])
         client.authenticate()
         bugs = client.fetch_all_bugs(product_id=inst["product_id"], page_size=10)
         if not bugs:
             pytest.skip("无Bug数据")
+
+        # 动态获取禅道页面的严重程度翻译
+        severity_labels = client.fetch_severity_labels(inst["product_id"])
+
         e = SyncEngine.__new__(SyncEngine)
-        e.severity_map = {1: "A", 2: "B", 3: "C", 4: "C"}
-        e.severity_labels = {}
+        e.severity_map = {
+            # 数字映射
+            "1": "A", "2": "B", "3": "C", "4": "C",
+            # 中文映射
+            "致命": "S", "严重": "A", "一般": "B", "建议": "C", "轻微": "C",
+            # 字母映射
+            "A": "A", "B": "B", "C": "C", "D": "C",
+        }
+        e.severity_labels = severity_labels
         for bug in bugs[:5]:
             result = e._map_severity(bug.severity)
-            assert result in ("S", "A", "B", "C")
+            assert result in ("S", "A", "B", "C"), \
+                f"severity={bug.severity}, labels={severity_labels}, result={result}"
             # 双键查找: str 和 int 都能命中
             result2 = e._map_severity(str(bug.severity))
             assert result == result2
