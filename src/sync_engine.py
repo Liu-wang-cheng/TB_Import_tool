@@ -129,6 +129,11 @@ class SyncEngine:
                                     if n.strip()] if participant_str else []
         self._participant_ids: List[str] = []
 
+        # 执行人模式: auto（自动从禅道匹配）| specified（统一指定）
+        self.executor_mode = tb_cfg.get("executor_mode", "auto")
+        self.executor_name = tb_cfg.get("executor_name", "")
+        self._specified_executor_id: Optional[str] = None
+
         # AI 日志分析集成（可选）
         ai_cfg = config.get("ai_analysis", {})
         self.ai_analysis_enabled = ai_cfg.get("enabled", False)
@@ -261,6 +266,16 @@ class SyncEngine:
                     logger.warning("参与者 '%s' 未找到对应 TB 用户", name)
             logger.info("共解析到 %d/%d 个参与者",
                          len(self._participant_ids), len(self._participant_names))
+
+        # 解析指定执行人（executor_mode=specified 时生效）
+        if self.executor_mode == "specified" and self.executor_name:
+            self._specified_executor_id = self.teambition.search_member(self.executor_name)
+            if self._specified_executor_id:
+                logger.info("指定执行人: %s → %s", self.executor_name,
+                            self._specified_executor_id)
+            else:
+                logger.warning("指定执行人 '%s' 未找到对应 TB 用户，"
+                               "将回退到自动匹配", self.executor_name)
 
         # 初始化 TB 任务流状态映射（用于状态对比日志和重新激活）
         self._init_taskflow_status_map()
@@ -760,7 +775,7 @@ class SyncEngine:
             title = self._build_teambition_title(full_bug)
             note = self._build_note(full_bug)
             tb_severity = self._map_severity(full_bug.severity)
-            executor = self._map_assignee(full_bug.assignedTo)
+            executor = self._specified_executor_id or self._map_assignee(full_bug.assignedTo)
             if self.classifier:
                 category = self.classifier.classify(
                     bug_title=full_bug.title,
@@ -961,9 +976,9 @@ class SyncEngine:
         full_bug = self.source.fetch_bug_detail(bug.id)
 
         # 4. 更新执行人为禅道当前指派人
-        if full_bug.assignedTo:
+        if full_bug.assignedTo or self._specified_executor_id:
             try:
-                executor = self._map_assignee(full_bug.assignedTo)
+                executor = self._specified_executor_id or self._map_assignee(full_bug.assignedTo)
                 if executor:
                     self.teambition.update_task_executor(task_id, executor)
                     logger.info("[重新激活] Bug#%d 执行人已更新为 %s (%s)",

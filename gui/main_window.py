@@ -325,6 +325,21 @@ class MainWindow(QMainWindow):
         tb_form.setSpacing(2)
         tb_form.setContentsMargins(4, 4, 4, 4)
 
+        tb_form.addWidget(QLabel("TB执行人:"))
+        self.cmb_executor_mode = QComboBox()
+        self.cmb_executor_mode.addItems(["自动", "指定人员"])
+        self.cmb_executor_mode.currentIndexChanged.connect(self._on_executor_mode_changed)
+        self.cmb_executor_mode.setMaximumWidth(100)
+        tb_form.addWidget(self.cmb_executor_mode)
+
+        self.edit_executor_name = QLineEdit()
+        self.edit_executor_name.setPlaceholderText("中文名或UUID")
+        self.edit_executor_name.setMaximumWidth(120)
+        self.edit_executor_name.setVisible(False)
+        tb_form.addWidget(self.edit_executor_name)
+
+        tb_form.addSpacing(16)
+
         tb_form.addWidget(QLabel("创建人:"))
         self.edit_tb_creator = QLineEdit()
         self.edit_tb_creator.setPlaceholderText("中文名")
@@ -899,6 +914,9 @@ class MainWindow(QMainWindow):
 
         # Teambition 配置（与源平台无关）
         tb_cfg = self.config.get("teambition", {})
+        executor_mode = tb_cfg.get("executor_mode", "auto")
+        self.cmb_executor_mode.setCurrentIndex(0 if executor_mode == "auto" else 1)
+        self.edit_executor_name.setText(tb_cfg.get("executor_name", ""))
         self.edit_tb_creator.setText(tb_cfg.get("creator_name", ""))
         self.edit_tb_creator_id.setText(tb_cfg.get("creator_id", ""))
         # 优先从 project.name 读取（目标项目），其次 belong_project_value，最后 project_name
@@ -993,6 +1011,8 @@ class MainWindow(QMainWindow):
 
         # TB 配置（与源平台无关）
         tb_cfg = self.config.setdefault("teambition", {})
+        tb_cfg["executor_mode"] = "auto" if self.cmb_executor_mode.currentIndex() == 0 else "specified"
+        tb_cfg["executor_name"] = self.edit_executor_name.text().strip()
         tb_cfg["creator_name"] = self.edit_tb_creator.text().strip()
         tb_cfg["creator_id"] = self.edit_tb_creator_id.text().strip()
         tb_cfg["participant_names"] = self.edit_tb_participants.text().strip()
@@ -1056,6 +1076,8 @@ class MainWindow(QMainWindow):
         tb_path = os.path.join(cfg_dir, "teambition.yaml")
         if os.path.exists(tb_path):
             update_yaml_values(tb_path, {
+                "executor_mode": tb_cfg.get("executor_mode"),
+                "executor_name": tb_cfg.get("executor_name"),
                 "creator_name": tb_cfg.get("creator_name"),
                 "creator_id": tb_cfg.get("creator_id"),
                 "participant_names": tb_cfg.get("participant_names"),
@@ -1162,7 +1184,8 @@ class MainWindow(QMainWindow):
             w.setEnabled(enabled)
         # 凭证输入
         for w in [self.edit_zentao_base_url, self.edit_zentao_account,
-                  self.edit_zentao_password, self.edit_tb_creator,
+                  self.edit_zentao_password, self.cmb_executor_mode,
+                  self.edit_executor_name, self.edit_tb_creator,
                   self.edit_tb_creator_id, self.edit_tb_participants,
                   self.edit_tb_belong_project]:
             w.setEnabled(enabled)
@@ -1215,6 +1238,12 @@ class MainWindow(QMainWindow):
         self.progress_bar.setFormat("%p%")
 
     # ── 按钮事件 ──────────────────────────────────────
+
+    def _on_executor_mode_changed(self, index):
+        """TB执行人模式切换：自动→隐藏+禁用输入框，指定人员→显示+启用输入框"""
+        is_specified = (index == 1)
+        self.edit_executor_name.setVisible(is_specified)
+        self.edit_executor_name.setEnabled(is_specified)
 
     def _on_date_mode_changed(self, index):
         show = index == 1  # "指定时间段"
