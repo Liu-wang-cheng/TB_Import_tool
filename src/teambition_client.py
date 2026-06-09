@@ -1,6 +1,7 @@
 """Teambition API 客户端"""
 
 import logging
+import mimetypes
 import time
 import urllib.parse
 from typing import Dict, List, Optional
@@ -360,11 +361,19 @@ class TeambitionClient:
             size_mb = file.size / 1024 / 1024
             logger.info("开始上传附件: %s (%.1f MB)", file.filename, size_mb)
 
+            # 禅道下载的附件 Content-Type 可能是 application/octet-stream，
+            # 根据文件扩展名推断真实 MIME 类型，确保 TB 能正确预览
+            content_type = file.content_type
+            if content_type in ("application/octet-stream", "") and file.filename:
+                guessed, _ = mimetypes.guess_type(file.filename)
+                if guessed:
+                    content_type = guessed
+
             # Step 1: 获取上传凭证
             data = self._request("POST", "/v3/awos/upload-token",
                                  json={"category": "attachment",
                                        "fileName": file.filename,
-                                       "fileType": file.content_type,
+                                       "fileType": content_type,
                                        "fileSize": file.size,
                                        "scope": "task",
                                        "scopeId": task_id})
@@ -393,7 +402,9 @@ class TeambitionClient:
                 credentials["secretAccessKey"],
                 credentials["sessionToken"],
             )
-            endpoint = "oss-cn-zhangjiakou.aliyuncs.com"
+            # 优先使用 upload-token 返回的 Endpoint，避免跨区域上传导致 TB 无法访问
+            endpoint = upload_info.get("Endpoint", "") \
+                or "oss-cn-zhangjiakou.aliyuncs.com"
             # oss2 的 connect_timeout 参数实际控制整个 HTTP 请求超时（连接+传输）
             # 按文件大小计算超时（保守按 100KB/s），最少 120s，最多 900s
             transfer_timeout = max(120, min(900, int(size_mb * 10)))
@@ -406,7 +417,10 @@ class TeambitionClient:
             oss_retries = 3
             for oss_attempt in range(1, oss_retries + 1):
                 try:
-                    bucket_obj.put_object(object_key, file.data)
+                    bucket_obj.put_object(
+                        object_key, file.data,
+                        headers={"Content-Type": content_type},
+                    )
                     break
                 except Exception as oss_e:
                     if oss_attempt < oss_retries:
@@ -432,10 +446,13 @@ class TeambitionClient:
             elif isinstance(work_result, dict):
                 work_id = work_result.get("id", "")
 
+            if not work_id:
+                logger.warning("work/create 未返回文件 ID: %s", work_data)
+                return None
+
             logger.info("附件上传成功: %s → 任务 %s (workId=%s)",
                         file.filename, task_id, work_id)
-            wid = work_id or object_key
-            return (wid, download_url)
+            return (work_id, download_url)
         except Exception as e:
             logger.warning("附件上传失败: %s - %s", file.filename, e)
             return None

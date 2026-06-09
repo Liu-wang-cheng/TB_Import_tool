@@ -497,6 +497,188 @@ class TestFileUpload:
         result = c.upload_attachment("task_001", att)
         assert result is None
 
+    def test_upload_passes_content_type_to_oss(self):
+        """OSS 上传应携带正确的 Content-Type，否则 TB 无法预览图片/视频"""
+        from src.models import AttachmentFile
+        from src.teambition_client import TeambitionClient
+        c = TeambitionClient(
+            app_id="test_app", app_secret="test_secret",
+            org_id="org123", project_id="proj456",
+        )
+        c._app_token = "test_token"
+        c._user_token = "test_token"
+        c._app_token_mode = True
+
+        c._request = Mock(side_effect=[
+            {
+                "result": {
+                    "downloadUrl": "http://example.com/dl",
+                    "token": "tok_123",
+                    "upload": {"Bucket": "bkt", "Key": "k"},
+                    "sdk": {"credentials": {
+                        "accessKeyId": "ak",
+                        "secretAccessKey": "sk",
+                        "sessionToken": "st",
+                    }},
+                }
+            },
+            {"result": [{"id": "work_123"}]},
+        ])
+
+        mock_bucket = Mock()
+        mock_bucket.put_object = Mock()
+
+        mock_oss2 = Mock()
+        mock_oss2.StsAuth = Mock()
+        mock_oss2.Bucket = Mock(return_value=mock_bucket)
+
+        with patch.dict("sys.modules", {"oss2": mock_oss2}):
+            att = AttachmentFile("test.png", "image/png", b"data", 4)
+            result = c.upload_attachment("task_001", att)
+
+        assert result is not None
+        mock_bucket.put_object.assert_called_once()
+        call_kwargs = mock_bucket.put_object.call_args.kwargs
+        assert call_kwargs.get("headers") == {"Content-Type": "image/png"}
+
+    def test_upload_uses_endpoint_from_upload_info(self):
+        """应优先使用 upload-token 返回的 Endpoint，而不是写死张家口"""
+        from src.models import AttachmentFile
+        from src.teambition_client import TeambitionClient
+        c = TeambitionClient(
+            app_id="test_app", app_secret="test_secret",
+            org_id="org123", project_id="proj456",
+        )
+        c._app_token = "test_token"
+        c._user_token = "test_token"
+        c._app_token_mode = True
+
+        c._request = Mock(side_effect=[
+            {
+                "result": {
+                    "downloadUrl": "http://example.com/dl",
+                    "token": "tok_123",
+                    "upload": {
+                        "Bucket": "bkt",
+                        "Key": "k",
+                        "Endpoint": "oss-cn-beijing.aliyuncs.com",
+                    },
+                    "sdk": {"credentials": {
+                        "accessKeyId": "ak",
+                        "secretAccessKey": "sk",
+                        "sessionToken": "st",
+                    }},
+                }
+            },
+            {"result": [{"id": "work_123"}]},
+        ])
+
+        mock_bucket = Mock()
+        mock_bucket.put_object = Mock()
+
+        mock_oss2 = Mock()
+        mock_oss2.StsAuth = Mock()
+        mock_oss2.Bucket = Mock(return_value=mock_bucket)
+
+        with patch.dict("sys.modules", {"oss2": mock_oss2}):
+            att = AttachmentFile("test.png", "image/png", b"data", 4)
+            c.upload_attachment("task_001", att)
+
+        call_args = mock_oss2.Bucket.call_args
+        endpoint_url = call_args.args[1]
+        assert "oss-cn-beijing.aliyuncs.com" in endpoint_url
+
+    def test_upload_empty_work_result_returns_none(self):
+        """work/create 返回空结果时不应 fallback 到 object_key，否则日志附件字段存的是无效 ID"""
+        from src.models import AttachmentFile
+        from src.teambition_client import TeambitionClient
+        c = TeambitionClient(
+            app_id="test_app", app_secret="test_secret",
+            org_id="org123", project_id="proj456",
+        )
+        c._app_token = "test_token"
+        c._user_token = "test_token"
+        c._app_token_mode = True
+
+        c._request = Mock(side_effect=[
+            {
+                "result": {
+                    "downloadUrl": "http://example.com/dl",
+                    "token": "tok_123",
+                    "upload": {"Bucket": "bkt", "Key": "object_key_value"},
+                    "sdk": {"credentials": {
+                        "accessKeyId": "ak",
+                        "secretAccessKey": "sk",
+                        "sessionToken": "st",
+                    }},
+                }
+            },
+            {"result": []},  # work/create 返回空列表
+        ])
+
+        mock_bucket = Mock()
+        mock_bucket.put_object = Mock()
+
+        mock_oss2 = Mock()
+        mock_oss2.StsAuth = Mock()
+        mock_oss2.Bucket = Mock(return_value=mock_bucket)
+
+        with patch.dict("sys.modules", {"oss2": mock_oss2}):
+            att = AttachmentFile("test.png", "image/png", b"data", 4)
+            result = c.upload_attachment("task_001", att)
+
+        assert result is None
+
+    def test_upload_guesses_content_type_from_extension(self):
+        """Zentao 可能对所有文件返回 application/octet-stream，需根据扩展名推断真实类型"""
+        from src.models import AttachmentFile
+        from src.teambition_client import TeambitionClient
+        c = TeambitionClient(
+            app_id="test_app", app_secret="test_secret",
+            org_id="org123", project_id="proj456",
+        )
+        c._app_token = "test_token"
+        c._user_token = "test_token"
+        c._app_token_mode = True
+
+        c._request = Mock(side_effect=[
+            {
+                "result": {
+                    "downloadUrl": "http://example.com/dl",
+                    "token": "tok_123",
+                    "upload": {"Bucket": "bkt", "Key": "k"},
+                    "sdk": {"credentials": {
+                        "accessKeyId": "ak",
+                        "secretAccessKey": "sk",
+                        "sessionToken": "st",
+                    }},
+                }
+            },
+            {"result": [{"id": "work_123"}]},
+        ])
+
+        mock_bucket = Mock()
+        mock_bucket.put_object = Mock()
+
+        mock_oss2 = Mock()
+        mock_oss2.StsAuth = Mock()
+        mock_oss2.Bucket = Mock(return_value=mock_bucket)
+
+        with patch.dict("sys.modules", {"oss2": mock_oss2}):
+            # Zentao 返回 octet-stream，但文件名是 .pdf
+            att = AttachmentFile("report.pdf", "application/octet-stream",
+                                 b"data", 4)
+            result = c.upload_attachment("task_001", att)
+
+        assert result is not None
+        call_kwargs = mock_bucket.put_object.call_args.kwargs
+        # 应根据扩展名推断为 application/pdf
+        assert call_kwargs["headers"]["Content-Type"] == "application/pdf"
+
+        # 同时验证 upload-token 请求也用了正确的 fileType
+        token_call = c._request.call_args_list[0]
+        assert token_call.kwargs["json"]["fileType"] == "application/pdf"
+
 
 class TestGetTaskByIdentifier:
     """get_task_by_identifier 精确匹配"""

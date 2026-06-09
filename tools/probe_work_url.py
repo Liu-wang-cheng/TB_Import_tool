@@ -43,7 +43,7 @@ def make_client() -> TeambitionClient:
         org_id=tb_cfg["org_id"],
         project_id=project_id,
         api_delay=sync_cfg.get("api_delay", 0.5),
-        token_cache=tb_cfg.get("token_cache", ".teambition_token.json"),
+        # token_cache 不是 TeambitionClient 构造参数，probe 工具每次重新认证
         scenariofieldconfig_id=tb_cfg.get("scenariofieldconfig_id"),
         operator_id=fallback_id,
     )
