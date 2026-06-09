@@ -1,6 +1,6 @@
 {
   "version": "2.3",
-  "sha256": "d14c2007544e251a8e7d0b322a4c3f5fa1764f1bb664bc0c4502bed13635e236",
+  "sha256": "71a0d2a29dded91b8529324c0ad5e8ee10e39a209773f57ac38e3cd98e17c885",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.3/SmartDefectPlatform.zip",
   "release_date": "2026-06-09",
   "release_notes": "v2.3: 附件上传修复 — OSS上传Content-Type推断 + Endpoint动态获取 + work创建无效ID防护 + 扩展名MIME推断(兼容禅道octet-stream)。新增4个附件上传测试，全量214个通过",
