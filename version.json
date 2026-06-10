@@ -1,8 +1,8 @@
 {
-  "version": "2.3",
-  "sha256": "939b57b76678cde673deaacd955aee36d820e37c2357452bd8997a72f3864b5a",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.3/SmartDefectPlatform.zip",
-  "release_date": "2026-06-09",
-  "release_notes": "v2.3: 附件上传修复(Content-Type推断+Endpoint动态+work无效ID防护+MIME推断) + TB执行人自动/指定人员模式。全量47个单元测试通过",
+  "version": "2.4",
+  "sha256": "",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.4/SmartDefectPlatform.zip",
+  "release_date": "2026-06-10",
+  "release_notes": "v2.4: TB执行人自动/指定人员模式 + 关闭同步(禅道关闭→TB待回归自动关闭) + VLNS回退搜索 + Sfc/taskflowId空值回退",
   "min_version": "1.0"
 }

@@ -109,6 +109,7 @@ class SyncStats:
     total: int = 0
     created: int = 0
     reactivated: int = 0
+    closed_synced: int = 0
     skipped_dedup: int = 0
     skipped_filtered: int = 0
     errors: int = 0
@@ -118,6 +119,7 @@ class SyncStats:
             f"同步完成: 共 {self.total} 条, "
             f"新建 {self.created} 条, "
             f"重新激活 {self.reactivated} 条, "
+            f"同步关闭 {self.closed_synced} 条, "
             f"去重跳过 {self.skipped_dedup} 条, "
             f"筛选跳过 {self.skipped_filtered} 条, "
             f"错误 {self.errors} 条"

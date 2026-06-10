@@ -959,6 +959,11 @@ class MainWindow(QMainWindow):
             if status_text and self._status_code_map.get(status_text):
                 # 动态获取的 status_code 列表
                 filters["statuses"] = list(self._status_code_map[status_text])
+                # 筛选包含已关闭状态时，自动启用关闭同步
+                statuses = filters["statuses"]
+                sync_cfg = self.config.setdefault("sync", {})
+                sync_cfg["sync_closed_status"] = any(
+                    s in ("closed", "resolved") for s in statuses)
             else:
                 filters["statuses"] = None
 

@@ -722,3 +722,100 @@ class TestGetTaskByIdentifier:
         c._request = Mock(return_value={"result": []})
         task = c.get_task_by_identifier("VLNS-99999")
         assert task is None
+
+
+class TestCloseSync:
+    """关闭同步：禅道已关闭 + TB待回归 → TB关闭"""
+
+    def _make_engine(self, sync_cfg=None):
+        from src.sync_engine import SyncEngine
+        config = {
+            "teambition": {},
+            "sync": sync_cfg or {"sync_closed_status": True},
+        }
+        source = Mock()
+        tb = MagicMock()
+        tb.project_id = "proj123"
+        tb.get_taskflow_status_map.return_value = {
+            "s_pending": "待回归",
+            "s_close": "关闭",
+            "s_done": "已完成",
+        }
+        engine = SyncEngine(config, source, tb)
+        engine._init_taskflow_status_map()
+        return engine, source, tb
+
+    class _Bug:
+        def __init__(self, id, status): self.id = id; self.status = status
+    class _Task:
+        def __init__(self, sid, tid="task_001"):
+            self.status = sid; self.taskId = tid
+            self.taskflowId = "tf_001"
+
+    def test_should_close_bug_closed_task_pending(self):
+        """bug=closed + TB=待回归 → True"""
+        engine, _, _ = self._make_engine()
+        assert engine._should_close_task(self._Bug(1, "closed"),
+                                         self._Task("s_pending"))
+
+    def test_should_not_close_bug_resolved(self):
+        """bug=resolved(已解决) → False，只有closed(关闭)才关"""
+        engine, _, _ = self._make_engine()
+        assert not engine._should_close_task(self._Bug(1, "resolved"),
+                                             self._Task("s_pending"))
+
+    def test_should_not_close_bug_active(self):
+        """bug=active → False"""
+        engine, _, _ = self._make_engine()
+        assert not engine._should_close_task(self._Bug(1, "active"),
+                                             self._Task("s_pending"))
+
+    def test_should_not_close_task_already_closed(self):
+        """bug=closed + TB=已关闭 → False"""
+        engine, _, _ = self._make_engine()
+        assert not engine._should_close_task(self._Bug(1, "closed"),
+                                             self._Task("s_close"))
+
+    def test_should_not_close_task_not_pending(self):
+        """bug=closed + TB=已完成 → False"""
+        engine, _, _ = self._make_engine()
+        assert not engine._should_close_task(self._Bug(1, "closed"),
+                                             self._Task("s_done"))
+
+    def test_sync_closed_disabled_skips_phase(self):
+        """sync_closed_status=False 时不执行关闭阶段"""
+        engine, source, tb = self._make_engine(
+            {"sync_closed_status": False})
+        stats = MagicMock()
+        engine._run_close_sync_phase(stats, dry_run=False)
+        source.fetch_all_bugs.assert_not_called()
+
+    def test_should_close_by_taskflow_name(self):
+        """taskflowId有效时通过名称匹配待回归"""
+        engine, _, tb = self._make_engine()
+        # status不在默认映射中，但有taskflowId可查
+        tb.get_taskflow_statuses.return_value = {"s_unknown": "待回归"}
+        task = self._Task("s_unknown")
+        assert engine._should_close_task(self._Bug(1, "closed"), task, "tf_001")
+
+    def test_find_close_status_with_taskflow_id(self):
+        """有taskflowId时直接查询对应工作流"""
+        engine, _, tb = self._make_engine()
+        tb.get_taskflow_statuses.return_value = {"s_close_ext": "关闭"}
+        result = engine._find_task_close_status("task_001", "tf_ext")
+        assert result == "s_close_ext"
+
+    def test_find_close_status_empty_taskflow(self):
+        """taskflowId为空时扫描项目默认映射找其他关闭状态"""
+        engine, _, tb = self._make_engine()
+        # 项目默认状态中有两个关闭
+        tb.get_taskflow_status_map.return_value = {
+            "s_pending": "待回归",
+            "s_close": "关闭",
+            "s_close2": "关闭",
+        }
+        # _close_target_id = "s_close", 需要找另一个"s_close2"
+        engine._close_target_id = "s_close"
+        result = engine._find_task_close_status("task_001", "")
+        # should find s_close2 (not s_close which is _close_target_id)
+        assert result == "s_close2"

@@ -42,6 +42,7 @@ class SyncEngine:
         self.dry_run = sync_cfg.get("dry_run", False)
         self.attachment_retries = sync_cfg.get("attachment_retries", 3)
         self.reactivate_closed = sync_cfg.get("reactivate_closed", False)
+        self.sync_closed_status = sync_cfg.get("sync_closed_status", True)
         self.extraction_enabled = sync_cfg.get("extraction", {}).get("enabled", True)
 
         tb_cfg = config.get("teambition", {})
@@ -110,6 +111,8 @@ class SyncEngine:
         # TB 任务流状态缓存（run() 启动时初始化）
         self._closed_status_ids: set = set()
         self._reopen_status_id: str = ""
+        self._close_target_id: str = ""             # 关闭目标状态ID
+        self._pending_regression_ids: set = set()    # 待回归/待复现状态ID
 
         # 拼音→成员ID 索引（preload_members 后构建）
         self._pinyin_member_index: Dict[str, str] = {}
@@ -321,12 +324,16 @@ class SyncEngine:
                 # dry-run 不需要暂停
                 continue
 
+        # 关闭同步阶段：独立查询已关闭Bug（不走指派人筛选）
+        self._run_close_sync_phase(stats, is_dry_run, progress_callback)
+
         elapsed = time.time() - start_time
         logger.info(str(stats))
-        if is_dry_run and (stats.created > 0 or stats.reactivated > 0):
-            logger.info("试运行汇总: 新建 %d 条, 重新激活 %d 条, 去重跳过 %d 条, 过滤跳过 %d 条, 错误 %d 条 (共 %d 条, 耗时 %.1fs)",
-                         stats.created, stats.reactivated, stats.skipped_dedup,
-                         stats.skipped_filtered, stats.errors, stats.total, elapsed)
+        if is_dry_run and (stats.created > 0 or stats.reactivated > 0 or stats.closed_synced > 0):
+            logger.info("试运行汇总: 新建 %d 条, 重新激活 %d 条, 同步关闭 %d 条, 去重跳过 %d 条, 过滤跳过 %d 条, 错误 %d 条 (共 %d 条, 耗时 %.1fs)",
+                         stats.created, stats.reactivated, stats.closed_synced,
+                         stats.skipped_dedup, stats.skipped_filtered,
+                         stats.errors, stats.total, elapsed)
         if progress_callback:
             progress_callback(max(stats.total, 1), max(stats.total, 1),
                               "同步完成")
@@ -727,17 +734,26 @@ class SyncEngine:
         try:
             # VLNS / CPAX 标记去重：标题中包含说明已导入过
             # 非激活状态直接跳过；激活状态走下面去重+状态校验流程（避免重复 API 调用）
+            # 关闭同步开启时，已关闭的Bug由关闭同步阶段独立处理
             if re.search(r'(?:VLNS|CPAX)-\d+', bug.title) and bug.status != "active":
-                logger.info("[跳过-已导入] Bug#%d 标题含 VLNS/CPAX 标记: %s",
-                            bug.id, bug.title)
+                if self.sync_closed_status and bug.status == "closed":
+                    logger.debug("[关闭同步-待处理] Bug#%d 标题含 VLNS/CPAX",
+                                 bug.id)
+                else:
+                    logger.info("[跳过-已导入] Bug#%d 标题含 VLNS/CPAX 标记: %s",
+                                bug.id, bug.title)
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
                                   "", "标题含VLNS/CPAX，已导入过")
 
             # VLNS/CPAX 评论检测：评论中有引用说明已有 TB 任务
             vlns_in_comments = self.source.extract_vlns_numbers(bug.id)
             if vlns_in_comments and bug.status != "active":
-                logger.info("[跳过-评论含VLNS] Bug#%d 评论含 VLNS/CPAX 编号: %s",
-                            bug.id, vlns_in_comments)
+                if self.sync_closed_status and bug.status == "closed":
+                    logger.debug("[关闭同步-待处理] Bug#%d 评论含 VLNS/CPAX: %s",
+                                 bug.id, vlns_in_comments)
+                else:
+                    logger.info("[跳过-评论含VLNS] Bug#%d 评论含 VLNS/CPAX 编号: %s",
+                                bug.id, vlns_in_comments)
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
                                   "", f"评论含VLNS/CPAX编号: {vlns_in_comments}")
 
@@ -851,17 +867,28 @@ class SyncEngine:
     # ── 状态同步 ──────────────────────────────────────
 
     def _init_taskflow_status_map(self):
-        """初始化 TB 任务流状态映射，识别关闭状态和重新打开状态"""
+        """初始化 TB 任务流状态映射，识别关闭状态、待回归状态和重新打开状态"""
         status_map = self.teambition.get_taskflow_status_map()
         if not status_map:
             return
-        # 识别关闭类状态：仅真正终结的状态（关闭、已完成、已取消）
-        # 注意：已解决、开发完成、待处理等在 TB 中仍属打开状态，不需要重新激活
+        # 识别关闭类状态（供 reactivate 判断用，包含待回归/待复现）
         closed_keywords = ("关闭", "已完成", "已取消", "待回归", "待复现", "closed")
+        # 仅真正的关闭终态（用于 close_task 目标）
+        close_target_kw = ("关闭", "已完成")
+        # 待回归/待复现是可被同步关闭的中间态
+        regression_kw = ("待回归", "待复现")
         for sid, sname in status_map.items():
             name_lower = sname.lower()
             if any(kw in name_lower for kw in closed_keywords):
                 self._closed_status_ids.add(sid)
+            if any(kw in name_lower for kw in close_target_kw):
+                if not self._close_target_id:
+                    self._close_target_id = sid
+            if any(kw in name_lower for kw in regression_kw):
+                self._pending_regression_ids.add(sid)
+        # 如果没找到"关闭"/"已完成"，退而求其次用任意一个关闭类状态
+        if not self._close_target_id and self._closed_status_ids:
+            self._close_target_id = next(iter(self._closed_status_ids))
         # 识别重新打开状态
         reopen_keywords = ("重新打开", "reopen")
         pending_keywords = ("待处理", "进行中", "未开始", "pending", "in_progress", "todo")
@@ -880,6 +907,13 @@ class SyncEngine:
             closed_names = [status_map[sid] for sid in self._closed_status_ids
                             if sid in status_map]
             logger.info("关闭类状态: %s", ", ".join(closed_names))
+        if self._pending_regression_ids:
+            regression_names = [status_map[sid] for sid in self._pending_regression_ids
+                                if sid in status_map]
+            logger.info("待回归状态: %s", ", ".join(regression_names))
+        if self._close_target_id:
+            logger.info("关闭目标状态: %s",
+                        status_map.get(self._close_target_id, self._close_target_id))
         if self._reopen_status_id:
             logger.info("重新打开目标状态: %s",
                         status_map.get(self._reopen_status_id, self._reopen_status_id))
@@ -904,6 +938,30 @@ class SyncEngine:
                     return sid
         except Exception as e:
             logger.debug("查询任务工作流失败: %s", e)
+        return ""
+
+    def _find_task_close_status(self, task_id: str,
+                                 taskflow_id: str = "") -> str:
+        """Sfc不匹配时，获取任务自身工作流中的关闭状态ID。
+        若传入taskflow_id则直接使用；为空则遍历项目所有工作流找包含'关闭'的状态。"""
+        try:
+            if taskflow_id:
+                statuses = self.teambition.get_taskflow_statuses(taskflow_id)
+                for sid, sname in statuses.items():
+                    if "关闭" in sname:
+                        logger.info("任务 %s 工作流关闭状态: %s (%s)",
+                                    task_id[:16], sname, sid[:8])
+                        return sid
+            # taskflowId为空时，尝试项目默认状态中所有包含"关闭"的
+            status_map = self.teambition.get_taskflow_status_map()
+            for sid, sname in status_map.items():
+                if "关闭" in sname and sid != self._close_target_id:
+                    logger.info("任务 %s 尝试替代关闭状态: %s (%s)",
+                                task_id[:16], sname, sid[:8])
+                    return sid
+            logger.info("任务 %s 工作流无关闭状态", task_id[:16])
+        except Exception as e:
+            logger.debug("查询任务工作流关闭状态失败: %s", e)
         return ""
 
     def _get_taskflow_status_name(self, status_id: str) -> str:
@@ -1020,6 +1078,200 @@ class SyncEngine:
         logger.info("[已重新激活] Bug#%d → TB %s", full_bug.id, task_id)
         return SyncResult(bug.id, SyncAction.REACTIVATED, task_id,
                           f"重新激活成功 → {task_id}")
+
+    def _should_close_task(self, bug, task, taskflow_id: str = "",
+                           sfc_id: str = "") -> bool:
+        """判断是否需要同步关闭：禅道 Bug 已关闭且 TB 任务处于待回归状态"""
+        if bug.status != "closed":
+            return False
+        if not self._close_target_id:
+            return False
+        # 优先用ID匹配（项目默认taskflow）
+        if task.status in self._pending_regression_ids:
+            return True
+        # 状态ID不在默认映射中，可能是其他taskflow，按状态名称匹配
+        status_name = self._get_taskflow_status_name(task.status)
+        if "待回归" in status_name or "待复现" in status_name:
+            return True
+        # 通过taskflow_id查询真实状态名
+        if taskflow_id:
+            try:
+                statuses = self.teambition.get_taskflow_statuses(taskflow_id)
+                real_name = statuses.get(task.status, "")
+                if "待回归" in real_name or "待复现" in real_name:
+                    return True
+            except Exception:
+                pass
+        # taskflow_id为空时，尝试通过sfcId推断（仅当状态ID完全未知时）
+        if not taskflow_id and sfc_id and self._pending_regression_ids:
+            # 尝试查询该sfc对应taskflow的状态
+            try:
+                # sfcId就是taskflowId的情景（部分TB版本）
+                statuses = self.teambition.get_taskflow_statuses(sfc_id)
+                if statuses:
+                    real_name = statuses.get(task.status, "")
+                    if "待回归" in real_name or "待复现" in real_name:
+                        return True
+            except Exception:
+                pass
+        return False
+
+    def _close_task_by_id(self, bug, task_id: str, dry_run: bool,
+                          taskflow_id: str = "") -> SyncResult:
+        """关闭 TB 任务（禅道已关闭 + TB 待回归 → TB 关闭）"""
+        if dry_run:
+            logger.info("[关闭同步] 试运行: Bug#%d → TB %s (待回归→关闭)",
+                        bug.id, task_id)
+            return SyncResult(bug.id, SyncAction.REACTIVATED, task_id,
+                              "试运行: 同步关闭")
+        try:
+            self.teambition.update_task_status(task_id, self._close_target_id)
+            logger.info("[关闭同步] Bug#%d → TB 任务 %s 已关闭", bug.id, task_id)
+        except Exception as e:
+            err_msg = str(e)
+            if "Sfc not match" in err_msg or "10060" in err_msg:
+                fallback_id = self._find_task_close_status(task_id, taskflow_id)
+                if fallback_id:
+                    try:
+                        self.teambition.update_task_status(task_id, fallback_id)
+                        logger.info("[关闭同步] Bug#%d → TB %s (按任务工作流)",
+                                    bug.id, task_id)
+                    except Exception as e2:
+                        logger.warning("Sfc关闭重试失败: %s", e2)
+                else:
+                    logger.warning("任务 %s 工作流无关闭状态", task_id[:16])
+            else:
+                logger.warning("关闭 TB 任务 %s 失败: %s", task_id, e)
+        try:
+            self.teambition.add_task_comment(
+                task_id,
+                f"【禅道已关闭】Bug#{bug.id} 在禅道中已关闭，TB 任务同步关闭"
+            )
+        except Exception as e:
+            logger.warning("添加关闭评论失败: %s", e)
+        return SyncResult(bug.id, SyncAction.REACTIVATED, task_id,
+                          f"同步关闭成功 → {task_id}")
+
+    def _run_close_sync_phase(self, stats: SyncStats, dry_run: bool,
+                               progress_callback=None):
+        """关闭同步阶段：独立查询已关闭的禅道Bug（不走指派人筛选），
+        找到VLNS/CPAX对应的TB任务，若TB处于待回归状态则关闭。"""
+        if not self.sync_closed_status:
+            return
+
+        # 独立查询已关闭的Bug，不传 assigned_to（忽略指派人筛选）
+        filters = self.config.get("zentao", {}).get("filters", {})
+        closed_bugs = self.source.fetch_all_bugs(
+            product_id=filters.get("product_id"),
+            project_id=filters.get("project_id"),
+            statuses=["closed"],  # 仅"关闭"，不含"已解决"(已解决=待验证)
+            date_from=filters.get("date_from"),
+            date_to=filters.get("date_to"),
+            assigned_to=None,  # 不走指派人筛选
+        )
+        if not closed_bugs:
+            logger.info("[关闭同步] 无已关闭的 Bug")
+            return
+
+        close_total = len(closed_bugs)
+        close_skipped_no_match = 0
+        close_skipped_not_regression = 0  # 找到TB任务但非待回归
+        logger.info("[关闭同步] 查询到 %d 条已关闭 Bug，检查TB任务状态...",
+                     close_total)
+
+        import time as _time
+        _t0 = _time.time()
+
+        import re
+        for idx, bug in enumerate(closed_bugs):
+            if idx > 0 and idx % 20 == 0:
+                _elapsed = _time.time() - _t0
+                logger.info("[关闭同步] 进度: %d/%d (%.1fs)",
+                             idx, close_total, _elapsed)
+            if progress_callback:
+                progress_callback(idx, close_total,
+                                  f"[关闭同步] {idx}/{close_total} Bug#{bug.id}")
+
+            # 提取 VLNS/CPAX 编号：标题优先（无API调用）
+            identifiers = set()
+            for m in re.finditer(r'(VLNS|CPAX)-(\d+)', bug.title):
+                identifiers.add(f"{m.group(1)}-{m.group(2)}")
+
+            found_task = False
+            if identifiers:
+                for identifier in identifiers:
+                    try:
+                        task = self.teambition.get_task_by_identifier(identifier)
+                    except Exception:
+                        continue
+                    if not task:
+                        continue
+                    found_task = True
+                    tfid = getattr(task, 'taskflowId', '')
+                    if self._should_close_task(bug, task, tfid):
+                        self._close_task_by_id(bug, task.taskId, dry_run, tfid)
+                        stats.closed_synced += 1
+                        break
+                    else:
+                        close_skipped_not_regression += 1
+                        tb_status_name = self._get_taskflow_status_name(task.status)
+                        logger.debug("[关闭同步] Bug#%d TB %s 状态=%s，无需关闭",
+                                     bug.id, identifier, tb_status_name)
+            # VLNS路径没找到时，回退到禅道{id}/#{id}搜索
+            if not found_task:
+                for tag in (f"禅道{bug.id}", f"#{bug.id}"):
+                    try:
+                        tasks = self.teambition.search_tasks(tag)
+                    except Exception:
+                        continue
+                    if tasks:
+                        task = tasks[0]
+                        found_task = True
+                        tfid = getattr(task, 'taskflowId', '')
+                        if self._should_close_task(bug, task, tfid):
+                            self._close_task_by_id(bug, task.taskId, dry_run, tfid)
+                            stats.closed_synced += 1
+                        else:
+                            close_skipped_not_regression += 1
+                            tb_status_name = self._get_taskflow_status_name(task.status)
+                            logger.debug("[关闭同步] Bug#%d TB %s 状态=%s，无需关闭",
+                                         bug.id, task.taskId[:16], tb_status_name)
+                        break
+            if not found_task:
+                close_skipped_no_match += 1
+
+        _elapsed = _time.time() - _t0
+        logger.info("[关闭同步] 完成: %d 条, 关闭 %d 条, 未匹配 %d 条, "
+                     "非待回归 %d 条, 耗时 %.1fs",
+                     close_total, stats.closed_synced, close_skipped_no_match,
+                     close_skipped_not_regression, _elapsed)
+
+        # 钉钉通知：关闭同步结果
+        if self.dingtalk_bot and stats.closed_synced > 0:
+            try:
+                lines = [
+                    "## 智能缺陷管理平台 关闭同步结果",
+                    "",
+                    "| 指标 | 数值 |",
+                    "| --- | --- |",
+                ]
+                if self.project_name:
+                    lines.append(f"| TB所属项目 | {self.project_name} |")
+                lines.extend([
+                    f"| 已关闭Bug总数 | {close_total} 条 |",
+                    f"| 成功关闭TB任务 | {stats.closed_synced} 条 |",
+                    f"| 未找到对应TB任务 | {close_skipped_no_match} 条 |",
+                    f"| 其他跳过(非待回归等) | {close_total - stats.closed_synced - close_skipped_no_match} 条 |",
+                ])
+                if dry_run:
+                    lines.append("")
+                    lines.append("> 本次为试运行，未实际关闭任何任务")
+                self.dingtalk_bot.send_markdown(
+                    "智能缺陷管理平台 关闭同步结果",
+                    "\n".join(lines),
+                )
+            except Exception as e:
+                logger.warning("关闭同步钉钉通知发送失败: %s", e)
 
     # ── 去重 ──────────────────────────────────────────
 
