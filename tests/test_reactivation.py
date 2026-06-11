@@ -62,9 +62,99 @@ class TestModels:
         assert "新建 3 条" in s
 
     def test_sync_stats_str_format(self):
-        stats = SyncStats(total=5, created=1, reactivated=1, skipped_dedup=2, errors=1)
-        expected = "同步完成: 共 5 条, 新建 1 条, 重新激活 1 条, 去重跳过 2 条, 筛选跳过 0 条, 错误 1 条"
+        stats = SyncStats(total=5, created=1, reactivated=1, closed_synced=0, skipped_dedup=2, errors=1)
+        expected = "导入同步: 共 5 条, 新建 1 条, 重新激活 1 条, 去重跳过 2 条, 筛选跳过 0 条, 错误 1 条"
         assert str(stats) == expected
+
+    def test_sync_stats_str_with_close(self):
+        """关闭同步有数据时显示独立行"""
+        stats = SyncStats(total=0, created=0, reactivated=0, closed_synced=3,
+                          skipped_dedup=0, errors=0)
+        result = str(stats)
+        assert "导入同步: 共 0 条" in result
+        assert "关闭同步: 成功关闭 3 条" in result
+        assert "\n" in result  # 两行
+
+    def test_sync_stats_str_close_zero_omitted(self):
+        """closed_synced=0 时不显示关闭同步行"""
+        stats = SyncStats(total=5, created=2, reactivated=0, closed_synced=0,
+                          skipped_dedup=3, errors=0)
+        result = str(stats)
+        assert "关闭同步" not in result
+        assert "导入同步" in result
+
+
+# ══════════════════════════════════════════════════════════
+# 1b. 图片格式检测测试
+# ══════════════════════════════════════════════════════════
+
+class TestImageFormatDetection:
+    """ZentaoClient._detect_image_format 魔数检测"""
+
+    def test_detect_png(self):
+        from src.zentao_client import ZentaoClient
+        data = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+        ext, mime = ZentaoClient._detect_image_format(data)
+        assert ext == 'png'
+        assert mime == 'image/png'
+
+    def test_detect_jpeg(self):
+        from src.zentao_client import ZentaoClient
+        data = b'\xff\xd8\xff\xe0' + b'\x00' * 100
+        ext, mime = ZentaoClient._detect_image_format(data)
+        assert ext == 'jpg'
+        assert mime == 'image/jpeg'
+
+    def test_detect_gif87a(self):
+        from src.zentao_client import ZentaoClient
+        data = b'GIF87a' + b'\x00' * 100
+        ext, mime = ZentaoClient._detect_image_format(data)
+        assert ext == 'gif'
+        assert mime == 'image/gif'
+
+    def test_detect_gif89a(self):
+        from src.zentao_client import ZentaoClient
+        data = b'GIF89a' + b'\x00' * 100
+        ext, mime = ZentaoClient._detect_image_format(data)
+        assert ext == 'gif'
+
+    def test_detect_webp(self):
+        from src.zentao_client import ZentaoClient
+        data = b'RIFF\x00\x00\x00\x00WEBP' + b'\x00' * 100
+        ext, mime = ZentaoClient._detect_image_format(data)
+        assert ext == 'webp'
+        assert mime == 'image/webp'
+
+    def test_detect_bmp(self):
+        from src.zentao_client import ZentaoClient
+        data = b'BM' + b'\x00' * 100
+        ext, mime = ZentaoClient._detect_image_format(data)
+        assert ext == 'bmp'
+        assert mime == 'image/bmp'
+
+    def test_detect_empty_fallback(self):
+        """空数据回退为 png"""
+        from src.zentao_client import ZentaoClient
+        ext, mime = ZentaoClient._detect_image_format(b'')
+        assert ext == 'png'
+        assert mime == 'image/png'
+
+    def test_detect_unknown_fallback(self):
+        """未知格式回退为 png"""
+        from src.zentao_client import ZentaoClient
+        data = b'\x00\x01\x02\x03' + b'\x00' * 100
+        ext, mime = ZentaoClient._detect_image_format(data)
+        assert ext == 'png'
+        assert mime == 'image/png'
+
+    def test_html_is_not_png(self):
+        """HTML 页面不会误判为 PNG"""
+        from src.zentao_client import ZentaoClient
+        data = b'<!DOCTYPE html>\n<html>' + b'\x00' * 100
+        ext, mime = ZentaoClient._detect_image_format(data)
+        # HTML 开头是 <!DOCTYPE，不匹配任何图片格式，应回退
+        assert ext == 'png'  # 回退默认值
+        # 但调用方应该用 _is_valid (in _download_file) 先拦截
 
 
 # ══════════════════════════════════════════════════════════

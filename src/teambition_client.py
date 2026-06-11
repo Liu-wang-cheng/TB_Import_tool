@@ -361,13 +361,15 @@ class TeambitionClient:
             size_mb = file.size / 1024 / 1024
             logger.info("开始上传附件: %s (%.1f MB)", file.filename, size_mb)
 
-            # 禅道下载的附件 Content-Type 可能是 application/octet-stream，
-            # 根据文件扩展名推断真实 MIME 类型，确保 TB 能正确预览
+            # 根据文件扩展名推断 MIME 类型优先，避免禅道返回错误 Content-Type
+            # 导致 TB 预览失败（如实际 JPEG 但 Content-Type 为 image/png）
             content_type = file.content_type
-            if content_type in ("application/octet-stream", "") and file.filename:
+            if file.filename:
                 guessed, _ = mimetypes.guess_type(file.filename)
                 if guessed:
                     content_type = guessed
+            elif not content_type:
+                content_type = "application/octet-stream"
 
             # Step 1: 获取上传凭证
             data = self._request("POST", "/v3/awos/upload-token",

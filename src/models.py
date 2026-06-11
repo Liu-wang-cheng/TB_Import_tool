@@ -115,15 +115,17 @@ class SyncStats:
     errors: int = 0
 
     def __str__(self) -> str:
-        return (
-            f"同步完成: 共 {self.total} 条, "
+        lines = [
+            f"导入同步: 共 {self.total} 条, "
             f"新建 {self.created} 条, "
             f"重新激活 {self.reactivated} 条, "
-            f"同步关闭 {self.closed_synced} 条, "
             f"去重跳过 {self.skipped_dedup} 条, "
             f"筛选跳过 {self.skipped_filtered} 条, "
-            f"错误 {self.errors} 条"
-        )
+            f"错误 {self.errors} 条",
+        ]
+        if self.closed_synced > 0:
+            lines.append(f"关闭同步: 成功关闭 {self.closed_synced} 条")
+        return "\n".join(lines)
 
 
 # 禅道严重程度映射

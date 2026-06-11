@@ -607,7 +607,8 @@ class ZentaoClient:
                    date_from: Optional[str] = None,
                    date_to: Optional[str] = None,
                    assigned_to: Optional[List[str]] = None,
-                   page: int = 1, limit: int = 50) -> Tuple[List[ZentaoBug], int]:
+                   page: int = 1, limit: int = 50,
+                   server_status: str = "") -> Tuple[List[ZentaoBug], int]:
         if not product_id and not project_id:
             raise ValueError("必须指定 product_id 或 project_id")
 
@@ -622,6 +623,8 @@ class ZentaoClient:
             path = f"/api.php/v1/projects/{project_id}/bugs"
 
         params = {"page": page, "limit": limit}
+        if server_status:
+            params["status"] = server_status
         data = self._request("GET", path, params=params)
 
         bugs_data = data.get("bugs", [])
@@ -1067,13 +1070,16 @@ class ZentaoClient:
 
     def fetch_all_bugs(self, product_id=None, project_id=None,
                        statuses=None, date_from=None, date_to=None,
-                       assigned_to=None, page_size: int = 200) -> List[ZentaoBug]:
+                       assigned_to=None, page_size: int = 200,
+                       server_status: str = "") -> List[ZentaoBug]:
         """分页获取所有 Bug。
 
         page_size 默认 200（禅道通常上限），单次拉取更多 Bug 可减少
         分页次数与 api_delay 开销。比如 1000 条 Bug：
           - page_size=50  → 20 次请求 × 0.5s = 10s 延迟
           - page_size=200 →  5 次请求 × 0.5s = 2.5s 延迟
+
+        server_status: 传递给禅道API的status参数（如\"all\"包含已关闭）
         """
         all_bugs = []
         page = 1
@@ -1086,6 +1092,7 @@ class ZentaoClient:
                 statuses=statuses, date_from=date_from, date_to=date_to,
                 assigned_to=assigned_to,
                 page=page, limit=page_size,
+                server_status=server_status,
             )
             all_bugs.extend(bugs)
             raw_total = total if total is not None else raw_total
@@ -1100,7 +1107,7 @@ class ZentaoClient:
             else:
                 consecutive_empty = 0
             page += 1
-        logger.info(
+        logger.debug(
             "从禅道获取到 %d 条Bug（API共 %d 条，筛选后 %d 条，耗时 %.1fs，%d 页 × %d）",
             len(all_bugs), raw_total, len(all_bugs),
             time.time() - t0, page, page_size)
@@ -1152,6 +1159,18 @@ class ZentaoClient:
         if self._cloud_session_auth:
             return self._http.get(f"{self.base_url}/{file_stem}", timeout=timeout)
 
+        def _is_valid(resp):
+            """验证响应是真实文件而非登录页面或其他HTML"""
+            if resp.status_code != 200:
+                return False
+            ct = resp.headers.get("Content-Type", "")
+            if "text/html" in ct:
+                return False
+            # 有些服务器不返回正确的 Content-Type，检查文件头魔数
+            if resp.content[:15] == b"<!DOCTYPE html>":
+                return False
+            return True
+
         # 自建版：依次尝试多种认证方式
         tried = []
         # 1) /api-getsessionid 获取 session
@@ -1161,7 +1180,7 @@ class ZentaoClient:
                 resp = self._http.get(
                     f"{self.base_url}/{file_stem}",
                     params={"zentaosid": self._session_id}, timeout=timeout)
-                if resp.status_code == 200:
+                if _is_valid(resp):
                     return resp
                 tried.append(f"session={resp.status_code}")
         except ZentaoAPIError:
@@ -1173,7 +1192,7 @@ class ZentaoClient:
             resp = self._http.get(
                 f"{self.base_url}/{file_stem}",
                 headers={"Token": self._token}, timeout=timeout)
-            if resp.status_code == 200:
+            if _is_valid(resp):
                 return resp
             tried.append(f"token={resp.status_code}")
 
@@ -1192,7 +1211,7 @@ class ZentaoClient:
                 if login_resp2.status_code == 200:
                     resp = self._http.get(
                         f"{self.base_url}/{file_stem}", timeout=timeout)
-                    if resp.status_code == 200:
+                    if _is_valid(resp):
                         return resp
                     tried.append(f"login-session={resp.status_code}")
         except Exception:
@@ -1206,11 +1225,13 @@ class ZentaoClient:
 
     def download_attachment(self, file_id: int,
                             filename: str = "") -> AttachmentFile:
-        path = self._build_url(
-            f"/file-download-{file_id}.html",
-            f"/index.php?m=file&f=download&fileID={file_id}")
-        resp = self._download_file(path.lstrip("/"))
-        if resp.status_code != 200:
+        # 优先 clean URL，失败回退动态路径
+        clean_path = f"file-download-{file_id}.html"
+        dynamic_path = f"index.php?m=file&f=download&fileID={file_id}"
+        resp = self._download_file(clean_path)
+        if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
+            resp = self._download_file(dynamic_path)
+        if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
             raise ZentaoAPIError(resp.status_code, "下载附件失败",
                                  f"/file-download-{file_id}")
 
@@ -1229,19 +1250,43 @@ class ZentaoClient:
         )
 
     def download_image(self, file_id: int) -> AttachmentFile:
-        path = self._build_url(
-            f"/file-read-{file_id}.html",
-            f"/index.php?m=file&f=read&fileID={file_id}")
-        resp = self._download_file(path.lstrip("/"))
-        if resp.status_code != 200:
+        # 优先用 clean URL（文件下载不经过 index.php 路由），失败再回退动态路径
+        clean_path = f"file-read-{file_id}.html"
+        dynamic_path = f"index.php?m=file&f=read&fileID={file_id}"
+        resp = self._download_file(clean_path)
+        if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
+            resp = self._download_file(dynamic_path)
+        if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
             raise ZentaoAPIError(resp.status_code, "下载图片失败",
                                  f"/file-read-{file_id}")
+        # 从文件头魔数检测真实图片格式，避免硬编码 .png 导致 TB 显示异常
+        ext, mime = ZentaoClient._detect_image_format(resp.content)
+        content_type = resp.headers.get("Content-Type", "")
+        if not content_type or content_type == "application/octet-stream":
+            content_type = mime
         return AttachmentFile(
-            filename=f"image_{file_id}.png",
-            content_type=resp.headers.get("Content-Type", "image/png"),
+            filename=f"image_{file_id}.{ext}",
+            content_type=content_type,
             data=resp.content,
             size=len(resp.content),
         )
+
+    @staticmethod
+    def _detect_image_format(data: bytes) -> tuple:
+        """(extension, mime_type) e.g. ('jpg', 'image/jpeg')"""
+        if not data:
+            return ("png", "image/png")
+        if data[:3] == b"\xff\xd8\xff":
+            return ("jpg", "image/jpeg")
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return ("png", "image/png")
+        if data[:6] in (b"GIF87a", b"GIF89a"):
+            return ("gif", "image/gif")
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return ("webp", "image/webp")
+        if data[:2] == b"BM":
+            return ("bmp", "image/bmp")
+        return ("png", "image/png")
 
     # ── 内部解析 ──────────────────────────────────────
 

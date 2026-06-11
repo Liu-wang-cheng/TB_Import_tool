@@ -29,43 +29,6 @@ from gui.workers import (
 logger = logging.getLogger(__name__)
 
 
-
-class _ModuleResolveThread(QThread):
-    """后台线程：通过禅道API将模块ID解析为模块名称"""
-    finished_signal = pyqtSignal(str, int)  # (module_name, module_id)
-
-    def __init__(self, base_url, product_id, module_id, zt_cfg,
-                 account, password, parent=None):
-        super().__init__(parent)
-        self._base_url = base_url
-        self._product_id = product_id
-        self._module_id = module_id
-        self._zt_cfg = zt_cfg
-        self._account = account
-        self._password = password
-
-    def run(self):
-        zt = None
-        try:
-            from src.zentao_client import ZentaoClient
-            url = self._base_url or self._zt_cfg.get("base_url", "")
-            account = self._account or self._zt_cfg.get("account", "")
-            password = self._password or self._zt_cfg.get("password", "")
-            if not all([url, account, password]):
-                self.finished_signal.emit("", self._module_id)
-                return
-            zt = ZentaoClient(base_url=url, account=account, password=password)
-            zt._ensure_token()
-            name = zt.resolve_module_name(self._product_id, self._module_id)
-            self.finished_signal.emit(name, self._module_id)
-        except Exception as e:
-            logger.warning("模块名称解析失败: %s", e)
-            self.finished_signal.emit("", self._module_id)
-        finally:
-            if zt:
-                zt.close()
-
-
 class MainWindow(QMainWindow):
 
     def __init__(self):
@@ -208,7 +171,7 @@ class MainWindow(QMainWindow):
         row0.addWidget(self.btn_parse_url)
         grid.addLayout(row0)
 
-        # 第一行：产品ID、项目ID、模块
+        # 第一行：产品ID、禅道项目ID(模块)
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("产品ID:"))
         self.filter_product = QLineEdit()
@@ -216,16 +179,10 @@ class MainWindow(QMainWindow):
         self.filter_product.setMaximumWidth(100)
         row1.addWidget(self.filter_product)
 
-        row1.addWidget(QLabel("项目ID:"))
-        self.filter_project = QLineEdit()
-        self.filter_project.setPlaceholderText("数字ID")
-        self.filter_project.setMaximumWidth(100)
-        row1.addWidget(self.filter_project)
-
-        self.lbl_module = QLabel("禅道项目名称:")
+        self.lbl_module = QLabel("禅道项目ID:")
         row1.addWidget(self.lbl_module)
         self.filter_module = QLineEdit()
-        self.filter_module.setPlaceholderText("如 HS341")
+        self.filter_module.setPlaceholderText("数字ID")
         self.filter_module.setMaximumWidth(80)
         row1.addWidget(self.filter_module)
 
@@ -782,8 +739,8 @@ class MainWindow(QMainWindow):
             f"获取{platform}Bug列表（不需要Teambition认证）" if is_zentao
             else f"获取{platform}Issue列表（暂未适配）"
         )
-        self.lbl_module.setText("禅道项目名称:" if is_zentao else "Jira组件:")
-        self.filter_module.setPlaceholderText("如 HS341" if is_zentao else "如 Backend")
+        self.lbl_module.setText("禅道项目ID:" if is_zentao else "Jira组件:")
+        self.filter_module.setPlaceholderText("数字ID" if is_zentao else "如 Backend")
         self.edit_zentao_base_url.setPlaceholderText(
             "https://zentao.xxx.com/zentao" if is_zentao else "https://jira.xxx.com"
         )
@@ -803,7 +760,6 @@ class MainWindow(QMainWindow):
             zt_cfg["password"] = self.edit_zentao_password.text().strip()
             filters = zt_cfg.setdefault("filters", {})
             filters["product"] = self.filter_product.text().strip() or None
-            filters["project"] = self.filter_project.text().strip() or None
             filters["module_filter"] = self.filter_module.text().strip() or None
         elif old_platform == "jira":
             jira_cfg = self.config.setdefault("jira", {})
@@ -822,8 +778,7 @@ class MainWindow(QMainWindow):
             self.edit_zentao_account.setText(zt_cfg.get("account", ""))
             self.edit_zentao_password.setText(zt_cfg.get("password", ""))
             self.filter_product.setText(str(filters.get("product", "") or ""))
-            self.filter_project.setText(str(filters.get("project", "") or ""))
-            self.filter_module.setText(filters.get("module_filter", "") or "")
+            self.filter_module.setText(str(filters.get("module_filter", "") or ""))
             self.filter_url.setText("")
 
             # 加载状态：始终默认"激活"，不从 YAML 恢复状态选项
@@ -891,7 +846,6 @@ class MainWindow(QMainWindow):
             self.edit_zentao_account.setText(jira_cfg.get("username", ""))
             self.edit_zentao_password.setText(jira_cfg.get("api_token", ""))
             self.filter_product.setText(jira_cfg.get("project_key", ""))
-            self.filter_project.clear()
             self.filter_module.setText(jira_cfg.get("jql", ""))
             self.filter_url.clear()
             self.filter_assigned.clear()
@@ -946,11 +900,6 @@ class MainWindow(QMainWindow):
             # 清空产品时同步清理残留的 product_id，避免后续用到旧值
             if not product:
                 filters.pop("product_id", None)
-
-            project = self.filter_project.text().strip()
-            filters["project"] = int(project) if project.isdigit() else (project or None)
-            if not project:
-                filters.pop("project_id", None)
 
             module = self.filter_module.text().strip()
             filters["module_filter"] = module if module else ""
@@ -1182,7 +1131,7 @@ class MainWindow(QMainWindow):
             btn.setEnabled(enabled)
         # 筛选面板
         for w in [self.filter_url, self.btn_parse_url, self.filter_product,
-                  self.filter_project, self.filter_module, self.filter_status,
+                  self.filter_module, self.filter_status,
                   self.filter_assigned, self.filter_platform,
                   self.btn_add_assigned, self.btn_del_assigned, self.btn_toggle_assigned,
                   self.filter_date_mode, self.filter_date_from, self.filter_date_to]:
@@ -1269,9 +1218,6 @@ class MainWindow(QMainWindow):
         if parsed["product_id"]:
             self.filter_product.setText(str(parsed["product_id"]))
             filled.append(f"产品ID={parsed['product_id']}")
-        if parsed["project_id"]:
-            self.filter_project.setText(str(parsed["project_id"]))
-            filled.append(f"项目ID={parsed['project_id']}")
         if parsed["base_url"]:
             self.edit_zentao_base_url.setText(parsed["base_url"])
             filled.append(f"禅道地址={parsed['base_url']}")
@@ -1279,6 +1225,12 @@ class MainWindow(QMainWindow):
             zt_filters = self.config.setdefault("zentao", {}).setdefault("filters", {})
             zt_filters["branch"] = parsed["branch_id"]
             filled.append(f"分支ID={parsed['branch_id']}")
+        # 模块ID：直接填入数字（不做名称转换）
+        if parsed["module_id"]:
+            self.filter_module.setText(str(parsed["module_id"]))
+            filled.append(f"禅道项目ID={parsed['module_id']}")
+        elif parsed["product_id"] or parsed["base_url"]:
+            self.filter_module.clear()
 
         if filled:
             self.status_label.setText("已解析: " + ", ".join(filled))
@@ -1295,37 +1247,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # 如果 URL 中有模块ID，异步解析模块名称（避免阻塞 UI）
-        if parsed["module_id"] and parsed["product_id"]:
-            self.btn_parse_url.setEnabled(False)
-            self.status_label.setText("正在解析模块名称...")
-            self._module_thread = _ModuleResolveThread(
-                base_url=parsed["base_url"],
-                product_id=parsed["product_id"],
-                module_id=parsed["module_id"],
-                zt_cfg=self.config.get("zentao", {}),
-                account=self.edit_zentao_account.text().strip(),
-                password=self.edit_zentao_password.text().strip(),
-                parent=self,
-            )
-            self._module_thread.finished_signal.connect(self._on_module_resolved)
-            self._module_thread.start()
-        else:
-            # URL 不含模块ID，清空模块名称字段，避免残留旧配置
-            self.filter_module.clear()
         # 将解析结果持久化到 YAML，避免重启后恢复旧值
-        self._save_config_to_yaml()
-
-    def _on_module_resolved(self, module_name, module_id):
-        """模块名称异步解析完成回调"""
-        self.btn_parse_url.setEnabled(True)
-        if module_name:
-            self.filter_module.setText(module_name)
-            self.status_label.setText(f"已解析: 模块ID={module_id} → {module_name}")
-        else:
-            self.filter_module.clear()
-            self.status_label.setText(f"模块ID={module_id} 未找到对应名称，可手动填写")
-        # 模块名称解析结果持久化到 YAML
         self._save_config_to_yaml()
 
     def _on_test_auth(self):

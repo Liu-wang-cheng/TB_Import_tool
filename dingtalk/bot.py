@@ -151,14 +151,16 @@ class DingTalkBot:
         if project_name:
             lines.append(f"| TB所属项目 | {project_name} |")
         lines.extend([
-            f"| 总计处理 | {stats.total} 条 |",
+            f"| 导入处理 | {stats.total} 条 |",
             f"| 新建成功 | {stats.created} 条 |",
             f"| 重新激活 | {stats.reactivated} 条 |",
             f"| 去重跳过 | {stats.skipped_dedup} 条 |",
             f"| 筛选跳过 | {stats.skipped_filtered} 条 |",
             f"| 错误 | {stats.errors} 条 |",
-            f"| 耗时 | {time_str} |",
         ])
+        if stats.closed_synced > 0:
+            lines.append(f"| 关闭同步 | {stats.closed_synced} 条 |")
+        lines.append(f"| 耗时 | {time_str} |")
 
         if dry_run:
             lines.append("")

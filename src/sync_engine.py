@@ -199,7 +199,10 @@ class SyncEngine:
                 id_filtered = [b for b in bugs if str(b.module) == mf]
                 if id_filtered:
                     bugs = id_filtered
-                    logger.info("模块ID '%s' 预过滤后剩余 %d 条", mf, len(bugs))
+                    if self.sync_closed_status:
+                        logger.debug("模块ID '%s' 预过滤后剩余 %d 条", mf, len(bugs))
+                    else:
+                        logger.info("模块ID '%s' 预过滤后剩余 %d 条", mf, len(bugs))
                 else:
                     # 数字当名称子串匹配：调用 utils 的并发详情拉取路径
                     bugs = apply_module_filter(
@@ -207,7 +210,10 @@ class SyncEngine:
                         fetch_detail_fn=self.source.fetch_bug_detail,
                         treat_digit_as_name=True,
                     )
-                    logger.info("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
+                    if self.sync_closed_status:
+                        logger.debug("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
+                    else:
+                        logger.info("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
             elif filters.get("product_id"):
                 t0 = time.time()
                 self._module_id_set = self.source.resolve_module_ids_by_name(
@@ -228,10 +234,11 @@ class SyncEngine:
                         "比对 moduleName（每条约 0.6s 延迟）")
 
         stats.total = len(bugs)
-        logger.info("待处理 Bug: %d 条", stats.total)
+        if not self.sync_closed_status:
+            logger.info("待处理 Bug: %d 条", stats.total)
 
-        # 打印各指派人的 Bug 数量统计
-        if bugs:
+        # 打印各指派人的 Bug 数量统计（关闭同步时不显示）
+        if bugs and not self.sync_closed_status:
             assignee_counter = Counter(b.assignedTo for b in bugs)
             summary = ", ".join(
                 f"{name or '(未指派)'}({count})"
@@ -338,8 +345,12 @@ class SyncEngine:
             progress_callback(max(stats.total, 1), max(stats.total, 1),
                               "同步完成")
 
-        # 钉钉通知
-        if self.dingtalk_bot:
+        # 钉钉通知（关闭同步开启时，仅在有新建/重新激活时才发主同步通知）
+        if self.dingtalk_bot and (
+            not self.sync_closed_status
+            or stats.created > 0
+            or stats.reactivated > 0
+        ):
             try:
                 self.dingtalk_bot.send_sync_result(
                     stats, elapsed, dry_run=is_dry_run,
@@ -736,8 +747,8 @@ class SyncEngine:
             # 非激活状态直接跳过；激活状态走下面去重+状态校验流程（避免重复 API 调用）
             # 关闭同步开启时，已关闭的Bug由关闭同步阶段独立处理
             if re.search(r'(?:VLNS|CPAX)-\d+', bug.title) and bug.status != "active":
-                if self.sync_closed_status and bug.status == "closed":
-                    logger.debug("[关闭同步-待处理] Bug#%d 标题含 VLNS/CPAX",
+                if self.sync_closed_status:
+                    logger.debug("[关闭同步-跳过] Bug#%d 标题含 VLNS/CPAX（由关闭同步处理）",
                                  bug.id)
                 else:
                     logger.info("[跳过-已导入] Bug#%d 标题含 VLNS/CPAX 标记: %s",
@@ -748,8 +759,8 @@ class SyncEngine:
             # VLNS/CPAX 评论检测：评论中有引用说明已有 TB 任务
             vlns_in_comments = self.source.extract_vlns_numbers(bug.id)
             if vlns_in_comments and bug.status != "active":
-                if self.sync_closed_status and bug.status == "closed":
-                    logger.debug("[关闭同步-待处理] Bug#%d 评论含 VLNS/CPAX: %s",
+                if self.sync_closed_status:
+                    logger.debug("[关闭同步-跳过] Bug#%d 评论含 VLNS/CPAX（由关闭同步处理）: %s",
                                  bug.id, vlns_in_comments)
                 else:
                     logger.info("[跳过-评论含VLNS] Bug#%d 评论含 VLNS/CPAX 编号: %s",
@@ -1161,16 +1172,56 @@ class SyncEngine:
 
         # 独立查询已关闭的Bug，不传 assigned_to（忽略指派人筛选）
         filters = self.config.get("zentao", {}).get("filters", {})
+        pid = filters.get("product_id") or filters.get("product")
+        if not pid:
+            logger.warning("[关闭同步] 未配置产品ID，跳过")
+            return
+        # server_status="all" 让禅道API返回已关闭的Bug（默认不返回）
+        logger.info("[关闭同步] 查询产品ID=%s, status=closed", pid)
         closed_bugs = self.source.fetch_all_bugs(
             product_id=filters.get("product_id"),
             project_id=filters.get("project_id"),
-            statuses=["closed"],  # 仅"关闭"，不含"已解决"(已解决=待验证)
+            statuses=["closed"],
             date_from=filters.get("date_from"),
             date_to=filters.get("date_to"),
-            assigned_to=None,  # 不走指派人筛选
+            assigned_to=None,
+            server_status="all",
         )
         if not closed_bugs:
             logger.info("[关闭同步] 无已关闭的 Bug")
+            return
+
+        # 应用模块过滤（与主同步一致）
+        if self.module_filter:
+            mf = self.module_filter.strip()
+            if mf.isdigit():
+                closed_bugs = [b for b in closed_bugs if str(b.module) == mf]
+                logger.info("[关闭同步] 模块ID '%s' 过滤后剩余 %d 条", mf, len(closed_bugs))
+            else:
+                try:
+                    pid_int = int(pid)
+                    module_ids = self.source.resolve_module_ids_by_name(pid_int, mf)
+                    if module_ids is not None:
+                        closed_bugs = [b for b in closed_bugs
+                                       if str(b.module) in module_ids]
+                        logger.info("[关闭同步] 模块名 '%s' 命中 %d 个ID，过滤后 %d 条",
+                                    mf, len(module_ids), len(closed_bugs))
+                except Exception as e:
+                    logger.warning("[关闭同步] 模块过滤失败: %s", e)
+            if not closed_bugs:
+                logger.info("[关闭同步] 模块过滤后无 Bug")
+                return
+
+        # 预筛选：仅保留标题含 VLNS/CPAX 的 Bug（被双向标注过的才是同步过的）
+        _before_filter = len(closed_bugs)
+        closed_bugs = [b for b in closed_bugs
+                       if re.search(r'(VLNS|CPAX)-\d+', b.title)]
+        _skipped_no_vlns = _before_filter - len(closed_bugs)
+        if _skipped_no_vlns:
+            logger.info("[关闭同步] 跳过 %d 条无 VLNS/CPAX 标记的 Bug（未同步过），"
+                        "剩余 %d 条", _skipped_no_vlns, len(closed_bugs))
+        if not closed_bugs:
+            logger.info("[关闭同步] VLNS/CPAX 预筛选后无 Bug")
             return
 
         close_total = len(closed_bugs)
@@ -1182,7 +1233,6 @@ class SyncEngine:
         import time as _time
         _t0 = _time.time()
 
-        import re
         for idx, bug in enumerate(closed_bugs):
             if idx > 0 and idx % 20 == 0:
                 _elapsed = _time.time() - _t0
@@ -2085,17 +2135,8 @@ class SyncEngine:
         Args:
             media_map: {zentao_file_id: assigned_filename}
         """
-        attachment_cf_id = self.cf_ids.get("attachment", "")
-        existing_filenames = set()
-        if attachment_cf_id:
-            existing_filenames = self._get_existing_task_filenames(task_id)
-
         uploaded: Dict[str, tuple] = {}  # file_id → (work_id, filename, download_url)
         for file_id, assigned_name in media_map.items():
-            # 跳过已上传的
-            if assigned_name in existing_filenames:
-                logger.info("跳过已上传评论媒体: %s", assigned_name)
-                continue
 
             def _do_upload(fid=file_id, fname=assigned_name):
                 # 视频文件用 download_attachment（支持大文件和更长超时）
@@ -2117,12 +2158,16 @@ class SyncEngine:
                                assigned_name, file_id)
 
         # 更新"日志附件"自定义字段
+        attachment_cf_id = self.cf_ids.get("attachment", "")
         if attachment_cf_id and uploaded:
             try:
                 existing_values = self._get_existing_attachment_values(
                     task_id, attachment_cf_id
-                ) if existing_filenames else []
-                values = list(existing_values)
+                )
+                # 过滤掉已上传的同名文件（替换旧的，避免之前下载失败导致损坏文件残留）
+                uploaded_names = {entry[1] for entry in uploaded.values()}
+                values = [v for v in existing_values
+                          if v.get("title", "") not in uploaded_names]
                 for entry in uploaded.values():
                     values.append({"id": entry[0], "title": entry[1]})
                 if values:

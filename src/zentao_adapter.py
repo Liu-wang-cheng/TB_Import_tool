@@ -31,7 +31,8 @@ class ZentaoAdapter:
 
     def fetch_all_bugs(self, product_id=None, project_id=None,
                        statuses=None, date_from=None, date_to=None,
-                       assigned_to=None) -> List[ZentaoBug]:
+                       assigned_to=None,
+                       server_status: str = "") -> List[ZentaoBug]:
         return self._client.fetch_all_bugs(
             product_id=product_id,
             project_id=project_id,
@@ -39,6 +40,7 @@ class ZentaoAdapter:
             date_from=date_from,
             date_to=date_to,
             assigned_to=assigned_to,
+            server_status=server_status,
         )
 
     def fetch_bug_detail(self, bug_id: int) -> ZentaoBug:

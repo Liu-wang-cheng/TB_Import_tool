@@ -30,7 +30,8 @@ class SourceClient(Protocol):
 
     def fetch_all_bugs(self, product_id=None, project_id=None,
                        statuses=None, date_from=None, date_to=None,
-                       assigned_to=None) -> List[ZentaoBug]:
+                       assigned_to=None,
+                       server_status: str = "") -> List[ZentaoBug]:
         """根据筛选条件获取缺陷列表，返回统一 ZentaoBug"""
         ...
 
