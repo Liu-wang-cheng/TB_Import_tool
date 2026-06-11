@@ -584,13 +584,15 @@ class MainWindow(QMainWindow):
         self._update_ai_sub_switches()
 
     def _save_reopen_switch(self):
-        """保存重新打开任务开关到 sync.yaml"""
+        """保存重新打开任务开关到 sync.yaml，并同步更新内存配置"""
         import yaml
         from gui.yaml_utils import update_yaml_values
         sync_path = os.path.join(self._project_root, "configs", "sync.yaml")
         enabled = self.chk_reopen.isChecked()
         try:
             update_yaml_values(sync_path, {"reactivate_closed": enabled})
+            # 同步更新内存配置，确保开关实时生效
+            self.config.setdefault("sync", {})["reactivate_closed"] = enabled
         except Exception as e:
             logger.warning("保存重新打开任务开关失败: %s", e)
 
