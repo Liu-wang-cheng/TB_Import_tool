@@ -1,8 +1,8 @@
 {
   "version": "2.4",
-  "sha256": "db71ac8e957bd51e8668e5ce2b2b419387af767d5735bf69334f01c348649a8d",
+  "sha256": "54a973f4e2e625663188ac7bd4a779869de39e31700dc47b7359dc7463c2f9ce",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.4/SmartDefectPlatform.zip",
-  "release_date": "2026-06-10",
-  "release_notes": "v2.4: TB执行人自动/指定人员模式 + 关闭同步(禅道关闭→TB待回归自动关闭) + VLNS回退搜索 + Sfc/taskflowId空值回退",
+  "release_date": "2026-06-11",
+  "release_notes": "v2.4 release",
   "min_version": "1.0"
 }
