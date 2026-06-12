@@ -283,7 +283,12 @@ class ListBugsWorker(QThread):
                     for bug in bugs[:20]:
                         s = str(bug.severity).strip() if bug.severity else ""
                         label = sev_labels.get(s, s) if sev_labels else s
-                        tb_sev = sev_map.get(s)
+                        # 与 _map_severity 保持一致：先翻译后查 map
+                        tb_sev = sev_map.get(label)
+                        if tb_sev is None and label.isdigit():
+                            tb_sev = sev_map.get(int(label))
+                        if tb_sev is None:
+                            tb_sev = sev_map.get(s)
                         if tb_sev is None and s.isdigit():
                             tb_sev = sev_map.get(int(s))
                         sev = f"{label}→{tb_sev}" if tb_sev is not None else label
