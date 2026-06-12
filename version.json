@@ -3,6 +3,6 @@
   "sha256": "a1fb2cf2be902f51954203f36e38363884f44cff2968251de590e739dc465120",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.5/SmartDefectPlatform.zip",
   "release_date": "2026-06-11",
-  "release_notes": "v2.5 release",
+  "release_notes": "v2.5: 修复重新打开任务开关不生效 | v2.4.1: 图片附件显示修复+关闭同步优化+日志精简 | v2.4: 关闭同步+执行人模式",
   "min_version": "1.0"
 }
