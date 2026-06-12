@@ -824,11 +824,40 @@ class ZentaoClient:
             return []
 
     def update_bug_title(self, bug_id: int, new_title: str):
-        """更新 Bug 标题（自建版用 REST API；云版不支持部分更新，跳过）"""
+        """更新 Bug 标题（云版用全量表单，自建版用 REST API）"""
         if self._cloud_session_auth:
-            # 云版 bug-edit 是全量表单提交，无法部分更新标题，
-            # 提交其他字段（如 assignedTo）可能导致意外的副作用，故跳过
-            logger.debug("云版不支持部分标题更新，跳过 Bug#%d 双向标注", bug_id)
+            try:
+                raw = self._get_bug_raw(bug_id, retry_on_401=False)
+                if not raw:
+                    raise ZentaoAPIError(0, "获取Bug原始数据失败", f"bug-{bug_id}")
+                # assignedTo 可能是 dict {"account":"x","realname":"x"} 或字符串
+                assigned = raw.get("assignedTo", "")
+                if isinstance(assigned, dict):
+                    assigned = assigned.get("account", "")
+                # openedBuild 去掉尾部逗号: "trunk," → "trunk"
+                ob = raw.get("openedBuild", "")
+                if isinstance(ob, str):
+                    ob = ob.rstrip(",")
+                data = {
+                    "title": new_title,
+                    "type": raw.get("type", ""),
+                    "product": raw.get("product", ""),
+                    "severity": raw.get("severity", ""),
+                    "pri": str(raw.get("pri", "")),
+                    "openedBuild": ob,
+                    "assignedTo": assigned,
+                    "module": str(raw.get("module", "")),
+                    "steps": raw.get("steps", ""),
+                    "status": raw.get("status", ""),
+                }
+                result = self._cloud_json_post(f"bug-edit-{bug_id}.json", data=data)
+                if isinstance(result, dict) and result.get("result") == "fail":
+                    msg = result.get("message", "")
+                    logger.warning("云版 Bug#%d 标题更新被拒绝: %s", bug_id, msg)
+                    return
+                logger.info("云版 Bug#%d 标题已更新: %s", bug_id, new_title)
+            except Exception as e:
+                logger.warning("云版标题更新失败(Bug#%d): %s", bug_id, e)
             return
         path = f"/api.php/v1/bugs/{bug_id}"
         self._request("PUT", path, json={"title": new_title})
