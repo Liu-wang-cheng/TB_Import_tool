@@ -83,6 +83,7 @@ class SyncEngine:
             self.classifier = BugClassifier(config)
             logger.info("AI 缺陷分类器已启用")
         else:
+            from src.classifier import SimilarityClassifier  # 增量学习需要 _clean_title
             self.classifier = None
 
         # 从 zentao.assigned_to 配置构建 "姓名→缺陷分类" 映射
