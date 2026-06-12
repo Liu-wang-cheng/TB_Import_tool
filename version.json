@@ -1,8 +1,8 @@
 {
-  "version": "2.5",
-  "sha256": "a1fb2cf2be902f51954203f36e38363884f44cff2968251de590e739dc465120",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.5/SmartDefectPlatform.zip",
-  "release_date": "2026-06-11",
-  "release_notes": "v2.5: 修复重新打开任务开关不生效 | v2.4.1: 图片附件显示修复+关闭同步优化+日志精简 | v2.4: 关闭同步+执行人模式",
+  "version": "2.5.1",
+  "sha256": "17f406056186a25f48de5eeccba7b55d782bb64ca950dd0800063cf5ef30b8a2",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.5.1/SmartDefectPlatform.zip",
+  "release_date": "2026-06-12",
+  "release_notes": "v2.5.1 release",
   "min_version": "1.0"
 }
