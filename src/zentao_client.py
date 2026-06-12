@@ -830,26 +830,26 @@ class ZentaoClient:
                 raw = self._get_bug_raw(bug_id, retry_on_401=False)
                 if not raw:
                     raise ZentaoAPIError(0, "获取Bug原始数据失败", f"bug-{bug_id}")
-                # assignedTo 可能是 dict {"account":"x","realname":"x"} 或字符串
-                assigned = raw.get("assignedTo", "")
-                if isinstance(assigned, dict):
-                    assigned = assigned.get("account", "")
+                # 原样保存所有字段，只改 title
+                data = {"title": new_title}
+                for key in ("type", "product", "severity", "pri",
+                            "openedBuild", "assignedTo", "module",
+                            "steps", "status", "branch"):
+                    val = raw.get(key)
+                    if val is None:
+                        continue
+                    # assignedTo 可能是 dict {"account":"x","realname":"x"}
+                    if key == "assignedTo" and isinstance(val, dict):
+                        val = val.get("account", "")
+                        if not val:
+                            continue
+                    # 空字符串跳过（云端会当"清除"重置字段）
+                    if val == "":
+                        continue
+                    data[key] = val
                 # openedBuild 去掉尾部逗号: "trunk," → "trunk"
-                ob = raw.get("openedBuild", "")
-                if isinstance(ob, str):
-                    ob = ob.rstrip(",")
-                data = {
-                    "title": new_title,
-                    "type": raw.get("type", ""),
-                    "product": raw.get("product", ""),
-                    "severity": raw.get("severity", ""),
-                    "pri": str(raw.get("pri", "")),
-                    "openedBuild": ob,
-                    "assignedTo": assigned,
-                    "module": str(raw.get("module", "")),
-                    "steps": raw.get("steps", ""),
-                    "status": raw.get("status", ""),
-                }
+                if isinstance(data.get("openedBuild"), str):
+                    data["openedBuild"] = data["openedBuild"].rstrip(",")
                 result = self._cloud_json_post(f"bug-edit-{bug_id}.json", data=data)
                 if isinstance(result, dict) and result.get("result") == "fail":
                     msg = result.get("message", "")
