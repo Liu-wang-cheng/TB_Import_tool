@@ -152,6 +152,20 @@ docs/
 - **GUI 日期筛选**：`QDateEdit` 默认值 `QDate.currentDate()`（非 minimumDate 2000-01-01），`specialValueText("不限")` 仅在日期等于 minimumDate 时显示。日期恢复需同时兼容 `str` 和 `datetime.date`（PyYAML 解析结果）
 - **GUI `_set_busy()` AI 子开关交互**：任务完成后 `_set_busy(False)` 恢复控件时，AI 子开关需额外判断 `chk_ai_analysis.isChecked()`。若 AI 总开关关闭，子开关保持 disabled
 - **指派人过滤（云版）**：`_resolve_assigned_to_cloud()` 处理纯名字→云版用户映射时，需后缀匹配 `_cloud_user_name_to_account` 的 key（如 "邓建和" → "部门-邓建和" → account）。`_passes_filters_with_assignees()` 也需做 `-` 后缀二次匹配
+- **关闭同步**（v2.4）：`_run_close_sync_phase()` 独立查询已关闭的禅道 Bug，找到 VLNS/CPAX 对应的 TB 任务，若 TB 处于待回归状态则关闭。
+  - 使用 `server_status="all"` 让禅道 API 返回已关闭 Bug（默认只返回未关闭）
+  - VLNS/CPAX 标题预筛选：只处理标题含 VLNS/CPAX 的 Bug（被双向标注过的才是同步过的），大幅减少无效遍历
+  - 模块过滤与主同步一致
+  - 关闭同步开启时主同步日志降级为 debug，无新建/重新激活时不发主同步钉钉通知
+  - `SyncStats.__str__()` 分两行显示导入/关闭数据，`closed_synced=0` 时不显示关闭行
+- **图片附件修复**（v2.4.1）：
+  - `_download_file()` 加 `_is_valid()` 内部函数，检测 Content-Type 和文件头魔数，防止把登录页面 HTML 当图片返回
+  - `download_image()` / `download_attachment()` 优先使用 clean URL（如 `file-read-{id}.html`），不再经过 `_build_url()`。动态路径 `index.php?m=file` 对文件下载不可用，会返回登录页
+  - `_detect_image_format()` 通过文件头魔数检测真实格式（JPEG/PNG/GIF/WebP/BMP），不再硬编码 `.png`
+  - `upload_attachment()` 始终从文件扩展名推断 MIME 类型，不信任禅道返回的 Content-Type
+  - `_upload_comment_media()` 取消文件名去重，同名媒体始终重新上传替换旧损坏条目；更新自定义字段时过滤掉旧同名条目
+- **GUI 开关实时生效**（v2.5）：`_save_reopen_switch()` 仅写 `sync.yaml` 不够，必须同步更新 `self.config` 内存配置，否则 `SyncWorker` 拿到的是 GUI 启动时加载的旧值
+- **关闭同步性能**：禅道 API `fetch_all_bugs()` 支持 `server_status` 参数透传到 API 层；Protocol 接口 `source_client.py` 和适配器 `zentao_adapter.py` 需同步更新签名
 
 ## 依赖
 
