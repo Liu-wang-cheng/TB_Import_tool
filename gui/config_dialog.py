@@ -446,7 +446,7 @@ class ConfigDialog(QDialog):
         filters = zt.get("filters", {})
         product = filters.get("product", "")
         self.zt_product.setText(str(product) if product else "")
-        self.zt_module_filter.setText(filters.get("module_filter", "") or "")
+        self.zt_module_filter.setText(str(filters.get("module_filter", "") or ""))
         assigned_to = filters.get("assigned_to", []) or []
         if isinstance(assigned_to, str):
             assigned_to = [assigned_to]
