@@ -824,10 +824,11 @@ class ZentaoClient:
             return []
 
     def update_bug_title(self, bug_id: int, new_title: str):
+        """更新 Bug 标题（自建版用 REST API；云版不支持部分更新，跳过）"""
         if self._cloud_session_auth:
-            self._cloud_json_post(f"bug-edit-{bug_id}.json",
-                                  data={"title": new_title})
-            logger.info("云版 Bug#%d 标题已更新: %s", bug_id, new_title)
+            # 云版 bug-edit 是全量表单提交，无法部分更新标题，
+            # 提交其他字段（如 assignedTo）可能导致意外的副作用，故跳过
+            logger.debug("云版不支持部分标题更新，跳过 Bug#%d 双向标注", bug_id)
             return
         path = f"/api.php/v1/bugs/{bug_id}"
         self._request("PUT", path, json={"title": new_title})
