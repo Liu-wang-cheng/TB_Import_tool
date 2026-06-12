@@ -1,8 +1,8 @@
 {
-  "version": "2.5.2",
-  "sha256": "e94011b85e16522713fa407724532f339a2833f2186196489bead6f45ed3d568",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.5.2/SmartDefectPlatform.zip",
+  "version": "2.5.3",
+  "sha256": "26c58b0ed437c856622e358e21c8ffa3fae48ab9c893ce6f782f72161ce37ade",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.5.3/SmartDefectPlatform.zip",
   "release_date": "2026-06-12",
-  "release_notes": "v2.5.2 release",
+  "release_notes": "v2.5.3 release",
   "min_version": "1.0"
 }
