@@ -1502,21 +1502,23 @@ class SyncEngine:
         # 1. 将 API 数字值翻译为禅道页面显示的标签
         label = self.severity_labels.get(s, s) if self.severity_labels else s
 
-        # 2. 用翻译后的标签查 severity_map
-        # YAML 可能解析 key 为 int 或 str，双键查找
-        mapped = self.severity_map.get(label)
-        if mapped is None:
-            mapped = self.severity_map.get(
-                int(label) if label.isdigit() else label)
+        def _lookup(key):
+            """查 severity_map，兼容 int/str key"""
+            v = self.severity_map.get(key)
+            if v is not None:
+                return v
+            if isinstance(key, str) and key.isdigit():
+                return self.severity_map.get(int(key))
+            return None
+
+        # 2. 先用原始 API 值查 map（数字和中文是两套独立映射）
+        mapped = _lookup(s)
         if mapped is not None:
             return mapped
 
-        # 3. 标签没匹配到，回退用原始 API 值查 map
+        # 3. 原始值未命中，用翻译后的标签查 map
         if label != s:
-            mapped = self.severity_map.get(s)
-            if mapped is None:
-                mapped = self.severity_map.get(
-                    int(s) if s.isdigit() else s)
+            mapped = _lookup(label)
             if mapped is not None:
                 return mapped
 
