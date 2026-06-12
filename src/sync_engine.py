@@ -1499,7 +1499,9 @@ class SyncEngine:
             logger.warning("严重程度为空，默认返回C")
             return "C"
 
-        # 1. 将 API 数字值翻译为禅道页面显示的标签
+        # 1. 将 API 返回值统一翻译为中文标签
+        #    不同实例返回格式不同：数字(1-4)、字母(A-D)、中文(致命/严重/一般/建议)
+        #    翻译后再查 severity_map，确保不同实例走同一套映射逻辑
         label = self.severity_labels.get(s, s) if self.severity_labels else s
 
         def _lookup(key):
@@ -1511,14 +1513,14 @@ class SyncEngine:
                 return self.severity_map.get(int(key))
             return None
 
-        # 2. 先用原始 API 值查 map（数字和中文是两套独立映射）
-        mapped = _lookup(s)
+        # 2. 用翻译后的中文标签查 map
+        mapped = _lookup(label)
         if mapped is not None:
             return mapped
 
-        # 3. 原始值未命中，用翻译后的标签查 map
+        # 3. 标签未命中时回退用原始值（例如标签库中未收录的实例）
         if label != s:
-            mapped = _lookup(label)
+            mapped = _lookup(s)
             if mapped is not None:
                 return mapped
 

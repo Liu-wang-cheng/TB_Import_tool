@@ -71,16 +71,16 @@ def list_bugs(source, filters: dict, severity_map: dict = None,
         s = str(bug.severity).strip() if bug.severity else ""
         # 禅道页面翻译后的名称（致命/严重/一般/建议 或 A/B/C/D）
         label = severity_labels.get(s, s) if severity_labels else s
-        # TB 映射等级（与 _map_severity 一致：先原始值，再翻译标签）
+        # TB 映射等级（与 _map_severity 一致：先翻译标签，再回退原始值）
         tb_sev = None
         if severity_map:
-            tb_sev = severity_map.get(s)
-            if tb_sev is None and s.isdigit():
-                tb_sev = severity_map.get(int(s))
+            tb_sev = severity_map.get(label)
+            if tb_sev is None and label.isdigit():
+                tb_sev = severity_map.get(int(label))
             if tb_sev is None and label != s:
-                tb_sev = severity_map.get(label)
-                if tb_sev is None and label.isdigit():
-                    tb_sev = severity_map.get(int(label))
+                tb_sev = severity_map.get(s)
+                if tb_sev is None and s.isdigit():
+                    tb_sev = severity_map.get(int(s))
         if tb_sev is not None:
             sev = f"{label}→{tb_sev}"
         else:
