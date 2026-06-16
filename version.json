@@ -1,8 +1,8 @@
 {
-  "version": "2.5.6",
-  "sha256": "6a3335431bda58c3599b2fc21cf1f9eafc6d77ef8fd1487979fd3a9ffd73caa8",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.5.6/SmartDefectPlatform.zip",
+  "version": "2.5.7",
+  "sha256": "2c483407d81b81c70ebecb2dd13fbe91f1f2175200b410e148c55a93fbc75315",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.5.7/SmartDefectPlatform.zip",
   "release_date": "2026-06-16",
-  "release_notes": "v2.5.6 云版users字段list格式兼容 + 指派人筛选剥离部门前缀\n\nv2.5.5 SimilarityClassifier模块级导入修复 + 测试完整性修复\n\nv2.5.4 云版标题标注 + 严重程度映射修复 + SimilarityClassifier导入修复 + 配置对话框setText修复\n\nv2.5.3 严重程度映射统一 + module_filter int兼容\n\nv2.5.2 classifier关闭时增量学习修复\n\nv2.5.1 重新打开开关不实时生效修复\n\nv2.4 关闭同步 + 执行人模式\n\nv2.4.1 图片附件显示修复 + 评论媒体去重移除 + 关闭同步优化 + 日志精简",
+  "release_notes": "v2.5.7 release",
   "min_version": "1.0"
 }

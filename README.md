@@ -149,6 +149,13 @@ build.bat
 
 ## 版本历史
 
+### v2.5.7 (2026-06-16)
+
+- **修复**：云版禅道 `modules` 字段 list 格式导致列出 Bug 时崩溃（`'list' object has no attribute 'items'` at `_register_cloud_modules`）
+  - v2.5.6 只修了 `users` 字段，遗漏了 `modules` 字段同样的格式漂移
+  - 新增 `_normalize_modules()` 统一 list / dict / 嵌套 dict 格式为扁平 `{id: name}`
+  - 2 个使用点（`_cloud_get_browse` / `_fetch_modules_endpoint`）全部走规范化
+
 ### v2.5.6 (2026-06-16)
 
 - **修复**：云版禅道 `users` 字段格式漂移导致同步崩溃（`'list' object has no attribute 'items'`）
