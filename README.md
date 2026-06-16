@@ -149,6 +149,12 @@ build.bat
 
 ## 版本历史
 
+### v2.5.8 (2026-06-16)
+
+- **修复**：v2.5.6/v2.5.7 GUI 弹窗仍显示全部历史版本说明
+  - 根因：`gui/__pycache__/main_window.cpython-313.pyc` mtime 异常（早于源文件），PyInstaller 直接复用旧 .pyc 缓存
+  - build.bat 增加清理 `__pycache__` 步骤，确保每次构建从源码重新编译
+
 ### v2.5.7 (2026-06-16)
 
 - **修复**：云版禅道 `modules` 字段 list 格式导致列出 Bug 时崩溃（`'list' object has no attribute 'items'` at `_register_cloud_modules`）
