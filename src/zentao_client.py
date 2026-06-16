@@ -309,7 +309,8 @@ class ZentaoClient:
             self._cloud_browse_cache[cache_key] = data
         # 同时更新用户名映射缓存和模块名映射
         self._update_user_mapping(data)
-        ZentaoClient._register_cloud_modules(data.get("modules", {}))
+        ZentaoClient._register_cloud_modules(
+            ZentaoClient._normalize_modules(data.get("modules")))
         return data
 
     @staticmethod
@@ -345,6 +346,39 @@ class ZentaoClient:
                       or entry.get("displayName"))
                 if acct and rn and str(rn) != str(acct):
                     result[str(acct)] = str(rn)
+            return result
+        return {}
+
+    @staticmethod
+    def _normalize_modules(modules) -> dict:
+        """统一 modules 字段为 {id: name} dict。
+
+        云版禅道格式漂移：
+          - 老版/自建版: {"0": "", "123": "模块A", "456": "模块B"}
+          - 新云版: [{"id": "123", "name": "模块A", "short": "..."}, ...]
+                   [{"id": "123", "short": "模块A"}, ...]
+        """
+        if not modules:
+            return {}
+        if isinstance(modules, dict):
+            result = {}
+            for k, v in modules.items():
+                if isinstance(v, dict):
+                    name = v.get("name") or v.get("short") or v.get("title")
+                else:
+                    name = v
+                if k and name:
+                    result[str(k)] = str(name)
+            return result
+        if isinstance(modules, list):
+            result = {}
+            for entry in modules:
+                if not isinstance(entry, dict):
+                    continue
+                mid = entry.get("id") or entry.get("module")
+                name = entry.get("name") or entry.get("short") or entry.get("title")
+                if mid and name:
+                    result[str(mid)] = str(name)
             return result
         return {}
 
@@ -1008,7 +1042,7 @@ class ZentaoClient:
         if self._cloud_session_auth:
             try:
                 data = self._cloud_get_browse(id_param)
-                modules_dict = data.get("modules", {})
+                modules_dict = self._normalize_modules(data.get("modules"))
                 if modules_dict:
                     return [{"id": k, "name": v, "parent": "0"}
                             for k, v in modules_dict.items() if k != "0"]
