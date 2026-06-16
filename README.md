@@ -149,6 +149,12 @@ build.bat
 
 ## 版本历史
 
+### v2.5.5 (2026-06-16)
+
+- **修复**：classifier 关闭 + TF-IDF 缓存 > 7 天时增量学习静默失效（`SimilarityClassifier` 在 `__init__` 局部导入，`_fetch_defect_samples` 看不到，`NameError` 被 broad except 吞掉）
+  - 改为模块级导入，删除两处冗余局部导入
+- **测试**：`TestCloudTitleUpdate` 用 `__new__` 绕过 `__init__` 导致 `_bug_raw_cache_lock` 缺失，补全属性 + 改用 `MagicMock` 让比较运算可工作，测试真正验证云版 POST 调用路径
+
 ### v2.5 (2026-06-11)
 
 - **修复**：GUI "重新打开任务"开关关闭后不实时生效（`_save_reopen_switch` 漏更新内存配置）
