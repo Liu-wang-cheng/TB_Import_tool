@@ -352,18 +352,26 @@ class TestCloudTitleUpdate:
     """云版标题修改"""
 
     def test_cloud_post_called(self):
-        from unittest.mock import Mock
+        import threading
+        from unittest.mock import MagicMock
         from src.zentao_client import ZentaoClient
         client = ZentaoClient.__new__(ZentaoClient)
         client._cloud_session_auth = True
         client.base_url = "https://cloud.example.com"
         client.api_delay = 0
-        client._http = Mock()
+        client._http = MagicMock()
         client._session_logged_in = True
-        mock_resp = Mock()
-        mock_resp.status_code = 200
-        mock_resp.text = '{"data": {"title": "updated"}}'
-        client._http.post.return_value = mock_resp
+        client._bug_raw_cache = {}
+        client._bug_raw_cache_lock = threading.Lock()
+        client._branch_id = 0
+        get_resp = MagicMock()
+        get_resp.status_code = 200
+        get_resp.text = '{"data": {"title": "old", "type": 1, "product": 1, "severity": 1, "pri": 3, "status": "active", "assignedTo": "u1", "steps": "x"}}'
+        client._http.get.return_value = get_resp
+        post_resp = MagicMock()
+        post_resp.status_code = 200
+        post_resp.text = '{"data": {"title": "updated"}}'
+        client._http.post.return_value = post_resp
 
         client.update_bug_title(12345, "new title")
         client._http.post.assert_called_once()

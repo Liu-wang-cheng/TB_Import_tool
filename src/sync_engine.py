@@ -18,6 +18,7 @@ from src.models import (BUG_TYPE_NAMES, SEVERITY_NAMES, SyncAction, SyncResult,
                         SyncStats, TeambitionTask, ZentaoBug)
 from src.source_client import SourceClient
 from src.teambition_client import TeambitionClient
+from src.classifier import SimilarityClassifier  # _clean_title used by _fetch_defect_samples
 from src.utils import (apply_module_filter, extract_department_prefix,
                      resolve_assigned_to)
 
@@ -79,11 +80,10 @@ class SyncEngine:
         if "classifier" in classifier_cfg and "enabled" not in classifier_cfg:
             classifier_cfg = classifier_cfg["classifier"]
         if classifier_cfg.get("enabled", False):
-            from src.classifier import BugClassifier, SimilarityClassifier
+            from src.classifier import BugClassifier
             self.classifier = BugClassifier(config)
             logger.info("AI 缺陷分类器已启用")
         else:
-            from src.classifier import SimilarityClassifier  # 增量学习需要 _clean_title
             self.classifier = None
 
         # 从 zentao.assigned_to 配置构建 "姓名→缺陷分类" 映射
