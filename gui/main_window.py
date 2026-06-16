@@ -1514,13 +1514,15 @@ class MainWindow(QMainWindow):
         # 检查最低版本
         from gui.updater import compare_versions
         current = result.get("current", "")
+        # 只显示当前版本更新说明（release_notes 中第一段，按 \n\n 分隔）
+        latest_notes = (info.release_notes or "").split("\n\n", 1)[0].strip()
         if info.min_version and compare_versions(current, info.min_version) > 0:
             self._set_busy(False)
             QMessageBox.warning(
                 self, "版本过旧",
                 f"当前版本 v{current} 低于最低可更新版本 v{info.min_version}，\n"
                 f"请手动下载最新版本 v{info.version}。\n\n"
-                f"更新说明:\n{info.release_notes}"
+                f"更新说明:\n{latest_notes}"
             )
             return
 
@@ -1529,7 +1531,7 @@ class MainWindow(QMainWindow):
             self, f"发现新版本 v{info.version}",
             f"当前版本: v{current}\n"
             f"最新版本: v{info.version} ({info.release_date})\n\n"
-            f"更新说明:\n{info.release_notes}\n\n"
+            f"更新说明:\n{latest_notes}\n\n"
             f"是否立即更新？",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes,

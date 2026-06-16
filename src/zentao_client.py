@@ -312,9 +312,45 @@ class ZentaoClient:
         ZentaoClient._register_cloud_modules(data.get("modules", {}))
         return data
 
+    @staticmethod
+    def _normalize_users(users) -> dict:
+        """统一 users 字段为 {account: realname} dict。
+
+        云版禅道不同版本/端点格式漂移：
+          - 老版/自建版: {"u1": "张三", "u2": "李四"}
+          - 新云版: [{"account": "u1", "realname": "张三"}, ...]
+                   [{"id": "u1", "realname": "张三"}, ...]
+                   [{"account": "u1", "name": "张三"}, ...]
+        """
+        if not users:
+            return {}
+        if isinstance(users, dict):
+            # 扁平 {account: realname} 或嵌套 {account: {realname: x, ...}}
+            result = {}
+            for k, v in users.items():
+                if isinstance(v, dict):
+                    rn = v.get("realname") or v.get("name") or v.get("displayName")
+                else:
+                    rn = v
+                if k and rn and str(rn) != str(k):
+                    result[str(k)] = str(rn)
+            return result
+        if isinstance(users, list):
+            result = {}
+            for entry in users:
+                if not isinstance(entry, dict):
+                    continue
+                acct = entry.get("account") or entry.get("id") or entry.get("username")
+                rn = (entry.get("realname") or entry.get("name")
+                      or entry.get("displayName"))
+                if acct and rn and str(rn) != str(acct):
+                    result[str(acct)] = str(rn)
+            return result
+        return {}
+
     def _update_user_mapping(self, browse_data: dict):
         """从云版浏览数据中提取用户名→中文名双向映射"""
-        users = browse_data.get("users", {})
+        users = self._normalize_users(browse_data.get("users"))
         if not users:
             return
         with self._cloud_user_cache_lock:
@@ -322,8 +358,25 @@ class ZentaoClient:
                 if account and realname and realname != account:
                     self._cloud_user_name_to_account[realname] = account
 
+    @staticmethod
+    def _strip_dept_prefix(name: str) -> str:
+        """剥离部门前缀，"项目-李珍" / "IOT-陈斌" → "李珍" / "陈斌"。
+
+        分类器不再依赖部门前缀，指派人筛选统一按纯名字匹配。
+        """
+        if not name or not isinstance(name, str):
+            return name or ""
+        if "-" in name:
+            suffix = name.split("-", 1)[1].strip()
+            return suffix or name
+        return name.strip()
+
     def _resolve_assigned_to_cloud(self, assigned_to: list) -> set:
-        """将 assigned_to 列表中的中文名自动转换为英文账号名（云版）"""
+        """将 assigned_to 列表中的中文名自动转换为英文账号名（云版）。
+
+        统一剥离部门前缀：配置 "项目-李珍" / "李珍" 都规范化为 "李珍"，
+        与 bug.assignedTo 规范化后纯名字比对，不再依赖部门前缀。
+        """
         if not assigned_to or not self._cloud_session_auth:
             return set(assigned_to) if assigned_to else set()
         if not self._cloud_user_name_to_account:
@@ -333,25 +386,24 @@ class ZentaoClient:
                         self._update_user_mapping(data)
                         break
         result = set()
-        for name in assigned_to:
+        for raw in assigned_to:
+            # 原始值 + 剥离前缀后的纯名字都加入，向后兼容
+            result.add(raw)
+            name = self._strip_dept_prefix(raw)
             result.add(name)
-            if "-" in name:
-                suffix = name.split("-", 1)[1]
-                result.add(suffix)
-                account = self._cloud_user_name_to_account.get(suffix)
-                if account:
-                    result.add(account)
+            # 云版映射里的 realname 也可能带/不带前缀，尝试两种查找
+            account = (self._cloud_user_name_to_account.get(name)
+                       or self._cloud_user_name_to_account.get(raw))
+            if account:
+                result.add(account)
             else:
-                account = self._cloud_user_name_to_account.get(name)
-                if account:
-                    result.add(account)
-                else:
-                    # 纯名字找不到时，搜索带部门前缀的映射（如 "邓建和" → "部门-邓建和"）
-                    for realname, acct in self._cloud_user_name_to_account.items():
-                        if "-" in realname and realname.endswith("-" + name):
-                            result.add(acct)
-                            result.add(realname)
-                            break
+                # 在映射里搜索任何 "X-{name}" 形式的 realname
+                for realname, acct in self._cloud_user_name_to_account.items():
+                    rn_clean = self._strip_dept_prefix(realname)
+                    if rn_clean == name or realname == raw:
+                        result.add(acct)
+                        result.add(realname)
+                        break
         return result
 
     # ── 状态枚举 ──────────────────────────────────────
@@ -657,8 +709,8 @@ class ZentaoClient:
         else:
             resolved = set(assigned_to) if assigned_to else set()
 
-        # 云版浏览页的 users 字典：英文账号 → 中文实名
-        users_map = data.get("users", {})
+        # 云版浏览页的 users：英文账号 → 中文实名（自动兼容 list/dict 格式）
+        users_map = self._normalize_users(data.get("users"))
 
         bugs = []
         for b in bugs_data:
@@ -711,14 +763,12 @@ class ZentaoClient:
             if date_to and str(date_to) < bug_date:
                 return False
         if resolved_assignees:
-            if bug.assignedToAccount in resolved_assignees \
-                    or bug.assignedTo in resolved_assignees:
+            # 部门前缀已剥离，统一按纯名字比对
+            bug_clean = self._strip_dept_prefix(bug.assignedTo or "")
+            if (bug.assignedToAccount in resolved_assignees
+                    or bug.assignedTo in resolved_assignees
+                    or bug_clean in resolved_assignees):
                 pass
-            elif "-" in (bug.assignedTo or ""):
-                # 部门前缀后缀匹配：如筛选 "邓建和" 匹配 Bug 经办人 "部门-邓建和"
-                suffix = bug.assignedTo.split("-", 1)[1]
-                if suffix not in resolved_assignees:
-                    return False
             else:
                 return False
         return True
@@ -739,8 +789,8 @@ class ZentaoClient:
                 bug_data["actions"] = list(actions.values())
             elif isinstance(actions, list):
                 bug_data["actions"] = actions
-            # 注入 users map 供解析 assignedTo 等
-            users_map = data.get("users", {})
+            # 注入 users map 供解析 assignedTo 等（自动兼容 list/dict 格式）
+            users_map = self._normalize_users(data.get("users"))
             bug_data["_users"] = users_map
             # 将 assignedTo 从英文账号转为 {account, realname} 格式，
             # 确保 _parse_bug 输出的 assignedTo 为中文实名
