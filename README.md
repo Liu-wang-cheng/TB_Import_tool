@@ -149,6 +149,15 @@ build.bat
 
 ## 版本历史
 
+### v2.5.6 (2026-06-16)
+
+- **修复**：云版禅道 `users` 字段格式漂移导致同步崩溃（`'list' object has no attribute 'items'`）
+  - 新增 `_normalize_users()` 统一 list / dict / 嵌套 dict 格式为扁平 `{account: realname}`
+  - 3 个使用点（`_update_user_mapping` / `fetch_bugs` / `_get_bug_raw`）全部走规范化
+- **优化**：指派人筛选统一剥离部门前缀，兼容 `"李珍"` / `"项目-李珍"` 两种配置格式
+  - 新增 `_strip_dept_prefix()` 工具方法
+  - 分类器不再依赖部门前缀后，配置侧不再需要写 `"部门-姓名"` 形式
+
 ### v2.5.5 (2026-06-16)
 
 - **修复**：classifier 关闭 + TF-IDF 缓存 > 7 天时增量学习静默失效（`SimilarityClassifier` 在 `__init__` 局部导入，`_fetch_defect_samples` 看不到，`NameError` 被 broad except 吞掉）
