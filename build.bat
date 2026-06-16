@@ -48,6 +48,14 @@ echo.
 if exist "dist" rmdir /s /q dist
 if exist "build" rmdir /s /q build
 
+REM 清理 __pycache__，避免 PyInstaller 用旧 .pyc 缓存（mtime 异常时尤其重要）
+echo [CLEAN] Removing __pycache__ directories ...
+for /d /r %%i in (__pycache__) do (
+    if exist "%%i" rmdir /s /q "%%i"
+)
+echo [OK] __pycache__ cleaned
+echo.
+
 REM Strip api_key before packaging
 echo [CLEAN] Stripping api_key from config ...
 copy /y "configs\classifier.yaml" "configs\classifier.yaml.bak" >nul

@@ -3,6 +3,6 @@
   "sha256": "a160f10ab019b86932b7c627fed04267914dde3094a3f148778d2beb410ba33b",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.5.8/SmartDefectPlatform.zip",
   "release_date": "2026-06-16",
-  "release_notes": "v2.5.8 release",
+  "release_notes": "v2.5.8 修复 GUI 弹窗仍显示全部历史版本（PyInstaller 用了旧 pyc 缓存）\n\nv2.5.7 云版modules字段list格式兼容\n\nv2.5.6 云版users字段list格式兼容 + 指派人筛选剥离部门前缀\n\nv2.5.5 SimilarityClassifier模块级导入修复",
   "min_version": "1.0"
 }
