@@ -18,7 +18,6 @@ from src.models import (BUG_TYPE_NAMES, SEVERITY_NAMES, SyncAction, SyncResult,
                         SyncStats, TeambitionTask, ZentaoBug)
 from src.source_client import SourceClient
 from src.teambition_client import TeambitionClient
-from src.classifier import SimilarityClassifier  # _clean_title used by _fetch_defect_samples
 from src.utils import (apply_module_filter, extract_department_prefix,
                      resolve_assigned_to)
 
@@ -650,6 +649,9 @@ class SyncEngine:
                                category_cf_id: str, limit: int = 500,
                                progress_callback=None) -> list:
         """从 TB 拉取缺陷任务详情，返回 [(标题, 分类名), ...] 列表"""
+        # 惰性导入到函数级（避免顶层拉 sklearn/jieba），不在循环内反复 import
+        from src.classifier import SimilarityClassifier
+
         # 第一步：列表扫描收集任务 ID
         task_ids = []
         page_token = ""

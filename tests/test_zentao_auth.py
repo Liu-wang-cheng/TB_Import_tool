@@ -245,35 +245,56 @@ class TestAuthenticate:
 
 
 class TestResolveAssignedToCloud:
-    """_resolve_assigned_to_cloud 云版指派人解析"""
+    """_resolve_assigned_to_cloud 云版指派人解析
+
+    v2.6.0 设计：剥离部门前缀 + 单向账号查找（配置名→account），
+    不做跨部门反向查找（避免同名跨部门串号）
+    """
 
     def make_client(self):
+        import threading
         client = ZentaoClient.__new__(ZentaoClient)
         client._cloud_session_auth = True
         client._cloud_user_name_to_account = {}
+        client._cloud_user_cache_lock = threading.Lock()
+        client._cloud_browse_cache = {}
+        client._cloud_browse_cache_lock = threading.Lock()
         return client
 
-    def test_bare_name_exact_match(self):
+    def test_bare_name_no_account(self):
+        """user map 为空时，只保留纯名字"""
+        client = self.make_client()
+        result = client._resolve_assigned_to_cloud(["邓建和"])
+        assert result == {"邓建和"}
+
+    def test_bare_name_with_account(self):
+        """user map 有该名字时，加入 account 兜底（用于 bug.assignedTo 是英文账号）"""
         client = self.make_client()
         client._cloud_user_name_to_account = {"邓建和": "dengjianhe"}
         result = client._resolve_assigned_to_cloud(["邓建和"])
-        assert "邓建和" in result
-        assert "dengjianhe" in result
+        assert result == {"邓建和", "dengjianhe"}
 
-    def test_bare_name_suffix_match(self):
+    def test_prefixed_name_stripped(self):
+        """带部门前缀的名字被剥离后查 account"""
         client = self.make_client()
-        client._cloud_user_name_to_account = {"部门-邓建和": "dengjianhe"}
-        result = client._resolve_assigned_to_cloud(["邓建和"])
-        assert "dengjianhe" in result
-        assert "部门-邓建和" in result
+        client._cloud_user_name_to_account = {"邓建和": "dengjianhe"}
+        result = client._resolve_assigned_to_cloud(["部门-邓建和"])
+        assert result == {"邓建和", "dengjianhe"}
 
-    def test_prefixed_name_splits_suffix(self):
+    def test_prefixed_name_no_account_in_map(self):
+        """剥离后的纯名字在 map 里没有时不加 account"""
         client = self.make_client()
-        client._cloud_user_name_to_account = {"陈斌": "chenbin"}
         result = client._resolve_assigned_to_cloud(["IOT-陈斌"])
-        assert "IOT-陈斌" in result
-        assert "陈斌" in result
-        assert "chenbin" in result
+        assert result == {"陈斌"}
+
+    def test_no_cross_department_contamination(self):
+        """关键测试：同名跨部门用户不串号（不做反向查找）"""
+        client = self.make_client()
+        # user map 有 IOT-陈斌 和 应用-陈斌，配置 'IOT-陈斌' 不应解析为两个 account
+        client._cloud_user_name_to_account = {"IOT-陈斌": "u1", "应用-陈斌": "u2"}
+        result = client._resolve_assigned_to_cloud(["IOT-陈斌"])
+        # 剥离后是 '陈斌'，user map 里没有纯 '陈斌' key，只返回纯名字
+        assert result == {"陈斌"}
 
     def test_not_cloud_returns_raw(self):
         client = self.make_client()

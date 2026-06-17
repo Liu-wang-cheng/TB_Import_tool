@@ -66,7 +66,8 @@ echo.
 
 echo [BUILD] Starting ...
 echo.
-pyinstaller --noconfirm zentao2teambition.spec
+REM --clean: 清 PyInstaller 自己的 build/ 缓存（pyc、Analysis-00.toc、PYZ 等）
+pyinstaller --clean --noconfirm zentao2teambition.spec
 set BUILD_RESULT=%errorlevel%
 
 REM Restore original configs

@@ -1514,8 +1514,18 @@ class MainWindow(QMainWindow):
         # 检查最低版本
         from gui.updater import compare_versions
         current = result.get("current", "")
-        # 只显示当前版本更新说明（release_notes 中第一段，按 \n\n 分隔）
-        latest_notes = (info.release_notes or "").split("\n\n", 1)[0].strip()
+        # 只显示当前版本更新说明：找到以 "v{info.version}" 开头的那一段
+        # release_notes 格式：多版本用 \n\n 分隔，每段以 "vX.Y.Z ..." 开头
+        notes_raw = info.release_notes or ""
+        latest_notes = ""
+        for segment in notes_raw.split("\n\n"):
+            seg = segment.strip()
+            if seg.startswith(f"v{info.version}"):
+                latest_notes = seg
+                break
+        if not latest_notes:
+            # 兜底：取首段（可能没有 vX.Y.Z 前缀）
+            latest_notes = notes_raw.split("\n\n", 1)[0].strip()
         if info.min_version and compare_versions(current, info.min_version) > 0:
             self._set_busy(False)
             QMessageBox.warning(

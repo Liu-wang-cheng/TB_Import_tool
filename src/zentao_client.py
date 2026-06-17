@@ -50,12 +50,20 @@ class ZentaoClient:
         # 云版用户名映射：中文名 → 英文账号（从 browse JSON users 字段构建）
         self._cloud_user_name_to_account: dict = {}
         self._cloud_user_cache_lock = threading.Lock()
+        # _normalize_users 结果缓存（按原始 users 数据 id 索引），
+        # 避免 _get_bug_raw 每个 bug 重复 normalize 同一份 users 数据
+        self._normalized_users_cache: dict = {}
+        self._normalized_users_cache_lock = threading.Lock()
 
     def invalidate_cloud_browse_cache(self):
-        """清空云版浏览页缓存。
+        """清空所有禅道客户端缓存，确保下次拉取拿到最新数据。
 
-        用于 GUI 列出/同步等用户主动操作前，确保拿到禅道最新数据。
-        缓存设计本意是"同一次同步内避免重复拉取"，跨用户操作应主动失效。
+        用于 GUI 列出/同步等用户主动操作前。覆盖：
+        - _cloud_browse_cache: 浏览页 JSON（含 bugs/users/modules）
+        - _cloud_user_name_to_account: 用户映射
+        - _bug_raw_cache: 单 bug 详情
+        - _product_modules_cache: 模块列表
+        - _severity_labels_cache: 严重程度翻译（class-level）
         """
         with self._cloud_browse_cache_lock:
             if self._cloud_browse_cache:
@@ -63,8 +71,23 @@ class ZentaoClient:
                              len(self._cloud_browse_cache))
                 self._cloud_browse_cache.clear()
         with self._cloud_user_cache_lock:
-            # 用户映射同步清空，下次需要时从新浏览数据重建
             self._cloud_user_name_to_account.clear()
+        with self._bug_raw_cache_lock:
+            if self._bug_raw_cache:
+                logger.debug("清空 bug 详情缓存 (%d entries)",
+                             len(self._bug_raw_cache))
+                self._bug_raw_cache.clear()
+        with self._product_modules_cache_lock:
+            if self._product_modules_cache:
+                logger.debug("清空产品模块缓存 (%d entries)",
+                             len(self._product_modules_cache))
+                self._product_modules_cache.clear()
+        # _normalize_users 结果缓存
+        with self._normalized_users_cache_lock:
+            self._normalized_users_cache.clear()
+        # class-level 严重程度翻译缓存：只清当前实例 key，不影响其他 client
+        cache_key = (self.base_url, self.account)
+        ZentaoClient._severity_labels_cache.pop(cache_key, None)
 
     # ── 认证 ──────────────────────────────────────────
 
@@ -328,9 +351,31 @@ class ZentaoClient:
             ZentaoClient._normalize_modules(data.get("modules")))
         return data
 
+    def _normalize_users_cached(self, users_raw) -> dict:
+        """带 id 缓存的 _normalize_users，避免同一份 users 反复重建。
+
+        缓存按 id(users_raw) 索引；invalidate_cloud_browse_cache 会清空。
+        """
+        if not users_raw:
+            return {}
+        key = id(users_raw)
+        with self._normalized_users_cache_lock:
+            cached = self._normalized_users_cache.get(key)
+            if cached is not None:
+                return cached
+        result = ZentaoClient._normalize_id_value_map(
+            users_raw,
+            id_keys=("account", "id", "username"),
+            value_keys=("realname", "name", "displayName"),
+            allow_empty_value=False,
+        )
+        with self._normalized_users_cache_lock:
+            self._normalized_users_cache[key] = result
+        return result
+
     @staticmethod
     def _normalize_users(users) -> dict:
-        """统一 users 字段为 {account: realname} dict。
+        """统一 users 字段为 {account: realname} dict（无缓存版）。
 
         云版禅道不同版本/端点格式漂移：
           - 老版/自建版: {"u1": "张三", "u2": "李四"}
@@ -338,31 +383,12 @@ class ZentaoClient:
                    [{"id": "u1", "realname": "张三"}, ...]
                    [{"account": "u1", "name": "张三"}, ...]
         """
-        if not users:
-            return {}
-        if isinstance(users, dict):
-            # 扁平 {account: realname} 或嵌套 {account: {realname: x, ...}}
-            result = {}
-            for k, v in users.items():
-                if isinstance(v, dict):
-                    rn = v.get("realname") or v.get("name") or v.get("displayName")
-                else:
-                    rn = v
-                if k and rn and str(rn) != str(k):
-                    result[str(k)] = str(rn)
-            return result
-        if isinstance(users, list):
-            result = {}
-            for entry in users:
-                if not isinstance(entry, dict):
-                    continue
-                acct = entry.get("account") or entry.get("id") or entry.get("username")
-                rn = (entry.get("realname") or entry.get("name")
-                      or entry.get("displayName"))
-                if acct and rn and str(rn) != str(acct):
-                    result[str(acct)] = str(rn)
-            return result
-        return {}
+        return ZentaoClient._normalize_id_value_map(
+            users,
+            id_keys=("account", "id", "username"),
+            value_keys=("realname", "name", "displayName"),
+            allow_empty_value=False,
+        )
 
     @staticmethod
     def _normalize_modules(modules) -> dict:
@@ -373,29 +399,43 @@ class ZentaoClient:
           - 新云版: [{"id": "123", "name": "模块A", "short": "..."}, ...]
                    [{"id": "123", "short": "模块A"}, ...]
         """
-        if not modules:
+        return ZentaoClient._normalize_id_value_map(
+            modules,
+            id_keys=("id", "module"),
+            value_keys=("name", "short", "title"),
+            allow_empty_value=False,
+        )
+
+    @staticmethod
+    def _normalize_id_value_map(data, id_keys: tuple, value_keys: tuple,
+                                 allow_empty_value: bool = False) -> dict:
+        """统一处理禅道云版 list/dict/嵌套 dict 三种格式 → 扁平 {id: value} dict。
+
+        - dict: {k: v} 或 {k: {value_key: x, ...}}
+        - list: [{id_key: k, value_key: v, ...}, ...]
+        - id_keys / value_keys: 字段候选名，按顺序取首个非空
+        - allow_empty_value: 是否允许 value 为空字符串
+        """
+        if not data:
             return {}
-        if isinstance(modules, dict):
-            result = {}
-            for k, v in modules.items():
+        result = {}
+        if isinstance(data, dict):
+            for k, v in data.items():
                 if isinstance(v, dict):
-                    name = v.get("name") or v.get("short") or v.get("title")
+                    val = next((v.get(k2) for k2 in value_keys if v.get(k2)), None)
                 else:
-                    name = v
-                if k and name:
-                    result[str(k)] = str(name)
-            return result
-        if isinstance(modules, list):
-            result = {}
-            for entry in modules:
+                    val = v
+                if k and (val if not allow_empty_value else True):
+                    result[str(k)] = str(val) if val else ""
+        elif isinstance(data, list):
+            for entry in data:
                 if not isinstance(entry, dict):
                     continue
-                mid = entry.get("id") or entry.get("module")
-                name = entry.get("name") or entry.get("short") or entry.get("title")
-                if mid and name:
-                    result[str(mid)] = str(name)
-            return result
-        return {}
+                id_val = next((entry.get(k2) for k2 in id_keys if entry.get(k2)), None)
+                val = next((entry.get(k2) for k2 in value_keys if entry.get(k2)), None)
+                if id_val and (val if not allow_empty_value else True):
+                    result[str(id_val)] = str(val) if val else ""
+        return result
 
     def _update_user_mapping(self, browse_data: dict):
         """从云版浏览数据中提取用户名→中文名双向映射"""
@@ -414,20 +454,27 @@ class ZentaoClient:
         分类器不再依赖部门前缀，指派人筛选统一按纯名字匹配。
         """
         if not name or not isinstance(name, str):
-            return name or ""
+            return ""
         if "-" in name:
             suffix = name.split("-", 1)[1].strip()
-            return suffix or name
+            return suffix or name.strip()
         return name.strip()
 
     def _resolve_assigned_to_cloud(self, assigned_to: list) -> set:
-        """将 assigned_to 列表中的中文名自动转换为英文账号名（云版）。
+        """云版指派人筛选集合。
 
-        统一剥离部门前缀：配置 "项目-李珍" / "李珍" 都规范化为 "李珍"，
-        与 bug.assignedTo 规范化后纯名字比对，不再依赖部门前缀。
+        设计原则：
+        - utils.resolve_assigned_to 已做配置侧前缀剥离 + 同名跨部门歧义保护
+        - bug.assignedTo 由 _parse_bug 用云版 users map 转为中文实名；
+          但 users map 可能不完整（用户禁用、分页遗漏），bug.assignedTo
+          仍是英文账号时，需要保留 account 兜底匹配
+        - 不做跨部门反向查找（"X-{name}" 形式），避免同名跨部门串号
         """
-        if not assigned_to or not self._cloud_session_auth:
-            return set(assigned_to) if assigned_to else set()
+        if not assigned_to:
+            return set()
+        # 非云版/未认证：直接返回原始集合
+        if not self._cloud_session_auth:
+            return set(assigned_to)
         if not self._cloud_user_name_to_account:
             with self._cloud_browse_cache_lock:
                 for data in self._cloud_browse_cache.values():
@@ -436,23 +483,13 @@ class ZentaoClient:
                         break
         result = set()
         for raw in assigned_to:
-            # 原始值 + 剥离前缀后的纯名字都加入，向后兼容
-            result.add(raw)
             name = self._strip_dept_prefix(raw)
             result.add(name)
-            # 云版映射里的 realname 也可能带/不带前缀，尝试两种查找
-            account = (self._cloud_user_name_to_account.get(name)
-                       or self._cloud_user_name_to_account.get(raw))
+            # 单向：配置名 → 英文账号（用于 bug.assignedTo 是英文账号时的兜底匹配）
+            # 不做反向（账号→所有可能 realname），避免跨部门同名串号
+            account = self._cloud_user_name_to_account.get(name)
             if account:
                 result.add(account)
-            else:
-                # 在映射里搜索任何 "X-{name}" 形式的 realname
-                for realname, acct in self._cloud_user_name_to_account.items():
-                    rn_clean = self._strip_dept_prefix(realname)
-                    if rn_clean == name or realname == raw:
-                        result.add(acct)
-                        result.add(realname)
-                        break
         return result
 
     # ── 状态枚举 ──────────────────────────────────────
@@ -759,7 +796,7 @@ class ZentaoClient:
             resolved = set(assigned_to) if assigned_to else set()
 
         # 云版浏览页的 users：英文账号 → 中文实名（自动兼容 list/dict 格式）
-        users_map = self._normalize_users(data.get("users"))
+        users_map = self._normalize_users_cached(data.get("users"))
 
         bugs = []
         for b in bugs_data:
@@ -814,9 +851,8 @@ class ZentaoClient:
         if resolved_assignees:
             # 部门前缀已剥离，统一按纯名字比对
             bug_clean = self._strip_dept_prefix(bug.assignedTo or "")
-            if (bug.assignedToAccount in resolved_assignees
-                    or bug.assignedTo in resolved_assignees
-                    or bug_clean in resolved_assignees):
+            if (bug_clean in resolved_assignees
+                    or bug.assignedToAccount in resolved_assignees):
                 pass
             else:
                 return False
@@ -838,9 +874,8 @@ class ZentaoClient:
                 bug_data["actions"] = list(actions.values())
             elif isinstance(actions, list):
                 bug_data["actions"] = actions
-            # 注入 users map 供解析 assignedTo 等（自动兼容 list/dict 格式）
-            users_map = self._normalize_users(data.get("users"))
-            bug_data["_users"] = users_map
+            # 注入 users map（自动兼容 list/dict 格式），转为中文实名
+            users_map = self._normalize_users_cached(data.get("users"))
             # 将 assignedTo 从英文账号转为 {account, realname} 格式，
             # 确保 _parse_bug 输出的 assignedTo 为中文实名
             if users_map:
