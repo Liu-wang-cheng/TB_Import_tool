@@ -80,3 +80,7 @@ class ZentaoAdapter:
 
     def fetch_severity_labels(self, product_id: int = None) -> Dict[str, str]:
         return self._client.fetch_severity_labels(product_id)
+
+    def invalidate_cloud_browse_cache(self) -> None:
+        """透传：清空云版浏览页缓存（用户主动刷新时调用）"""
+        self._client.invalidate_cloud_browse_cache()

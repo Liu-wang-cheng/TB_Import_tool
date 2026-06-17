@@ -51,6 +51,21 @@ class ZentaoClient:
         self._cloud_user_name_to_account: dict = {}
         self._cloud_user_cache_lock = threading.Lock()
 
+    def invalidate_cloud_browse_cache(self):
+        """清空云版浏览页缓存。
+
+        用于 GUI 列出/同步等用户主动操作前，确保拿到禅道最新数据。
+        缓存设计本意是"同一次同步内避免重复拉取"，跨用户操作应主动失效。
+        """
+        with self._cloud_browse_cache_lock:
+            if self._cloud_browse_cache:
+                logger.debug("清空云版浏览页缓存 (%d entries)",
+                             len(self._cloud_browse_cache))
+                self._cloud_browse_cache.clear()
+        with self._cloud_user_cache_lock:
+            # 用户映射同步清空，下次需要时从新浏览数据重建
+            self._cloud_user_name_to_account.clear()
+
     # ── 认证 ──────────────────────────────────────────
 
     def close(self):

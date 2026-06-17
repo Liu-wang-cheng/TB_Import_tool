@@ -207,6 +207,12 @@ class ListBugsWorker(QThread):
             source = create_source_client(self.config)
             source.authenticate()
 
+            # 用户主动刷新操作，清空云版禅道浏览页缓存，
+            # 确保拿到最新数据（避免单例 client 缓存导致显示陈旧 bug 列表）
+            invalidate = getattr(source, "invalidate_cloud_browse_cache", None)
+            if callable(invalidate):
+                invalidate()
+
             platform_name = "禅道" if source.source_type == "zentao" else "Jira"
             self.progress.emit(f"{platform_name}认证成功，正在获取Bug列表...")
 
@@ -332,6 +338,11 @@ class SyncWorker(QThread):
             platform_name = "禅道" if source.source_type == "zentao" else "Jira"
             self.progress.emit(0, 0, f"{platform_name}认证中...")
             source.authenticate()
+
+            # 用户主动同步操作，清空云版禅道浏览页缓存，确保拿到最新 bug 列表
+            invalidate = getattr(source, "invalidate_cloud_browse_cache", None)
+            if callable(invalidate):
+                invalidate()
 
             self.progress.emit(0, 0, "Teambition认证中...")
             teambition.authenticate()
