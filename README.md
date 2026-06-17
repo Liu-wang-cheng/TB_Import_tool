@@ -149,6 +149,22 @@ build.bat
 
 ## 版本历史
 
+### v2.6.0 (2026-06-17)
+
+- **重构**：指派人筛选简化——剥离部门前缀 + 单向账号查找，删除跨部门反向查找
+  - 修复同名跨部门用户串号（`IOT-陈斌` 配置不再误匹配 `应用-陈斌` 的 bug）
+  - 保留单向 account 兜底（`bug.assignedTo` 是英文账号时不漏筛）
+  - 兼容配置 `"李珍"` / `"项目-李珍"` 两种格式
+- **修复**：云版禅道 invalidate 漏清缓存
+  - `invalidate_cloud_browse_cache` 现在清空所有缓存（`_bug_raw_cache` / `_product_modules_cache` / `_severity_labels_cache` / `_normalized_users_cache`）
+  - `_severity_labels_cache` 改为按实例 key 清除（`pop((base_url, account))`），不再影响其他 client 实例
+- **优化**：GUI 更新弹窗用 `v{version}` 前缀定位当前版本说明，不再依赖 `\n\n` 分割
+- **优化**：`_get_bug_raw` 用 `_normalize_users_cached`（按对象 id 缓存），避免每 bug 重建
+- **优化**：`SimilarityClassifier` 改为 `_fetch_defect_samples` 内惰性导入，避免顶层拉 sklearn/jieba
+- **重构**：统一 `_normalize_id_value_map(data, id_keys, value_keys)`，`_normalize_users` / `_normalize_modules` 复用同一份逻辑
+- **修复**：`_normalize_users` 不再过滤 `account == realname`（保留 `admin/admin` 默认账号）
+- **优化**：`build.bat` 加 `pyinstaller --clean`，清 PyInstaller 自己的 build 缓存
+
 ### v2.5.9 (2026-06-16)
 
 - **修复**：云版禅道列出/同步 Bug 不是实时刷新（需重启工具才生效）
