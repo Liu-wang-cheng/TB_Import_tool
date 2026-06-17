@@ -149,6 +149,15 @@ build.bat
 
 ## 版本历史
 
+### v2.5.9 (2026-06-16)
+
+- **修复**：云版禅道列出/同步 Bug 不是实时刷新（需重启工具才生效）
+  - 根因：`_cloud_get_browse` 永久缓存浏览页数据，单例 client 跨用户操作命中旧缓存
+  - 新增 `invalidate_cloud_browse_cache()` 方法，`ListBugsWorker` / `SyncWorker`
+    在 authenticate 后主动清缓存
+  - 单次操作内多次分页/筛选仍复用缓存，性能不退化
+  - 仅云版禅道受益（自建版走 REST API 无此问题）
+
 ### v2.5.8 (2026-06-16)
 
 - **修复**：v2.5.6/v2.5.7 GUI 弹窗仍显示全部历史版本说明
