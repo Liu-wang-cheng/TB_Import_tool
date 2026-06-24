@@ -1414,22 +1414,36 @@ class ZentaoClient:
         )
 
     def download_image(self, file_id: int) -> AttachmentFile:
-        # 优先用 clean URL（文件下载不经过 index.php 路由），失败再回退动态路径
-        clean_path = f"file-read-{file_id}.html"
-        dynamic_path = f"index.php?m=file&f=read&fileID={file_id}"
+        # 优先用 file-download clean URL（与 download_attachment 一致），
+        # 该接口返回 Content-Disposition 携带真实文件名；
+        # 失败回退到 file-read（预览接口）作为兜底
+        clean_path = f"file-download-{file_id}.html"
+        dynamic_path = f"index.php?m=file&f=download&fileID={file_id}"
         resp = self._download_file(clean_path)
         if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
             resp = self._download_file(dynamic_path)
         if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
-            raise ZentaoAPIError(resp.status_code, "下载图片失败",
-                                 f"/file-read-{file_id}")
+            read_path = f"file-read-{file_id}.html"
+            resp = self._download_file(read_path)
+            if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
+                raise ZentaoAPIError(resp.status_code, "下载图片失败",
+                                     f"/file-download-{file_id}")
         # 从文件头魔数检测真实图片格式，避免硬编码 .png 导致 TB 显示异常
         ext, mime = ZentaoClient._detect_image_format(resp.content)
         content_type = resp.headers.get("Content-Type", "")
         if not content_type or content_type == "application/octet-stream":
             content_type = mime
+        # 优先用 Content-Disposition 中的真实文件名（兼容 RFC 5987 filename*=UTF-8''）
+        cd = resp.headers.get("Content-Disposition", "")
+        match = re.search(
+            r'filename\*?=(?:UTF-8\'\')?"?([^";\n]+)"?', cd, re.IGNORECASE
+        )
+        if match:
+            filename = match.group(1)
+        else:
+            filename = f"image_{file_id}.{ext}"
         return AttachmentFile(
-            filename=f"image_{file_id}.{ext}",
+            filename=filename,
             content_type=content_type,
             data=resp.content,
             size=len(resp.content),

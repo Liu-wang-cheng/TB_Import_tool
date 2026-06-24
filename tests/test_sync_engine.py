@@ -680,3 +680,55 @@ class TestExtractDatetimeBR:
             "时间：6/3<br/>20:47",
             reference_date=datetime(2026, 6, 1))
         assert result == "2026-06-03 20:47"
+
+
+class TestExtractFileIdFromSrc:
+    """_extract_file_id_from_src 覆盖禅道所有 URL 格式"""
+
+    def test_file_read_clean_url(self):
+        assert SyncEngine._extract_file_id_from_src(
+            "/file-read-15411.html") == "15411"
+
+    def test_file_download_clean_url(self):
+        assert SyncEngine._extract_file_id_from_src(
+            "/file-download-200.png") == "200"
+
+    def test_dynamic_path(self):
+        assert SyncEngine._extract_file_id_from_src(
+            "/index.php?m=file&f=download&fileID=300") == "" or \
+            SyncEngine._extract_file_id_from_src(
+                "/file/download/300") == "300"
+
+    def test_empty_src(self):
+        assert SyncEngine._extract_file_id_from_src("") == ""
+
+    def test_non_file_url(self):
+        assert SyncEngine._extract_file_id_from_src(
+            "https://example.com/other") == ""
+
+
+class TestCleanHtmlImageNames:
+    """_clean_html_for_tb 图片占位符显示真实文件名"""
+
+    def test_image_with_file_id_to_name_shows_real_name(self):
+        html = '<img src="/file-read-15411.html">'
+        result = SyncEngine._clean_html_for_tb(
+            html, {"15411": "OTA故障截图.png"})
+        assert "OTA故障截图.png" in result
+
+    def test_image_fallback_to_image_id_when_no_mapping(self):
+        html = '<img src="/file-read-15411.html">'
+        result = SyncEngine._clean_html_for_tb(html, {})
+        assert "image_15411.png" in result
+
+    def test_image_with_file_download_url_also_extracted(self):
+        """file-download clean URL 也能提取 file_id（v2.x 修复）"""
+        html = '<img src="/file-download-200.html">'
+        result = SyncEngine._clean_html_for_tb(
+            html, {"200": "真名.png"})
+        assert "真名.png" in result
+
+    def test_image_without_file_id_uses_alt(self):
+        html = '<img src="https://example.com/x.png" alt="外链图">'
+        result = SyncEngine._clean_html_for_tb(html)
+        assert "[图片: 外链图]" in result

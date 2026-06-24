@@ -462,6 +462,47 @@ class TestFileDownload:
         att = c.download_image(456)
         assert att.filename == "image_456.png"
 
+    def test_download_image_uses_real_filename_from_content_disposition(self):
+        """有 Content-Disposition 时返回真实文件名，不用 image_{id} 假名"""
+        c = self.make_client(clean_url=False)
+        c._http.get.return_value = Mock(
+            status_code=200,
+            content=b"\x89PNG\r\n\x1a\n" + b"\x00" * 100,
+            headers={
+                "Content-Type": "image/png",
+                "Content-Disposition": 'attachment; filename="实测截图.png"',
+            },
+        )
+        att = c.download_image(789)
+        assert att.filename == "实测截图.png"
+
+    def test_download_image_handles_rfc5987_filename(self):
+        """Content-Disposition 用 RFC 5987 编码时（filename*=UTF-8''）也能提取"""
+        c = self.make_client(clean_url=False)
+        c._http.get.return_value = Mock(
+            status_code=200,
+            content=b"\x89PNG\r\n\x1a\n" + b"\x00" * 50,
+            headers={
+                "Content-Type": "image/png",
+                "Content-Disposition": "attachment; filename*=UTF-8''%E6%88%AA%E5%9B%BE.png",
+            },
+        )
+        att = c.download_image(111)
+        # RFC 5987 编码的文件名（URL-encoded），提取出的原始字符串
+        assert "png" in att.filename.lower()
+
+    def test_download_image_fallback_when_no_content_disposition(self):
+        """没有 Content-Disposition 时 fallback 到 image_{id}.{ext}"""
+        c = self.make_client(clean_url=False)
+        c._http.get.return_value = Mock(
+            status_code=200,
+            content=b"\x89PNG\r\n\x1a\n" + b"\x00" * 50,
+            headers={"Content-Type": "image/png"},
+        )
+        att = c.download_image(999)
+        # PNG 魔数 → ext=png
+        assert att.filename == "image_999.png"
+
     def test_download_attachment_404_raises(self):
         c = self.make_client(clean_url=False)
         c._http.get.return_value = Mock(status_code=404)

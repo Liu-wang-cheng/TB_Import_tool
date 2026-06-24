@@ -841,15 +841,30 @@ class SyncEngine:
             except Exception as e:
                 logger.warning("回写禅道标题失败: Bug#%d - %s", full_bug.id, e)
 
-            # 同步评论（禅道备注/评论 → Teambition 任务评论）
+            # 同步评论 + 附件（评论媒体走附件统一通道，按 file_id 去重）
             try:
-                self._sync_bug_comments(full_bug, task_id)
+                processed_comments, comment_file_ids = self._parse_bug_comments(
+                    full_bug
+                )
             except Exception as e:
-                logger.warning("同步评论失败: Bug#%d - %s", full_bug.id, e)
+                logger.warning("解析评论失败: Bug#%d - %s", full_bug.id, e)
+                processed_comments, comment_file_ids = [], {}
 
-            # 同步附件
-            if self.sync_attachments:
-                self._sync_attachments(full_bug, task_id)
+            if self.sync_attachments or comment_file_ids:
+                uploaded = self._sync_attachments(
+                    full_bug, task_id,
+                    comment_file_ids=comment_file_ids
+                )
+            else:
+                uploaded = {}
+
+            if processed_comments:
+                try:
+                    self._submit_bug_comments(
+                        task_id, processed_comments, uploaded
+                    )
+                except Exception as e:
+                    logger.warning("提交评论失败: Bug#%d - %s", full_bug.id, e)
 
             # AI 日志分析（可选，失败不影响同步）
             if self.ai_analysis_enabled and self.log_analyzer:
@@ -1058,18 +1073,34 @@ class SyncEngine:
             except Exception as e:
                 logger.warning("更新执行人失败: Bug#%d - %s", full_bug.id, e)
 
-        # 同步评论（只同步 TB 任务最后更新时间之后的新评论）
+        # 同步评论（只同步 TB 任务最后更新时间之后的新评论）+ 附件
+        cutoff = existing_task.updated
         try:
-            self._sync_bug_comments(full_bug, task_id,
-                                    cutoff_time=existing_task.updated)
+            processed_comments, comment_file_ids = self._parse_bug_comments(
+                full_bug, cutoff_time=cutoff
+            )
         except Exception as e:
-            logger.warning("同步评论失败: Bug#%d - %s", full_bug.id, e)
+            logger.warning("解析评论失败: Bug#%d - %s", full_bug.id, e)
+            processed_comments, comment_file_ids = [], {}
 
         # 同步附件（只上传新增的，跳过已有的）
-        if self.sync_attachments:
+        if self.sync_attachments or comment_file_ids:
             existing_filenames = self._get_existing_task_filenames(task_id)
-            self._sync_attachments(full_bug, task_id,
-                                   existing_filenames=existing_filenames)
+            uploaded = self._sync_attachments(
+                full_bug, task_id,
+                existing_filenames=existing_filenames,
+                comment_file_ids=comment_file_ids
+            )
+        else:
+            uploaded = {}
+
+        if processed_comments:
+            try:
+                self._submit_bug_comments(
+                    task_id, processed_comments, uploaded, cutoff_time=cutoff
+                )
+            except Exception as e:
+                logger.warning("提交评论失败: Bug#%d - %s", full_bug.id, e)
 
         # AI 日志分析（可选，失败不影响同步）
         if self.ai_analysis_enabled and self.log_analyzer:
@@ -1411,7 +1442,13 @@ class SyncEngine:
                     return task
 
         # Tier 1.5: VLNS/CPAX 编号精确匹配（按 taskIdentifier 直接查 TB）
-        vlns_numbers = self.source.extract_vlns_numbers(bug.id)
+        # extract_vlns_numbers 只看 actions（备注/历史），补充从 bug 标题提取：
+        # 双向标题同步把 VLNS-xxx 写在 title 字段，actions 里通常没有对应记录，
+        # 不补这一步会导致已同步过的 bug 重新新建任务（去重失效）
+        vlns_numbers = set(self.source.extract_vlns_numbers(bug.id))
+        vlns_numbers.update(
+            re.findall(r'(?:VLNS|CPAX)-(\d+)', bug.title or '')
+        )
         for num in vlns_numbers:
             for prefix in ("VLNS", "CPAX"):
                 identifier = f"{prefix}-{num}"
@@ -1863,7 +1900,13 @@ class SyncEngine:
         steps = bug.steps.strip()
         if steps:
             # 清理禅道 HTML 保留表格结构，TB 渲染更清晰
-            cleaned = self._clean_html_for_tb(steps)
+            # 传入 file_id→真实文件名 映射，让图片占位符显示真实名而非 image_{id}
+            file_id_to_name = {
+                str(f.get("id", "")): f.get("title", f.get("name", ""))
+                for f in (bug.files or [])
+                if f.get("id")
+            }
+            cleaned = self._clean_html_for_tb(steps, file_id_to_name)
             if cleaned:
                 parts.append(
                     '<div style="color:#1f2937;font-size:14px;'
@@ -1903,51 +1946,61 @@ class SyncEngine:
 
     # ── 评论同步 ──────────────────────────────────────
 
-    def _sync_bug_comments(self, bug: ZentaoBug, task_id: str,
-                           cutoff_time: str = ""):
-        """将禅道 Bug 的备注/评论同步到 Teambition 任务评论中（含图片/视频）
+    def _parse_bug_comments(self, bug: ZentaoBug,
+                            cutoff_time: str = "") -> tuple:
+        """Phase 1: 解析评论，提取媒体 file_id（不上传）。
 
-        评论中的图片/视频统一作为附件上传到 TB 任务，评论文本中用文件名引用。
-        cutoff_time: ISO 时间字符串，只同步该时间之后的评论（用于重新激活场景）
+        Args:
+            cutoff_time: ISO 时间字符串，只同步该时间之后的评论
+
+        Returns:
+            (processed_comments, file_ids_with_type)
+            - processed_comments: [(content_with_placeholders, actor, date)]
+            - file_ids_with_type: {file_id: "image"|"video"}
         """
         comments = self.source.fetch_bug_comments(bug.id)
         if not comments:
-            return
-        synced = 0
-        # 收集所有评论中需要上传的媒体文件
-        # {file_id: assigned_filename}  e.g. {"123": "comment_01.png"}
-        media_to_upload: Dict[str, str] = {}
-        media_counter = 0
-        processed_comments: List[tuple] = []  # (content, actor, date)
-
+            return [], {}
+        file_ids_with_type: Dict[str, str] = {}
+        processed_comments: List[tuple] = []
         for c in comments:
             actor = c.get("actor", "")
             date = c.get("date", "")
             comment = c.get("comment", "").strip()
             if not comment:
                 continue
-            # 按时间过滤：只同步 cutoff_time 之后的新评论
             if cutoff_time and date:
                 norm_date = self._normalize_dt(date)
                 norm_cutoff = self._normalize_dt(cutoff_time)
                 if norm_date and norm_cutoff and norm_date <= norm_cutoff:
                     continue
-            # 替换评论中的图片/视频标签为文件名引用
-            processed, media_counter = self._replace_comment_media_with_filenames(
-                comment, media_to_upload, media_counter
+            processed = self._replace_comment_media_with_placeholders(
+                comment, file_ids_with_type
             )
-            # HTML → 纯文本：TB 评论不支持 HTML 渲染
             processed = self._html_to_text(processed)
             processed_comments.append((processed, actor, date))
+        return processed_comments, file_ids_with_type
 
-        # 批量上传评论中的媒体文件到 TB 附件
-        if media_to_upload:
-            self._upload_comment_media(
-                bug.id, task_id, media_to_upload, cutoff_time
-            )
+    def _submit_bug_comments(self, task_id: str,
+                              processed_comments: List[tuple],
+                              uploaded: Dict[str, tuple],
+                              cutoff_time: str = ""):
+        """Phase 2: 根据上传结果回填占位符，发送评论。
 
-        # 发送评论
+        Args:
+            uploaded: {file_id: (work_id, filename, download_url)} 来自附件同步
+        """
+        synced = 0
         for processed, actor, date in processed_comments:
+            # 回填占位符为真实文件名
+            for file_id, (work_id, filename, _) in uploaded.items():
+                processed = processed.replace(
+                    f"__ATTACH_{file_id}__", filename
+                )
+            # 清理未上传成功的占位符
+            processed = re.sub(
+                r'__ATTACH_\d+__', '上传失败', processed
+            )
             content_parts = ["【禅道评论】"]
             if actor:
                 content_parts.append(actor)
@@ -1961,7 +2014,31 @@ class SyncEngine:
             except Exception as e:
                 logger.warning("添加评论失败: %s", e)
         if cutoff_time and synced > 0:
-            logger.info("同步 %d 条新评论（截止时间 %s 之后）", synced, cutoff_time)
+            logger.info("同步 %d 条新评论（截止时间 %s 之后）",
+                        synced, cutoff_time)
+
+    def _sync_bug_comments(self, bug: ZentaoBug, task_id: str,
+                           cutoff_time: str = ""):
+        """将禅道 Bug 的备注/评论同步到 Teambition 任务评论中（含图片/视频）
+
+        兼容旧调用入口：内部完成解析→上传→提交三步。
+        评论附件走 _sync_attachments 的统一上传通道（按 file_id 去重）。
+        """
+        processed_comments, file_ids_with_type = self._parse_bug_comments(
+            bug, cutoff_time=cutoff_time
+        )
+        if not processed_comments:
+            return
+        uploaded: Dict[str, tuple] = {}
+        if file_ids_with_type:
+            self._sync_attachments(
+                bug, task_id, comment_file_ids=file_ids_with_type
+            )
+            # uploaded 通过 _sync_attachments 内部维护，此处无返回；
+            # 回填时若 file_id 未上传成功则占位符会被清理
+        self._submit_bug_comments(
+            task_id, processed_comments, uploaded, cutoff_time=cutoff_time
+        )
 
     @staticmethod
     def _html_to_text(html: str) -> str:
@@ -2026,10 +2103,18 @@ class SyncEngine:
             return html
 
     @staticmethod
-    def _clean_html_for_tb(steps: str) -> str:
-        """清理禅道 HTML 保留表格结构，适配 TB 渲染"""
+    def _clean_html_for_tb(steps: str,
+                           file_id_to_name: dict = None) -> str:
+        """清理禅道 HTML 保留表格结构，适配 TB 渲染。
+
+        Args:
+            file_id_to_name: {file_id: 真实文件名}，来自 bug.files 的 id→title。
+                            有映射则图片占位符显示真实文件名，否则 fallback 到 image_{id}.png
+        """
         if not steps or "<" not in steps:
             return steps
+        if file_id_to_name is None:
+            file_id_to_name = {}
         try:
             soup = BeautifulSoup(steps, "html.parser")
             # 移除 Zentao 的 inline styles, class, width 等
@@ -2045,11 +2130,15 @@ class SyncEngine:
             # 图片替换：显示文件名而非通用的 [图片]
             for img in soup.find_all("img"):
                 src = img.get("src", "")
-                fid_match = re.search(r'file-read[_-](\d+)', src) or \
+                # 兼容 file-read-{id} / file-download-{id} / /file/download/{id}
+                fid_match = re.search(r'file-(?:read|download)[_-](\d+)', src) or \
                             re.search(r'/file/download/(\d+)', src)
                 if fid_match:
                     file_id = fid_match.group(1)
-                    img.replace_with(f"[图片: image_{file_id}.png]")
+                    # 优先用 bug.files 中的真实文件名
+                    real_name = file_id_to_name.get(file_id)
+                    display_name = real_name or f"image_{file_id}.png"
+                    img.replace_with(f"[图片: {display_name}]")
                 else:
                     alt = img.get("alt", "") or img.get("title", "")
                     if alt:
@@ -2067,39 +2156,36 @@ class SyncEngine:
         except Exception:
             return steps
 
-    def _replace_comment_media_with_filenames(
-            self, comment: str, media_map: Dict[str, str],
-            counter: int) -> tuple:
-        """将评论中的图片/视频标签替换为文件名引用，收集需要上传的媒体。
+    def _replace_comment_media_with_placeholders(
+            self, comment: str,
+            file_ids_with_type: Dict[str, str]) -> str:
+        """将评论中的图片/视频标签替换为 file_id 占位符，收集需要上传的媒体。
+
+        占位符格式：[图片: __ATTACH_{file_id}__] / [视频: __ATTACH_{file_id}__]
+        上传完成后由 _submit_bug_comments 根据实际附件名回填。
 
         Args:
             comment: 禅道评论 HTML
-            media_map: {zentao_file_id: assigned_filename} 累积收集器
-            counter: 当前媒体编号计数器
+            file_ids_with_type: 累积收集器 {file_id: "image"|"video"}
 
         Returns:
-            (processed_comment, new_counter) 元组
+            处理后的评论 HTML（仍含占位符，待后续回填）
         """
         if "<img" not in comment and "<video" not in comment:
-            return comment, counter
+            return comment
         try:
             soup = BeautifulSoup(comment, "html.parser")
             modified = False
 
-            # 处理 <img> 标签
             for img in soup.find_all("img"):
                 src = img.get("src", "")
                 file_id = self._extract_file_id_from_src(src)
                 if not file_id:
                     continue
-                if file_id not in media_map:
-                    counter += 1
-                    media_map[file_id] = f"comment_{counter:02d}.png"
-                fname = media_map[file_id]
-                img.replace_with(f"[图片: {fname}]")
+                file_ids_with_type[file_id] = "image"
+                img.replace_with(f"[图片: __ATTACH_{file_id}__]")
                 modified = True
 
-            # 处理 <video> / <source> 标签
             for video in soup.find_all("video"):
                 src = video.get("src", "")
                 if not src:
@@ -2111,25 +2197,28 @@ class SyncEngine:
                     video.replace_with("[视频]")
                     modified = True
                     continue
-                if file_id not in media_map:
-                    counter += 1
-                    media_map[file_id] = f"comment_{counter:02d}.mp4"
-                fname = media_map[file_id]
-                video.replace_with(f"[视频: {fname}]")
+                file_ids_with_type[file_id] = "video"
+                video.replace_with(f"[视频: __ATTACH_{file_id}__]")
                 modified = True
 
             if modified:
-                return str(soup), counter
+                return str(soup)
         except Exception as e:
             logger.warning("处理评论媒体失败: %s", e)
-        return comment, counter
+        return comment
 
     @staticmethod
     def _extract_file_id_from_src(src: str) -> str:
-        """从 src URL 中提取禅道 file_id"""
+        """从 src URL 中提取禅道 file_id。
+
+        覆盖禅道所有 URL 格式：
+        - file-read-{id}.html        (clean URL, 预览)
+        - file-download-{id}.html    (clean URL, 下载)
+        - /file/download/{id}        (动态路径)
+        """
         if not src:
             return ""
-        match = re.search(r'file-read[_-](\d+)', src)
+        match = re.search(r'file-(?:read|download)[_-](\d+)', src)
         if not match:
             match = re.search(r'/file/download/(\d+)', src)
         return match.group(1) if match else ""
@@ -2137,67 +2226,36 @@ class SyncEngine:
     def _upload_comment_media(self, bug_id: int, task_id: str,
                                media_map: Dict[str, str],
                                cutoff_time: str = ""):
-        """批量上传评论中的媒体文件到 TB 任务附件。
+        """[已废弃] 评论媒体上传已合并到 _sync_attachments 统一通道。
 
-        Args:
-            media_map: {zentao_file_id: assigned_filename}
+        保留空实现仅为向后兼容；新代码应使用 _parse_bug_comments +
+        _sync_attachments(comment_file_ids=...) + _submit_bug_comments。
         """
-        uploaded: Dict[str, tuple] = {}  # file_id → (work_id, filename, download_url)
-        for file_id, assigned_name in media_map.items():
-
-            def _do_upload(fid=file_id, fname=assigned_name):
-                # 视频文件用 download_attachment（支持大文件和更长超时）
-                is_video = fname.lower().endswith(
-                    (".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv"))
-                if is_video:
-                    att = self.source.download_attachment(int(fid), fname)
-                else:
-                    att = self.source.download_image(int(fid))
-                    att.filename = fname
-                result = self.teambition.upload_attachment(task_id, att)
-                if result:
-                    uploaded[fid] = (result[0], fname, result[1])
-                    return True
-                return False
-
-            if not self._retry(f"评论媒体 {assigned_name}", _do_upload):
-                logger.warning("评论媒体上传失败（已耗尽重试）: %s (file_id=%s)",
-                               assigned_name, file_id)
-
-        # 更新"日志附件"自定义字段
-        attachment_cf_id = self.cf_ids.get("attachment", "")
-        if attachment_cf_id and uploaded:
-            try:
-                existing_values = self._get_existing_attachment_values(
-                    task_id, attachment_cf_id
-                )
-                # 过滤掉已上传的同名文件（替换旧的，避免之前下载失败导致损坏文件残留）
-                uploaded_names = {entry[1] for entry in uploaded.values()}
-                values = [v for v in existing_values
-                          if v.get("title", "") not in uploaded_names]
-                for entry in uploaded.values():
-                    values.append({"id": entry[0], "title": entry[1]})
-                if values:
-                    self.teambition._request(
-                        "POST",
-                        f"/v3/task/{task_id}/customfield/{attachment_cf_id}/update",
-                        json={"value": values},
-                    )
-                    logger.info("评论媒体附件已更新: 新增 %d 个", len(uploaded))
-            except Exception as e:
-                logger.warning("更新评论媒体附件字段失败: %s", e)
+        logger.warning("_upload_comment_media 已废弃，请走 _sync_attachments 通道")
+        return
 
     # ── 附件同步 ──────────────────────────────────────
 
     def _sync_attachments(self, bug: ZentaoBug, task_id: str,
-                          existing_filenames: set = None):
-        """同步附件：bug.files + 重现步骤内联图片，全部写入日志附件字段。
+                          existing_filenames: set = None,
+                          comment_file_ids: Dict[str, str] = None
+                          ) -> Dict[str, tuple]:
+        """同步附件：bug.files + 重现步骤内联图片 + 评论媒体，
+        全部写入日志附件字段，按 file_id 去重。
 
         Args:
             existing_filenames: 已上传的文件名集合（用于重新激活时跳过已有附件）
+            comment_file_ids: {file_id: "image"|"video"} 来自评论解析，
+                              与重现步骤内联图片走同一上传通道（按 file_id 去重）
+
+        Returns:
+            {file_id: (work_id, filename, download_url)} 新上传的附件映射，
+            用于评论占位符回填
         """
         if existing_filenames is None:
             existing_filenames = set()
+        if comment_file_ids is None:
+            comment_file_ids = {}
         uploaded: Dict[str, tuple] = {}  # file_id → (work_id, filename, download_url)
         skipped = 0
 
@@ -2251,6 +2309,35 @@ class SyncEngine:
             if not self._retry(f"内联图片 file#{file_id}", _do_inline):
                 logger.warning("内联图片上传失败（已耗尽重试）: file_id=%s", file_id)
 
+        # Step 2.5: 上传评论中的媒体（图片/视频），与上述通道共用 uploaded 字典去重
+        for file_id, kind in comment_file_ids.items():
+            if file_id in uploaded:
+                continue  # 与 bug.files 或重现步骤内联图片重复
+            is_video = kind == "video"
+
+            def _do_comment(fid=file_id, video=is_video):
+                if video:
+                    # download_attachment 从 Content-Disposition 拿真实文件名
+                    # （如 "OTA成功后...mp4"），保留原名便于追溯
+                    att = self.source.download_attachment(int(fid))
+                else:
+                    # download_image 命名为 image_{fid}.{ext}，与重现步骤内联一致
+                    att = self.source.download_image(int(fid))
+                # 跨次同步去重：实际文件名可能在 existing_filenames 中
+                if att.filename in existing_filenames:
+                    return "skip"
+                result = self.teambition.upload_attachment(task_id, att)
+                if result:
+                    uploaded[fid] = (result[0], att.filename, result[1])
+                    return True
+                return False
+            outcome = self._retry(f"评论附件 file#{file_id}", _do_comment)
+            if outcome == "skip":
+                logger.info("跳过已上传评论附件: file_id=%s", file_id)
+                skipped += 1
+            elif not outcome:
+                logger.warning("评论附件上传失败（已耗尽重试）: file_id=%s", file_id)
+
         # Step 3: 批量更新"日志附件"自定义字段（包含已有 + 新上传）
         attachment_cf_id = self.cf_ids.get("attachment", "")
         if attachment_cf_id and (uploaded or existing_filenames):
@@ -2276,6 +2363,7 @@ class SyncEngine:
                                 total, new_count, skipped, total)
                 except Exception as e:
                     logger.warning("更新日志附件字段失败: %s", e)
+        return uploaded
 
     def _get_existing_attachment_values(self, task_id: str, cf_id: str) -> list:
         """从任务详情中获取日志附件自定义字段的已有值列表。"""

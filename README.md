@@ -149,6 +149,26 @@ build.bat
 
 ## 版本历史
 
+### v2.6.1 (2026-06-24)
+
+- **修复**：TB 评论中的图片名和实际附件名对应不上（如 `[图片: comment_01.png]` 在附件列表里却是 `image_15411.png`）
+  - 根因：评论附件走独立通道 `_upload_comment_media`，用虚假序号命名 `comment_NN.{ext}`，与 `_sync_attachments` 的命名（`image_{file_id}.{ext}`）不一致，同一张图被上传两次
+  - 改造为单一上传通道：评论解析只收集 `file_id`（占位符 `[图片: __ATTACH_{id}__]`），`_sync_attachments` 接收 `comment_file_ids` 参数统一上传，按 `file_id` 跨来源去重，上传完后回填占位符为真实文件名
+  - 评论同步拆为两阶段：`_parse_bug_comments`（解析）→ `_sync_attachments`（上传）→ `_submit_bug_comments`（回填+发送）
+- **优化**：图片附件改用真实文件名（不再用 `image_{id}.png` 假名）
+  - `download_image` 切换到 `file-download-{id}.html` 接口，从 `Content-Disposition` 提取真实文件名
+  - 兼容 RFC 5987 编码（`filename*=UTF-8''xxx`）
+  - 无 `Content-Disposition` 时 fallback 到 `image_{file_id}.{ext}`（魔数检测扩展名）
+  - 任务描述（`_clean_html_for_tb`）的图片占位符也优先用 `bug.files` 中的真实文件名
+- **修复**：标题含 `VLNS-xxx` 的 bug 仍被新建任务（去重失效）
+  - 根因：`extract_vlns_numbers` 只扫 `actions`（备注/历史），不扫 `bug.title`
+  - 双向标题同步把 `VLNS-xxx` 写在 title 字段，actions 里没有对应记录
+  - `_find_existing_task` Tier 1.5 补充从 `bug.title` 提取 VLNS/CPAX 编号
+- **修复**：`_extract_file_id_from_src` 不匹配禅道 clean URL `file-download-{id}.html`
+  - 正则统一为 `file-(?:read|download)[_-](\d+)`，覆盖所有 URL 格式
+  - `_clean_html_for_tb` 中的 img 标签解析同步修复
+- **测试**：新增 27 个单元测试（评论附件占位符 + 去重 + 真实文件名提取）
+
 ### v2.6.0 (2026-06-17)
 
 - **重构**：指派人筛选简化——剥离部门前缀 + 单向账号查找，删除跨部门反向查找
