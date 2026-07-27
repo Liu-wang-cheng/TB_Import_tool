@@ -43,8 +43,9 @@ class ZentaoBug:
         title = self.title
         # 移除 【禅道xxx】 标注
         title = re.sub(r'【禅道\d+】', '', title)
-        # 移除 【VLNS-xxxxx】 或旧格式 【TB-xxx】 标注
-        title = re.sub(r'【[\w]+-\d+】', '', title)
+        # 移除 【VLNS-xxxxx】 或 【CPAX-xxxxx】 标注
+        # 注意：不能用 【[\w]+-\d+】 这种宽泛模式，会误清禅道产品编号（如【P260626-00013】）
+        title = re.sub(r'【(?:VLNS|CPAX)-\d+】', '', title)
         title = re.sub(r'【TB-[\w-]+】', '', title)
         return title.strip()
 

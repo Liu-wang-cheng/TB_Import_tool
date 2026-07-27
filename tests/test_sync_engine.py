@@ -152,6 +152,39 @@ class TestCPAXDetection:
         assert "CPAX" not in clean
         assert "12345" not in clean
 
+    def test_zentao_product_id_not_cleaned(self):
+        """禅道自己的产品编号【P260626-00013】不应被误清"""
+        from src.models import ZentaoBug
+        bug = ZentaoBug(id=123, title="【P260626-00013】机器无法回充")
+        base = bug.get_base_title()
+        assert "P260626-00013" in base, \
+            f"禅道产品编号被误清: {base}"
+
+    def test_zentao_product_id_not_cleaned_in_build_zentao_title(self):
+        """_build_zentao_title 不应清掉禅道产品编号"""
+        from src.sync_engine import SyncEngine
+        engine = SyncEngine.__new__(SyncEngine)
+        engine.tb_tag_in_zentao = "【VLNS-{task_id}】"
+        result = engine._build_zentao_title(
+            "【P260626-00013】机器无法回充", "68402")
+        # 应该保留禅道编号，只加 VLNS 前缀
+        assert "P260626-00013" in result, \
+            f"禅道产品编号被误清: {result}"
+        assert result.startswith("【VLNS-68402】"), \
+            f"应该加 VLNS 前缀: {result}"
+
+    def test_old_vlns_still_cleaned_in_build_zentao_title(self):
+        """旧的 VLNS 标注仍然被清除（避免重复堆叠）"""
+        from src.sync_engine import SyncEngine
+        engine = SyncEngine.__new__(SyncEngine)
+        engine.tb_tag_in_zentao = "【VLNS-{task_id}】"
+        result = engine._build_zentao_title(
+            "【VLNS-61849】【P260626-00013】机器无法回充", "68402")
+        assert "VLNS-61849" not in result, \
+            f"旧 VLNS 标注应被清: {result}"
+        assert "VLNS-68402" in result
+        assert "P260626-00013" in result
+
 
 class TestExtractInlineImageIds:
     """_extract_inline_image_ids"""

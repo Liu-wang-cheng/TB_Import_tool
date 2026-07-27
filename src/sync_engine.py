@@ -1890,7 +1890,8 @@ class SyncEngine:
     def _build_zentao_title(self, original_title: str,
                             task_id: str) -> str:
         """格式：【VLNS-xxxxx】{原始标题}"""
-        base = re.sub(r'【[\w]+-[\d]+】', '', original_title).strip()
+        # 只清除 VLNS/CPAX 标注，避免误清禅道自己的产品编号（如【P260626-00013】）
+        base = re.sub(r'【(?:VLNS|CPAX)-\d+】', '', original_title).strip()
         tag = self.tb_tag_in_zentao.replace("{task_id}", str(task_id))
         return f"{tag}{base}"
 
