@@ -51,22 +51,38 @@ if %errorlevel% equ 0 (
 )
 
 echo [OK] 原进程已退出
+REM 等待 3 秒确保 dll 文件句柄完全释放（PyQt6 dll 卸载有延迟）
+echo 等待文件句柄释放...
+timeout /t 3 /nobreak >nul
 echo.
 
 REM 更新 _internal 目录（程序运行时 + 内置资源 + VERSION）
-echo 正在更新程序文件...
-robocopy "{new_dir}\\_internal" "{current_dir}\\_internal" /e /r:3 /w:1 /njh /njs /ndl /nc /ns >nul
+REM /r:5 /w:3 = 重试 5 次，每次等 3 秒，给杀毒/磁盘充分时间
+echo 正在更新程序文件（如卡住请稍等，最多重试 5 次）...
+robocopy "{new_dir}\\_internal" "{current_dir}\\_internal" /e /r:5 /w:3 /njh /njs /ndl /nc /ns /np >nul
 if %errorlevel% geq 8 (
-    echo [ERROR] _internal 更新失败
+    echo [ERROR] _internal 更新失败（ robocopy 退出码 %errorlevel% ）
+    echo.
+    echo 详细错误（查看哪个文件失败）:
+    robocopy "{new_dir}\\_internal" "{current_dir}\\_internal" /e /r:1 /w:1 /njh /njs /ndl
+    echo.
+    echo 如果是杀毒软件锁定，请暂时禁用杀毒后重新检查更新
     pause
     goto :cleanup
 )
 echo [OK] _internal 更新成功
 
-REM 更新 exe
+REM 更新 exe（重试，可能被杀毒短暂锁定）
+set EXE_RETRY=0
+:exe_retry
 copy /y "{new_dir}\\{exe_name}" "{current_dir}\\{exe_name}" >nul
 if %errorlevel% neq 0 (
-    echo [ERROR] exe 更新失败
+    set /a EXE_RETRY+=1
+    if %EXE_RETRY% lss 5 (
+        timeout /t 2 /nobreak >nul
+        goto exe_retry
+    )
+    echo [ERROR] exe 更新失败（重试 5 次仍失败，可能被杀毒锁定）
     pause
     goto :cleanup
 )
