@@ -51,42 +51,47 @@ if %errorlevel% equ 0 (
 )
 
 echo [OK] 原进程已退出
-REM 等待 3 秒确保 dll 文件句柄完全释放（PyQt6 dll 卸载有延迟）
-echo 等待文件句柄释放...
-timeout /t 3 /nobreak >nul
+timeout /t 2 /nobreak >nul
 echo.
 
-REM 更新 _internal 目录（程序运行时 + 内置资源 + VERSION）
-REM /r:5 /w:3 = 重试 5 次，每次等 3 秒，给杀毒/磁盘充分时间
-echo 正在更新程序文件（如卡住请稍等，最多重试 5 次）...
-robocopy "{new_dir}\\_internal" "{current_dir}\\_internal" /e /r:5 /w:3 /njh /njs /ndl /nc /ns /np >nul
-if %errorlevel% geq 8 (
-    echo [ERROR] _internal 更新失败（ robocopy 退出码 %errorlevel% ）
+REM 清理可能的上次残留（如果上次更新中断留下的 _internal_old）
+if exist "{current_dir}\\_internal_old" (
+    rmdir /s /q "{current_dir}\\_internal_old" 2>nul
+)
+
+REM rename 策略：rename 是原子操作，即使文件被锁也能成功
+echo 正在切换程序文件...
+rename "{current_dir}\\_internal" "_internal_old"
+if %errorlevel% neq 0 (
+    echo [ERROR] 无法重命名 _internal 目录
+    echo 可能原因：权限不足 / _internal 不存在 / 杀毒锁定
     echo.
-    echo 详细错误（查看哪个文件失败）:
-    robocopy "{new_dir}\\_internal" "{current_dir}\\_internal" /e /r:1 /w:1 /njh /njs /ndl
-    echo.
-    echo 如果是杀毒软件锁定，请暂时禁用杀毒后重新检查更新
+    echo 请尝试：
+    echo   1. 以管理员身份运行
+    echo   2. 暂时禁用杀毒软件
     pause
     goto :cleanup
 )
-echo [OK] _internal 更新成功
+echo [OK] 旧 _internal 已重命名
 
-REM 更新 exe（重试，可能被杀毒短暂锁定）
-set EXE_RETRY=0
-:exe_retry
+REM robocopy 到空目录（无锁，必定成功）
+robocopy "{new_dir}\\_internal" "{current_dir}\\_internal" /e /r:3 /w:1 /njh /njs /ndl /nc /ns /np >nul
+if %errorlevel% geq 8 (
+    echo [ERROR] _internal 复制失败，回滚
+    rename "{current_dir}\\_internal_old" "_internal"
+    pause
+    goto :cleanup
+)
+echo [OK] 新 _internal 已就位
+
+REM 更新 exe（重命名 + 复制）
 copy /y "{new_dir}\\{exe_name}" "{current_dir}\\{exe_name}" >nul
 if %errorlevel% neq 0 (
-    set /a EXE_RETRY+=1
-    if %EXE_RETRY% lss 5 (
-        timeout /t 2 /nobreak >nul
-        goto exe_retry
-    )
-    echo [ERROR] exe 更新失败（重试 5 次仍失败，可能被杀毒锁定）
+    echo [ERROR] exe 复制失败（新 _internal 已就位，可手动覆盖 exe）
     pause
     goto :cleanup
 )
-echo [OK] exe 更新成功
+echo [OK] exe 已更新
 echo.
 
 REM 验证版本号
@@ -102,9 +107,12 @@ REM 启动新版本
 echo 正在启动新版本...
 start "" "{current_dir}\\{exe_name}"
 
+REM 等待新版本启动，然后清理旧 _internal_old
+timeout /t 5 /nobreak >nul
+
 :cleanup
-REM 清理临时目录
 if exist "{cleanup_dir}" rmdir /s /q "{cleanup_dir}"
+if exist "{current_dir}\\_internal_old" rmdir /s /q "{current_dir}\\_internal_old" 2>nul
 (goto) 2>nul & del /f /q "%~f0"
 """
 

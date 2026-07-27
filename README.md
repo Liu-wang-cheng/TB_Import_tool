@@ -149,6 +149,14 @@ build.bat
 
 ## 版本历史
 
+### v2.6.5 (2026-06-24)
+
+- **修复**：v2.6.4 的 robocopy 重试策略仍可能被 dll 锁定卡住
+  - 改用 **rename 策略**：先 `rename _internal → _internal_old`（Windows 原子操作，即使文件被锁也能成功），再 robocopy 新 `_internal` 到空目录（无锁，必定成功），启动新 exe 后等 5 秒再删除 `_internal_old`
+  - 不再依赖 robocopy 重试 / dll 释放时机，**第一次就能成功**
+- **修复**：`_apply_update_and_restart` 用 `os._exit(0)` 强制退出，立即释放 dll 句柄（不等 QThread / GC）
+- **重要**：v2.6.5 之前的版本自动更新到 v2.6.5 时仍用旧 .bat 模板（rename 策略用不上），可能失败。需要手动安装 v2.6.5 一次，之后所有自动更新都会顺利
+
 ### v2.6.4 (2026-06-24)
 
 - **修复**：自动更新时卡在"正在更新程序文件..."最终报 `_internal 更新失败`

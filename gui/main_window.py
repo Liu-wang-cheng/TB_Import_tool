@@ -1608,6 +1608,7 @@ class MainWindow(QMainWindow):
     def _apply_update_and_restart(self):
         """执行 bat 替换脚本并退出"""
         import subprocess
+        import os as _os
         bat_path = self._update_bat_path
         if not bat_path or not os.path.exists(bat_path):
             QMessageBox.warning(self, "更新失败", "替换脚本不存在")
@@ -1618,7 +1619,9 @@ class MainWindow(QMainWindow):
             creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
             cwd=os.path.dirname(bat_path),
         )
-        QApplication.quit()
+        # 立即强制退出 Python 进程，不等 QThread / GC，
+        # 让 _internal 里的 dll 句柄立即释放（避免 robocopy 失败）
+        _os._exit(0)
 
     def _on_manual_check_update(self):
         """手动检查更新"""
