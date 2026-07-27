@@ -1,8 +1,8 @@
 {
-  "version": "2.6.3",
-  "sha256": "92c47620f06ca6786b056d69644fe286db1d649126ba60d33d340a76b6256dcc",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.3/SmartDefectPlatform.zip",
+  "version": "2.6.4",
+  "sha256": "fefb35db36b970e8462fdcc55409eb442f1cb708d065b00fede3164efe5a51dc",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.4/SmartDefectPlatform.zip",
   "release_date": "2026-07-27",
-  "release_notes": "v2.6.3: 修复 PyInstaller 缓存导致 v2.6.2 正则修复未真正进入 exe",
+  "release_notes": "v2.6.4: 修复自动更新卡在正在更新程序文件（dll句柄释放延迟）",
   "min_version": "1.0"
 }
