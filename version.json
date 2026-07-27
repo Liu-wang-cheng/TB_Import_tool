@@ -1,8 +1,8 @@
 {
-  "version": "2.6.1",
-  "sha256": "5500445baf4b5d2b64f7a0d856146df2e4c9a4ca7c43b69426f6cc8b8c2a08cb",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.1/SmartDefectPlatform.zip",
-  "release_date": "2026-06-24",
-  "release_notes": "v2.6.1: 评论附件命名统一+真实文件名+去重修复",
+  "version": "2.6.2",
+  "sha256": "4bd712cab28e26f3805608e774c165a8c5a08fbb0a0d3763254806ff0b35b040",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.2/SmartDefectPlatform.zip",
+  "release_date": "2026-07-27",
+  "release_notes": "v2.6.2: 修复禅道产品编号【P260626-00013】被误清",
   "min_version": "1.0"
 }
