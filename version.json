@@ -1,8 +1,8 @@
 {
-  "version": "2.6.2",
-  "sha256": "4bd712cab28e26f3805608e774c165a8c5a08fbb0a0d3763254806ff0b35b040",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.2/SmartDefectPlatform.zip",
+  "version": "2.6.3",
+  "sha256": "92c47620f06ca6786b056d69644fe286db1d649126ba60d33d340a76b6256dcc",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.3/SmartDefectPlatform.zip",
   "release_date": "2026-07-27",
-  "release_notes": "v2.6.2: 修复禅道产品编号【P260626-00013】被误清",
+  "release_notes": "v2.6.3: 修复 PyInstaller 缓存导致 v2.6.2 正则修复未真正进入 exe",
   "min_version": "1.0"
 }
