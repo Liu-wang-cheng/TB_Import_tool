@@ -149,6 +149,14 @@ build.bat
 
 ## 版本历史
 
+### v2.6.7 (2026-06-24)
+
+- **修复**：自动更新后 `_internal_old` 目录残留（~150MB），未自动删除
+  - 根因：v2.6.5 的 rename 策略，新 exe 启动后杀毒软件扫描 `_internal_old` 里的 dll 锁定文件，rmdir 失败被 `2>nul` 静默吞掉
+  - 修复1：`.bat` 清理 `_internal_old` 加 5 次重试（共 15 秒），失败时打印 `[WARN]` 不再静默
+  - 修复2：`gui_main.py` 启动时也清理 `_internal_old`（兜底，杀毒扫完后必定能删）
+  - 修复3：.bat 标签一致性（`goto :cleanup` 错误处理路径不受影响）
+
 ### v2.6.6 (2026-06-24)
 
 - **修复**：自定义状态（如 `delay` 延期）的 bug 被默认 status 过滤丢弃，搜索不到

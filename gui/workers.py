@@ -107,12 +107,23 @@ REM 启动新版本
 echo 正在启动新版本...
 start "" "{current_dir}\\{exe_name}"
 
-REM 等待新版本启动，然后清理旧 _internal_old
-timeout /t 5 /nobreak >nul
+REM 等待新版本启动，然后清理旧 _internal_old（多次重试，杀毒扫描可能锁定）
+timeout /t 3 /nobreak >nul
+set OLD_RETRY=0
+:old_cleanup_loop
+if not exist "{current_dir}\\_internal_old" goto :cleanup
+rmdir /s /q "{current_dir}\\_internal_old" 2>nul
+if exist "{current_dir}\\_internal_old" (
+    set /a OLD_RETRY+=1
+    if %OLD_RETRY% lss 5 (
+        timeout /t 3 /nobreak >nul
+        goto old_cleanup_loop
+    )
+    echo [WARN] _internal_old 残留（杀毒锁定？），将由新版本 GUI 启动时清理
+)
 
 :cleanup
 if exist "{cleanup_dir}" rmdir /s /q "{cleanup_dir}"
-if exist "{current_dir}\\_internal_old" rmdir /s /q "{current_dir}\\_internal_old" 2>nul
 (goto) 2>nul & del /f /q "%~f0"
 """
 

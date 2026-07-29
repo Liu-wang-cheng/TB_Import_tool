@@ -167,17 +167,22 @@ def _install_excepthook():
 def _cleanup_update_temp():
     """清理上次更新残留的临时目录和 bat 脚本"""
     app_dir = _get_app_dir()
-    for name in ("_update_extracted", "_update_replace.bat", "_update_download.zip"):
+    for name in ("_update_extracted", "_update_replace.bat", "_update_download.zip",
+                 "_internal_old"):
         path = os.path.join(app_dir, name)
         try:
             if os.path.isdir(path):
+                # _internal_old 可能因为杀毒锁定残留，启动时（杀毒已扫完）重试删除
                 shutil.rmtree(path, ignore_errors=True)
-                logging.info("已清理更新残留目录: %s", name)
+                if not os.path.exists(path):
+                    logging.info("已清理更新残留目录: %s", name)
+                else:
+                    logging.warning("清理更新残留目录失败（可能被锁定）: %s", name)
             elif os.path.isfile(path):
                 os.remove(path)
                 logging.info("已清理更新残留文件: %s", name)
-        except OSError:
-            pass
+        except OSError as e:
+            logging.warning("清理 %s 失败: %s", name, e)
 
 
 def main():
