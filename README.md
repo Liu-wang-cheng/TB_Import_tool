@@ -149,6 +149,17 @@ build.bat
 
 ## 版本历史
 
+### v2.6.6 (2026-06-24)
+
+- **修复**：自定义状态（如 `delay` 延期）的 bug 被默认 status 过滤丢弃，搜索不到
+  - 实例：禅道 product 413 上 57/85 条 bug 是 `delay` 状态，工具的"激活"分组只含 `active/confirmed`，导致这些 bug 全部搜不到
+  - 根因1：`_fetch_status_groups_self_hosted` 归类规则没 else 兜底，未识别的 status（既不是"关闭/解决"也不是"激活/确认"）被丢弃
+  - 根因2：部分禅道实例的 `/api.php/v1/bugStatuses` API 返回空，工具直接走 fallback `["active", "confirmed"]`，连自定义状态存在都不知道
+  - 修复1：未识别的 status 默认归入 open（保守策略，让用户能搜到）
+  - 修复2：bugStatuses API 返回空时，扫描实际 `fetch_bugs` 看到的 status 作为补全（缓存到 `_last_bug_status_cache`）
+  - 修复3：云版 `_fetch_status_groups_cloud` 同步修复，未识别 status 也归 open
+- **新增 3 个单元测试**：覆盖 delay 归 open / 未识别状态归 open / API 空时扫描补全三种场景
+
 ### v2.6.5 (2026-06-24)
 
 - **修复**：v2.6.4 的 robocopy 重试策略仍可能被 dll 锁定卡住

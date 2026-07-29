@@ -1,8 +1,8 @@
 {
-  "version": "2.6.5",
-  "sha256": "3b42340e8873b9f969de797f7fba245ec35a554bd7d2d579b6f72ecf8304ec3a",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.5/SmartDefectPlatform.zip",
-  "release_date": "2026-07-27",
-  "release_notes": "v2.6.5: rename 策略彻底解决 dll 锁定导致的更新失败",
+  "version": "2.6.6",
+  "sha256": "de7919409b67729e23e46279b66ff9958c9a77cc1775e90688996832f7c85def",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.6/SmartDefectPlatform.zip",
+  "release_date": "2026-07-29",
+  "release_notes": "v2.6.6: 修复 delay 等自定义状态 bug 被默认过滤丢弃",
   "min_version": "1.0"
 }
