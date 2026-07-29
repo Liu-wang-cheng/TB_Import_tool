@@ -1,8 +1,8 @@
 {
-  "version": "2.6.6",
-  "sha256": "de7919409b67729e23e46279b66ff9958c9a77cc1775e90688996832f7c85def",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.6/SmartDefectPlatform.zip",
+  "version": "2.6.7",
+  "sha256": "91974312f5a6eb70ad0f4b8ee82d96856e7be7f98f66f59f49e33d1e03c391ce",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.7/SmartDefectPlatform.zip",
   "release_date": "2026-07-29",
-  "release_notes": "v2.6.6: 修复 delay 等自定义状态 bug 被默认过滤丢弃",
+  "release_notes": "v2.6.7: 修复更新后 _internal_old 目录残留",
   "min_version": "1.0"
 }
