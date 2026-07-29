@@ -512,49 +512,61 @@ class ZentaoClient:
         return self._fetch_status_groups_self_hosted()
 
     def _fetch_status_groups_self_hosted(self) -> dict:
-        """自建版：从 bugStatuses API 归类"""
+        """自建版：从 bugStatuses API 归类，API 空时扫描实际 bugs 补全"""
         fallback = {"open": ["active", "confirmed"], "closed": ["resolved", "closed"]}
+        open_codes = []
+        closed_codes = []
+        seen_codes = set()
+
+        # 优先用 bugStatuses API
         try:
             data = self._request("GET", "/api.php/v1/bugStatuses")
             statuses = data.get("statuses", [])
-            if not statuses:
-                return fallback
-
-            open_codes = []
-            closed_codes = []
             for s in statuses:
                 code = s.get("code", "")
                 name = s.get("name", "")
-                if not code:
+                if not code or code in seen_codes:
                     continue
+                seen_codes.add(code)
                 # 归类规则：name/code 包含 "关闭/closed" → closed；"解决/resolved" → closed；
-                # 包含 "激活/active/确认/confirmed/打开/opened" → open
+                # 其他（含未识别如 delay 延期、pending 待处理）默认归 open
                 cn_lower = (name or "").lower()
                 if "关闭" in name or "closed" in cn_lower or "解决" in name or "resolved" in cn_lower:
                     closed_codes.append(code)
-                elif "激活" in name or "active" in cn_lower or "确认" in name or "confirmed" in cn_lower or "打开" in name or "opened" in cn_lower:
-                    open_codes.append(code)
                 else:
-                    # 兜底：按 code 关键字
-                    if code in ("active", "confirmed", "opened"):
-                        open_codes.append(code)
-                    elif code in ("resolved", "closed"):
-                        closed_codes.append(code)
-
-            # 去重保序
-            seen = set()
-            open_codes = [c for c in open_codes if not (c in seen or seen.add(c))]
-            seen.clear()
-            closed_codes = [c for c in closed_codes if not (c in seen or seen.add(c))]
-
-            if not open_codes:
-                open_codes = fallback["open"]
-            if not closed_codes:
-                closed_codes = fallback["closed"]
-            return {"open": open_codes, "closed": closed_codes}
+                    open_codes.append(code)
         except Exception as e:
             logger.debug("获取 bugStatuses 失败: %s", e)
-            return fallback
+
+        # API 没拿到足够数据（返回空或只有少数），扫描当前产品的 bugs 补全
+        # 解决：禅道实例配置了自定义状态（如 delay）但 bugStatuses API 不返回
+        if not open_codes and not closed_codes:
+            scanned = self._scan_actual_statuses()
+            for code in scanned:
+                if code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                # 已知 closed 类，其他归 open
+                if code in ("resolved", "closed"):
+                    closed_codes.append(code)
+                else:
+                    open_codes.append(code)
+
+        if not open_codes:
+            open_codes = fallback["open"]
+        if not closed_codes:
+            closed_codes = fallback["closed"]
+        return {"open": open_codes, "closed": closed_codes}
+
+    def _scan_actual_statuses(self) -> list:
+        """扫描最近一次 fetch_bugs 缓存中的实际 status（用于 bugStatuses API 返回空时兜底）。
+
+        依赖 self._last_bug_status_cache（由 fetch_bugs 写入）。
+        """
+        cache = getattr(self, "_last_bug_status_cache", None)
+        if not cache:
+            return []
+        return sorted(cache)
 
     def _fetch_status_groups_cloud(self) -> dict:
         """云版：扫描浏览页，提取实际出现的 status"""
@@ -578,10 +590,11 @@ class ZentaoClient:
         open_codes = []
         closed_codes = []
         for st in sorted(seen):
-            if st in ("active", "confirmed", "opened", "unclosed"):
-                open_codes.append(st)
-            elif st in ("resolved", "closed"):
+            if st in ("resolved", "closed"):
                 closed_codes.append(st)
+            else:
+                # 其他状态（含未识别如 delay）默认归 open
+                open_codes.append(st)
 
         if not open_codes:
             open_codes = fallback["open"]
@@ -771,6 +784,11 @@ class ZentaoClient:
         bugs = []
         for b in bugs_data:
             bug = self._parse_bug(b)
+            # 缓存实际看到的 status，用于 bugStatuses API 返回空时兜底
+            if bug.status:
+                if not hasattr(self, "_last_bug_status_cache"):
+                    self._last_bug_status_cache = set()
+                self._last_bug_status_cache.add(bug.status)
             if not self._passes_filters(bug, statuses, date_from, date_to, assigned_to):
                 continue
             bugs.append(bug)

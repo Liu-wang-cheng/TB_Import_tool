@@ -881,3 +881,73 @@ class TestCloseSync:
         result = engine._find_task_close_status("task_001", "")
         # should find s_close2 (not s_close which is _close_target_id)
         assert result == "s_close2"
+
+
+class TestStatusGroups:
+    """fetch_status_groups 状态码分组"""
+
+    def _make_client(self, bug_statuses_response=None):
+        """构造 ZentaoClient，跳过 __init__"""
+        from src.zentao_client import ZentaoClient
+        c = ZentaoClient.__new__(ZentaoClient)
+        c._cloud_session_auth = False
+        c._http = MagicMock()
+        c._token = "fake-token"
+        c.base_url = "http://test"
+        c._bug_raw_cache = {}
+        c._bug_raw_cache_lock = __import__("threading").Lock()
+
+        def _request(method, path, **kwargs):
+            if path == "/api.php/v1/bugStatuses":
+                return bug_statuses_response or {"statuses": []}
+            return {"bugs": [], "total": 0}
+        c._request = _request
+        return c
+
+    def test_delay_status_goes_to_open_when_api_returns_it(self):
+        """bugStatuses API 返回 delay 时，归入 open"""
+        response = {
+            "statuses": [
+                {"code": "active", "name": "激活"},
+                {"code": "delay", "name": "延期"},
+                {"code": "closed", "name": "已关闭"},
+            ]
+        }
+        c = self._make_client(bug_statuses_response=response)
+        groups = c.fetch_status_groups()
+        assert "delay" in groups["open"], f"delay 应归入 open: {groups}"
+        assert "active" in groups["open"]
+        assert "closed" in groups["closed"]
+
+    def test_unknown_status_falls_back_to_open(self):
+        """未识别的 status（如 pending）默认归 open"""
+        response = {
+            "statuses": [
+                {"code": "active", "name": "激活"},
+                {"code": "pending", "name": "待处理"},  # 未识别
+                {"code": "resolved", "name": "已解决"},
+            ]
+        }
+        c = self._make_client(bug_statuses_response=response)
+        groups = c.fetch_status_groups()
+        assert "pending" in groups["open"], f"未识别状态应归 open: {groups}"
+        assert "resolved" in groups["closed"]
+
+    def test_scan_actual_statuses_when_api_empty(self):
+        """bugStatuses API 返回空时，扫描实际 bugs 补全 status"""
+        from src.zentao_client import ZentaoClient
+        c = ZentaoClient.__new__(ZentaoClient)
+        c._cloud_session_auth = False
+        c._last_bug_status_cache = {"active", "delay", "resolved"}
+
+        def _request(method, path, **kwargs):
+            if path == "/api.php/v1/bugStatuses":
+                return {"statuses": []}  # 空
+            return {}
+        c._request = _request
+
+        groups = c.fetch_status_groups()
+        # API 空，扫描实际 bug status：delay/active 归 open，resolved 归 closed
+        assert "delay" in groups["open"], f"扫描 delay 应归 open: {groups}"
+        assert "active" in groups["open"]
+        assert "resolved" in groups["closed"]
