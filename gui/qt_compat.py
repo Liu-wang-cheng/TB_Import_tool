@@ -5,7 +5,7 @@ import sys
 QT_VERSION = 5
 
 try:
-    from PyQt6.QtCore import pyqtSignal, QThread, QObject, QDate, Qt, QTimer
+    from PyQt6.QtCore import pyqtSignal, QThread, QObject, QDate, QTime, Qt, QTimer
     from PyQt6.QtGui import QAction, QColor, QFont, QIcon
     from PyQt6.QtWidgets import (  # noqa: F401
         QApplication, QAbstractItemView, QCheckBox, QComboBox,
@@ -13,7 +13,7 @@ try:
         QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
         QLineEdit, QListView, QListWidget, QListWidgetItem, QMainWindow,
         QMessageBox, QProgressBar, QPushButton, QSpinBox, QStackedWidget,
-        QSplitter, QStatusBar, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+        QSplitter, QStatusBar, QTabWidget, QTextEdit, QTimeEdit, QVBoxLayout, QWidget,
     )
     QT_VERSION = 6
 
@@ -93,7 +93,7 @@ try:
         QListView.Fixed = QListView.ResizeMode.Fixed
 
 except ImportError:
-    from PyQt5.QtCore import pyqtSignal, QThread, QObject, QDate, Qt, QTimer  # noqa: F401
+    from PyQt5.QtCore import pyqtSignal, QThread, QObject, QDate, QTime, Qt, QTimer  # noqa: F401
     from PyQt5.QtGui import QAction, QColor, QFont, QIcon  # noqa: F401
     from PyQt5.QtWidgets import (  # noqa: F401
         QApplication, QAbstractItemView, QCheckBox, QComboBox,
@@ -101,7 +101,7 @@ except ImportError:
         QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
         QLineEdit, QListView, QListWidget, QListWidgetItem, QMainWindow,
         QMessageBox, QProgressBar, QPushButton, QSpinBox, QStackedWidget,
-        QSplitter, QStatusBar, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+        QSplitter, QStatusBar, QTabWidget, QTextEdit, QTimeEdit, QVBoxLayout, QWidget,
     )
 
 

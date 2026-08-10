@@ -765,3 +765,74 @@ class TestCleanHtmlImageNames:
         html = '<img src="https://example.com/x.png" alt="外链图">'
         result = SyncEngine._clean_html_for_tb(html)
         assert "[图片: 外链图]" in result
+
+
+class TestScheduledSync:
+    """定时同步：_check_scheduled_sync 到点触发逻辑"""
+
+    def _make_main_window(self):
+        from unittest.mock import MagicMock
+        mw = MagicMock()
+        mw.chk_scheduled = MagicMock()
+        mw.time_schedule = MagicMock()
+        mw.chk_scheduled_notify = MagicMock()
+        mw._worker = None
+        mw._scheduled_last_run_date = ""
+        mw.config = {}
+        mw._project_root = "/tmp"
+        mw._log = MagicMock()
+        mw.status_label = MagicMock()
+        mw.log_text = MagicMock()
+        mw._apply_filters_to_config = MagicMock()
+        mw._start_worker = MagicMock(return_value=True)
+        return mw
+
+    def test_disabled_does_not_trigger(self):
+        """未启用时不触发"""
+        from gui.main_window import MainWindow
+        mw = self._make_main_window()
+        mw.chk_scheduled.isChecked.return_value = False
+        MainWindow._check_scheduled_sync(mw)
+        assert mw._start_worker.call_count == 0
+
+    def test_not_time_yet_does_not_trigger(self):
+        """不到时间不触发"""
+        from gui.main_window import MainWindow
+        from PyQt6.QtCore import QTime
+        mw = self._make_main_window()
+        mw.chk_scheduled.isChecked.return_value = True
+        mw.time_schedule.time.return_value = QTime(3, 0)
+        MainWindow._check_scheduled_sync(mw)
+        assert mw._start_worker.call_count == 0
+
+    def test_same_day_prevents_dup(self):
+        """同一天不重复触发"""
+        from gui.main_window import MainWindow
+        from PyQt6.QtCore import QTime
+        mw = self._make_main_window()
+        mw.chk_scheduled.isChecked.return_value = True
+        now = QTime.currentTime()
+        mw.time_schedule.time.return_value = now
+        mw._scheduled_last_run_date = QTime.currentTime().toString("yyyy-MM-dd")  # use today
+        MainWindow._check_scheduled_sync(mw)
+        assert mw._start_worker.call_count == 0
+
+    def test_yaml_roundtrip(self):
+        """配置 A 到 YAML 到 配置 B 一致"""
+        import tempfile, os
+        import yaml as _y
+        tmp = tempfile.mktemp(suffix=".yaml")
+        # 初始内容
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("# test config\nscheduled_sync:\n  enabled: false\n  time: \"10:00\"\n  notify: true\n")
+        try:
+            from gui.yaml_utils import update_yaml_values
+            update_yaml_values(tmp, {"scheduled_sync": {"enabled": True, "time": "14:30", "notify": False}})
+            with open(tmp, "r", encoding="utf-8") as f:
+                content = f.read()
+            assert "enabled" in content and "True" in content
+            assert "14:30" in content
+            assert "notify" in content and "False" in content
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)

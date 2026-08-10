@@ -11,7 +11,7 @@ from gui.qt_compat import (  # noqa: F401
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListView, QListWidget,
     QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton,
     QSpinBox, QStatusBar, QTextEdit, QVBoxLayout, QWidget, QDialog,
-    pyqtSignal, QThread, QDate, Qt, QColor, QFont,
+    pyqtSignal, QThread, QDate, QTime, QTimeEdit, Qt, QColor, QFont,
     exec_dialog, QT_VERSION, QIcon,
 )
 
@@ -74,6 +74,8 @@ class MainWindow(QMainWindow):
         self._manual_check_pending = False
         # 必须在 _build_ui 之前初始化，_on_platform_changed 会读取此值
         self._last_platform = None
+        self._schedule_timer = None
+        self._scheduled_last_run_date = ""
 
         self._build_ui()
         self._load_style()
@@ -449,6 +451,33 @@ class MainWindow(QMainWindow):
         ai_row.addStretch()
         layout.addLayout(ai_row)
 
+        # 第四行：定时同步
+        schedule_row = QHBoxLayout()
+        schedule_row.setSpacing(12)
+
+        self.chk_scheduled = QCheckBox("启用定时同步")
+        self.chk_scheduled.setToolTip("每天到指定时间自动执行导入同步")
+        self.chk_scheduled.stateChanged.connect(self._on_scheduled_switch_changed)
+
+        self.lbl_schedule_time = QLabel("每天")
+        self.time_schedule = QTimeEdit()
+        self.time_schedule.setDisplayFormat("HH:mm")
+        self.time_schedule.setToolTip("设定每天自动同步的时间点")
+        self.time_schedule.setEnabled(False)
+        self.time_schedule.timeChanged.connect(self._save_scheduled_config)
+
+        self.chk_scheduled_notify = QCheckBox("完成后弹出提示")
+        self.chk_scheduled_notify.setToolTip("定时同步完成后弹窗提示结果")
+        self.chk_scheduled_notify.setEnabled(False)
+        self.chk_scheduled_notify.stateChanged.connect(lambda: self._save_scheduled_config())
+
+        schedule_row.addWidget(self.chk_scheduled)
+        schedule_row.addWidget(self.lbl_schedule_time)
+        schedule_row.addWidget(self.time_schedule)
+        schedule_row.addWidget(self.chk_scheduled_notify)
+        schedule_row.addStretch()
+        layout.addLayout(schedule_row)
+
         return layout
 
     # ── 样式 ──────────────────────────────────────────
@@ -481,6 +510,9 @@ class MainWindow(QMainWindow):
             self._load_ai_switches()
             # 协同学习启动自动拉取
             self._start_collab_auto_pull()
+            self._load_scheduled_config()
+            # 启动定时同步检查器（每分钟检查一次）
+            self._start_schedule_timer()
             # 状态栏显示当前平台链路
             source_cfg = self.config.get("source", {})
             platform = source_cfg.get("platform", "zentao")
@@ -1405,6 +1437,103 @@ class MainWindow(QMainWindow):
         if not self._start_worker(worker):
             return
         worker.start()
+
+    # ── 定时同步 ──────────────────────────────────────
+
+    def _start_schedule_timer(self):
+        """启动定时同步检查器（每分钟检查一次）"""
+        if self._schedule_timer is None:
+            from gui.qt_compat import QTimer
+            self._schedule_timer = QTimer(self)
+            self._schedule_timer.timeout.connect(self._check_scheduled_sync)
+            self._schedule_timer.start(60000)
+
+    def _load_scheduled_config(self):
+        """启动时从 sync.yaml 加载定时同步配置"""
+        sync_cfg = self.config.get("sync", {})
+        scheduled = sync_cfg.get("scheduled_sync", {})
+        if not isinstance(scheduled, dict):
+            scheduled = {}
+        enabled = scheduled.get("enabled", False)
+        time_str = scheduled.get("time", "09:00")
+        t = QTime.fromString(time_str, "HH:mm")
+        if not t.isValid():
+            t = QTime(9, 0)
+        self.chk_scheduled.setChecked(enabled)
+        self.time_schedule.setTime(t)
+        self.time_schedule.setEnabled(enabled)
+        self.chk_scheduled_notify.setEnabled(enabled)
+        if scheduled.get("notify", True):
+            self.chk_scheduled_notify.setChecked(True)
+
+    def _on_scheduled_switch_changed(self):
+        """开关状态变化：联动时间选择器 + 持久化"""
+        enabled = self.chk_scheduled.isChecked()
+        self.time_schedule.setEnabled(enabled)
+        self.chk_scheduled_notify.setEnabled(enabled)
+        self._save_scheduled_config()
+
+    def _save_scheduled_config(self):
+        """持久化定时同步配置到 sync.yaml"""
+        scheduled = {
+            "enabled": self.chk_scheduled.isChecked(),
+            "time": self.time_schedule.time().toString("HH:mm"),
+            "notify": self.chk_scheduled_notify.isChecked(),
+        }
+        if "sync" not in self.config:
+            self.config["sync"] = {}
+        self.config["sync"]["scheduled_sync"] = scheduled
+        try:
+            from gui.yaml_utils import update_yaml_values
+            sync_path = os.path.join(self._project_root, "configs", "sync.yaml")
+            update_yaml_values(sync_path, {"scheduled_sync": scheduled})
+        except Exception as e:
+            logger.warning("保存定时同步配置失败: %s", e)
+
+    def _check_scheduled_sync(self):
+        """每分钟检查一次：是否到时间触发定时同步"""
+        if not self.chk_scheduled.isChecked():
+            return
+        target_time = self.time_schedule.time()
+        now = QTime.currentTime()
+        if now.hour() == target_time.hour() and now.minute() == target_time.minute():
+            today = QDate.currentDate().toString("yyyy-MM-dd")
+            if self._scheduled_last_run_date == today:
+                return
+            self._scheduled_last_run_date = today
+            self._run_scheduled_sync()
+
+    def _run_scheduled_sync(self):
+        """执行定时同步（不弹确认框，静默触发）"""
+        if self._worker is not None and self._worker.isRunning():
+            self._log("定时同步跳过：上次同步仍在进行中", "WARNING")
+            return
+        self.log_text.clear()
+        now_str = QTime.currentTime().toString("HH:mm")
+        self._log(f"=== 定时同步触发（{now_str}）===")
+        self.status_label.setText(f"定时同步执行中... ({now_str})")
+        self._apply_filters_to_config()
+        worker = SyncWorker(self.config, dry_run=False,
+                            dingtalk_bot=self._dingtalk_bot, parent=self)
+        worker.progress.connect(self._on_sync_progress)
+        worker.finished.connect(self._on_scheduled_sync_result)
+        worker.error.connect(self._on_worker_error)
+        if not self._start_worker(worker):
+            return
+        worker.start()
+
+    def _on_scheduled_sync_result(self, stats_text):
+        """定时同步完成：日志记录 + 可选弹窗提示"""
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("%p%")
+        self._worker_finished(save_config=True)
+        self.status_label.setText(stats_text)
+        self._log(f"定时同步完成: {stats_text}")
+        if self.chk_scheduled_notify.isChecked():
+            QMessageBox.information(self, "定时同步完成", stats_text)
+
+    # ── 进度与结果 ──────────────────────────────────────
 
     def _on_sync_progress(self, current, total, message):
         if total > 0:
