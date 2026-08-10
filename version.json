@@ -1,8 +1,8 @@
 {
-  "version": "2.6.7",
-  "sha256": "91974312f5a6eb70ad0f4b8ee82d96856e7be7f98f66f59f49e33d1e03c391ce",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.7/SmartDefectPlatform.zip",
-  "release_date": "2026-07-29",
-  "release_notes": "v2.6.7: 修复更新后 _internal_old 目录残留",
+  "version": "2.6.8",
+  "sha256": "f32fb590dd58014509e144609f9ce562ff6593f13db696b1cde38753f09b48d9",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.8/SmartDefectPlatform.zip",
+  "release_date": "2026-08-10",
+  "release_notes": "v2.6.8: 新增定时同步功能",
   "min_version": "1.0"
 }
