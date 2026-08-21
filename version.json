@@ -1,8 +1,8 @@
 {
-  "version": "2.6.8",
-  "sha256": "f32fb590dd58014509e144609f9ce562ff6593f13db696b1cde38753f09b48d9",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.8/SmartDefectPlatform.zip",
-  "release_date": "2026-08-10",
-  "release_notes": "v2.6.8: 新增定时同步功能",
+  "version": "2.6.9",
+  "sha256": "d65a219a607fd5cfb5743612238f0281b7de8be807efac12a095f8534dab8b8d",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.6.9/SmartDefectPlatform.zip",
+  "release_date": "2026-08-21",
+  "release_notes": "v2.6.9 更新：分类器移除部门过滤改为模型分类；指派人白名单去前缀（乐动开发-343保持完整）；钉钉通知强制开启并标注源平台；外部TB登录后台headless模式+步骤日志；去重与关闭同步修复",
   "min_version": "1.0"
 }
