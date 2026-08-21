@@ -18,8 +18,7 @@ from src.models import (BUG_TYPE_NAMES, SEVERITY_NAMES, SyncAction, SyncResult,
                         SyncStats, TeambitionTask, ZentaoBug)
 from src.source_client import SourceClient
 from src.teambition_client import TeambitionClient
-from src.utils import (apply_module_filter, extract_department_prefix,
-                     resolve_assigned_to)
+from src.utils import apply_module_filter, resolve_assigned_to
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,14 @@ class SyncEngine:
         self.dingtalk_bot = dingtalk_bot
 
         sync_cfg = config.get("sync", {})
-        self.source_tag_in_tb = sync_cfg.get("zentao_tag_in_tb", "【禅道{bug_id}】")
+        self.source_type = getattr(source, "source_type", "zentao")
+        # 源平台标题标注前缀：禅道/Jira 用【禅道{id}】，外部 TB 用专属任务 ID【323A-24】
+        if self.source_type == "teambition":
+            self.source_tag_in_tb = sync_cfg.get(
+                "teambition_tag_in_tb", "【{task_id}】")
+        else:
+            self.source_tag_in_tb = sync_cfg.get(
+                "zentao_tag_in_tb", "【禅道{bug_id}】")
         self.tb_tag_in_zentao = sync_cfg.get("teambition_tag_in_zentao", "【TB-{task_id}】")
         self.dedup_threshold = sync_cfg.get("dedup_threshold", 0.8)
         self.loose_tag_dedup = sync_cfg.get("loose_tag_dedup", True)
@@ -57,7 +63,6 @@ class SyncEngine:
         })
         self.severity_labels: Dict[str, str] = {}  # 禅道页面翻译: {"1": "致命", ...}
         self.type_category_map: Dict[str, str] = tb_cfg.get("type_category_map", {})
-        self.assignee_category_map: Dict[str, str] = tb_cfg.get("assignee_category_map", {})
         self.default_reproduction = tb_cfg.get("default_reproduction", "中概率")
         self.cf_ids: dict = tb_cfg.get("customfield_ids", {})
 
@@ -71,7 +76,12 @@ class SyncEngine:
         )
 
         zt_cfg = config.get("zentao", {})
-        self.module_filter: str = zt_cfg.get("filters", {}).get("module_filter", "")
+        # 模块过滤：外部 TB 源无模块概念；禅道/Jira 从 zentao 读（兼容 int/str）
+        if self.source_type == "teambition":
+            self.module_filter: str = ""
+        else:
+            mf = zt_cfg.get("filters", {}).get("module_filter", "")
+            self.module_filter = str(mf) if mf else ""
 
         # AI 缺陷分类器（可选）
         classifier_cfg = config.get("classifier", {})
@@ -84,21 +94,6 @@ class SyncEngine:
             logger.info("AI 缺陷分类器已启用")
         else:
             self.classifier = None
-
-        # 从 zentao.assigned_to 配置构建 "姓名→缺陷分类" 映射
-        # "IOT-陈斌" → {"陈斌": "IOT-其他问题", "IOT-陈斌": "IOT-其他问题"}
-        self._assignee_name_category: Dict[str, str] = {}
-        assigned_to_list = zt_cfg.get("filters", {}).get("assigned_to", [])
-        if assigned_to_list and self.assignee_category_map:
-            if isinstance(assigned_to_list, str):
-                assigned_to_list = [assigned_to_list]
-            for entry in assigned_to_list:
-                if "-" in entry:
-                    prefix, name = entry.split("-", 1)
-                    category = self.assignee_category_map.get(prefix.strip())
-                    if category:
-                        self._assignee_name_category[entry] = category
-                        self._assignee_name_category[name.strip()] = category
 
         # Jira 英文名映射：{"jiansen shi": {"department": "IOT", "tb_user": "陈斌"}}
         jira_cfg = config.get("jira", {})
@@ -172,14 +167,16 @@ class SyncEngine:
         # 获取禅道 Bug 列表
         if progress_callback:
             progress_callback(0, 0, "正在获取禅道 Bug 列表...")
-        filters = self.config.get("zentao", {}).get("filters", {})
+        filters = self._get_source_filters()
+        # 指派人配置公用（assignee.yaml），外部 TB 和禅道共用
+        assignee_cfg = self.config.get("assignee", {})
 
         # 动态获取严重程度翻译（API返回数字，需转为页面显示的中文/字母）
         product_id = filters.get("product_id")
         self.severity_labels = self.source.fetch_severity_labels(product_id)
         if self.severity_labels:
             logger.info("禅道严重程度翻译: %s", self.severity_labels)
-        assigned_to = resolve_assigned_to(filters, self.source.account)
+        assigned_to = resolve_assigned_to(assignee_cfg, self.source.account)
         bugs = self.source.fetch_all_bugs(
             product_id=filters.get("product_id"),
             project_id=filters.get("project_id"),
@@ -352,9 +349,13 @@ class SyncEngine:
             or stats.reactivated > 0
         ):
             try:
+                source_name = {"zentao": "禅道", "jira": "Jira",
+                               "teambition": "外部TB"}.get(
+                    getattr(self, "source_type", "zentao"), "禅道")
                 self.dingtalk_bot.send_sync_result(
                     stats, elapsed, dry_run=is_dry_run,
                     project_name=self.project_name,
+                    source_name=source_name,
                 )
             except Exception as e:
                 logger.warning("钉钉通知发送失败: %s", e)
@@ -392,7 +393,7 @@ class SyncEngine:
                 "复现概率": "reproduction",
                 "缺陷分类": "category",
                 "所属版本": "version",
-                "产生时间": "found_time",
+                "缺陷产生时间": "found_time",
                 "SN编码": "sn_code",
                 "所属项目": "belong_project",
                 "日志附件": "attachment",
@@ -437,11 +438,19 @@ class SyncEngine:
         if "classifier" in classifier_cfg and "similarity" not in classifier_cfg:
             classifier_cfg = classifier_cfg["classifier"]
 
+        # 相似度自动学习开关：关闭时只用本地缓存分类，不做增量/全量扫描
+        similarity_enabled = classifier_cfg.get("similarity", {}).get(
+            "enabled", True)
+
         # ── 尝试加载已有缓存 ──
         loaded = self.classifier.load_similarity_model()
 
         if loaded:
             sim = self.classifier._sim_classifier
+            if not similarity_enabled:
+                logger.info("TF-IDF 模型已从缓存加载（%d 条样本），"
+                             "关闭自动学习，直接用于分类", sim.sample_count)
+                return
             inc_days = classifier_cfg.get("similarity", {}).get(
                 "incremental_days", 7)
             if inc_days > 0 and not sim.is_stale(days=inc_days):
@@ -747,27 +756,30 @@ class SyncEngine:
                          dry_run: bool) -> SyncResult:
         try:
             # VLNS / CPAX 标记去重：标题中包含说明已导入过
-            # 非激活状态直接跳过；激活状态走下面去重+状态校验流程（避免重复 API 调用）
-            # 关闭同步开启时，已关闭的Bug由关闭同步阶段独立处理
-            if re.search(r'(?:VLNS|CPAX)-\d+', bug.title) and bug.status != "active":
-                if self.sync_closed_status:
+            # 禅道：非激活状态直接跳过（激活状态可能还没同步完，走下面去重流程）
+            # 外部 TB：标题含 VLNS 说明缺陷已在内部 TB（水洗项目组），直接跳过不管状态
+            title_has_vlns = re.search(r'(?:VLNS|CPAX)-\d+', bug.title)
+            if title_has_vlns and (self.source_type == "teambition"
+                                   or bug.status != "active"):
+                if self.sync_closed_status and self.source_type != "teambition":
                     logger.debug("[关闭同步-跳过] Bug#%d 标题含 VLNS/CPAX（由关闭同步处理）",
                                  bug.id)
                 else:
-                    logger.info("[跳过-已导入] Bug#%d 标题含 VLNS/CPAX 标记: %s",
-                                bug.id, bug.title)
+                    logger.info("[跳过-已导入] Bug#%s 标题含 VLNS/CPAX 标记: %s",
+                                bug.task_id or bug.id, bug.title)
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
                                   "", "标题含VLNS/CPAX，已导入过")
 
             # VLNS/CPAX 评论检测：评论中有引用说明已有 TB 任务
             vlns_in_comments = self.source.extract_vlns_numbers(bug.id)
-            if vlns_in_comments and bug.status != "active":
-                if self.sync_closed_status:
+            if vlns_in_comments and (self.source_type == "teambition"
+                                     or bug.status != "active"):
+                if self.sync_closed_status and self.source_type != "teambition":
                     logger.debug("[关闭同步-跳过] Bug#%d 评论含 VLNS/CPAX（由关闭同步处理）: %s",
                                  bug.id, vlns_in_comments)
                 else:
-                    logger.info("[跳过-评论含VLNS] Bug#%d 评论含 VLNS/CPAX 编号: %s",
-                                bug.id, vlns_in_comments)
+                    logger.info("[跳过-评论含VLNS] Bug#%s 评论含 VLNS/CPAX 编号: %s",
+                                bug.task_id or bug.id, vlns_in_comments)
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
                                   "", f"评论含VLNS/CPAX编号: {vlns_in_comments}")
 
@@ -833,13 +845,13 @@ class SyncEngine:
                 involve_member_ids=self._participant_ids or None,
             )
 
-            # 双向标题同步：回写禅道标题（优先使用 taskIdentifier 如 VLNS-62575）
+            # 双向标注：回写源平台（禅道写标题，外部 TB 先标题后评论）
             display_id = task_identifier or task_id
-            new_zentao_title = self._build_zentao_title(full_bug.title, display_id)
+            new_title = self._build_zentao_title(full_bug.title, display_id)
             try:
-                self.source.update_bug_title(full_bug.id, new_zentao_title)
+                self.source.update_bug_title(full_bug.id, new_title)
             except Exception as e:
-                logger.warning("回写禅道标题失败: Bug#%d - %s", full_bug.id, e)
+                logger.warning("回写失败: Bug#%d - %s", full_bug.id, e)
 
             # 同步评论 + 附件（评论媒体走附件统一通道，按 file_id 去重）
             try:
@@ -1126,8 +1138,13 @@ class SyncEngine:
 
     def _should_close_task(self, bug, task, taskflow_id: str = "",
                            sfc_id: str = "") -> bool:
-        """判断是否需要同步关闭：禅道 Bug 已关闭且 TB 任务处于待回归状态"""
-        if bug.status != "closed":
+        """判断是否需要同步关闭：源缺陷已关闭且 TB 任务处于待回归状态"""
+        # 关闭状态：禅道 "closed"，外部 TB "关闭"
+        if getattr(self, "source_type", "zentao") == "teambition":
+            closed_status = "关闭"
+        else:
+            closed_status = "closed"
+        if bug.status != closed_status:
             return False
         if not self._close_target_id:
             return False
@@ -1205,21 +1222,28 @@ class SyncEngine:
             return
 
         # 独立查询已关闭的Bug，不传 assigned_to（忽略指派人筛选）
-        filters = self.config.get("zentao", {}).get("filters", {})
-        pid = filters.get("product_id") or filters.get("product")
+        filters = self._get_source_filters()
+        # 外部 TB 源：用项目 ID + 状态名"关闭"；禅道源：用产品 ID + "closed"
+        if self.source_type == "teambition":
+            pid = filters.get("project_id") or getattr(self.source, "project_id", "")
+            closed_statuses = ["关闭"]
+            server_status = "all"  # 拉已完成缺陷（isDone=True，状态"关闭"）
+        else:
+            pid = filters.get("product_id") or filters.get("product")
+            closed_statuses = ["closed"]
+            server_status = "all"
         if not pid:
-            logger.warning("[关闭同步] 未配置产品ID，跳过")
+            logger.warning("[关闭同步] 未配置产品/项目ID，跳过")
             return
-        # server_status="all" 让禅道API返回已关闭的Bug（默认不返回）
-        logger.info("[关闭同步] 查询产品ID=%s, status=closed", pid)
+        logger.info("[关闭同步] 查询ID=%s, status=%s", pid, closed_statuses)
         closed_bugs = self.source.fetch_all_bugs(
             product_id=filters.get("product_id"),
-            project_id=filters.get("project_id"),
-            statuses=["closed"],
+            project_id=filters.get("project_id") or pid,
+            statuses=closed_statuses,
             date_from=filters.get("date_from"),
             date_to=filters.get("date_to"),
             assigned_to=None,
-            server_status="all",
+            server_status=server_status,
         )
         if not closed_bugs:
             logger.info("[关闭同步] 无已关闭的 Bug")
@@ -1247,16 +1271,18 @@ class SyncEngine:
                 return
 
         # 预筛选：仅保留标题含 VLNS/CPAX 的 Bug（被双向标注过的才是同步过的）
-        _before_filter = len(closed_bugs)
-        closed_bugs = [b for b in closed_bugs
-                       if re.search(r'(VLNS|CPAX)-\d+', b.title)]
-        _skipped_no_vlns = _before_filter - len(closed_bugs)
-        if _skipped_no_vlns:
-            logger.info("[关闭同步] 跳过 %d 条无 VLNS/CPAX 标记的 Bug（未同步过），"
-                        "剩余 %d 条", _skipped_no_vlns, len(closed_bugs))
-        if not closed_bugs:
-            logger.info("[关闭同步] VLNS/CPAX 预筛选后无 Bug")
-            return
+        # 外部 TB 源：用专属 task_id 标签，缺陷标题不一定含 VLNS，跳过此预筛选
+        if self.source_type != "teambition":
+            _before_filter = len(closed_bugs)
+            closed_bugs = [b for b in closed_bugs
+                           if re.search(r'(VLNS|CPAX)-\d+', b.title)]
+            _skipped_no_vlns = _before_filter - len(closed_bugs)
+            if _skipped_no_vlns:
+                logger.info("[关闭同步] 跳过 %d 条无 VLNS/CPAX 标记的 Bug（未同步过），"
+                            "剩余 %d 条", _skipped_no_vlns, len(closed_bugs))
+            if not closed_bugs:
+                logger.info("[关闭同步] VLNS/CPAX 预筛选后无 Bug")
+                return
 
         close_total = len(closed_bugs)
         close_skipped_no_match = 0
@@ -1276,13 +1302,20 @@ class SyncEngine:
                 progress_callback(idx, close_total,
                                   f"[关闭同步] {idx}/{close_total} Bug#{bug.id}")
 
-            # 提取 VLNS/CPAX 编号：标题优先（无API调用）
-            identifiers = set()
-            for m in re.finditer(r'(VLNS|CPAX)-(\d+)', bug.title):
-                identifiers.add(f"{m.group(1)}-{m.group(2)}")
-
             found_task = False
-            if identifiers:
+            if self.source_type == "teambition":
+                # 外部 TB：优先标题 VLNS，标题获取不到再从评论提取
+                identifiers = set()
+                for m in re.finditer(r'(VLNS|CPAX)-(\d+)', bug.title):
+                    identifiers.add(f"{m.group(1)}-{m.group(2)}")
+                if not identifiers:
+                    try:
+                        vlns_in_comments = self.source.extract_vlns_numbers(bug.id)
+                    except Exception:
+                        vlns_in_comments = []
+                    for num in vlns_in_comments:
+                        for prefix in ("VLNS", "CPAX"):
+                            identifiers.add(f"{prefix}-{num}")
                 for identifier in identifiers:
                     try:
                         task = self.teambition.get_task_by_identifier(identifier)
@@ -1299,28 +1332,61 @@ class SyncEngine:
                     else:
                         close_skipped_not_regression += 1
                         tb_status_name = self._get_taskflow_status_name(task.status)
-                        logger.debug("[关闭同步] Bug#%d TB %s 状态=%s，无需关闭",
-                                     bug.id, identifier, tb_status_name)
-            # VLNS路径没找到时，回退到禅道{id}/#{id}搜索
-            if not found_task:
-                for tag in (f"禅道{bug.id}", f"#{bug.id}"):
+                        logger.debug("[关闭同步] Bug#%s TB %s 状态=%s，无需关闭",
+                                     bug.task_id or bug.id, identifier, tb_status_name)
+            else:
+                # 禅道：优先标题 VLNS，标题获取不到再从评论/历史提取
+                identifiers = set()
+                for m in re.finditer(r'(VLNS|CPAX)-(\d+)', bug.title):
+                    identifiers.add(f"{m.group(1)}-{m.group(2)}")
+                if not identifiers:
                     try:
-                        tasks = self.teambition.search_tasks(tag)
+                        vlns_in_comments = self.source.extract_vlns_numbers(bug.id)
                     except Exception:
-                        continue
-                    if tasks:
-                        task = tasks[0]
+                        vlns_in_comments = []
+                    for num in vlns_in_comments:
+                        for prefix in ("VLNS", "CPAX"):
+                            identifiers.add(f"{prefix}-{num}")
+
+                if identifiers:
+                    for identifier in identifiers:
+                        try:
+                            task = self.teambition.get_task_by_identifier(identifier)
+                        except Exception:
+                            continue
+                        if not task:
+                            continue
                         found_task = True
                         tfid = getattr(task, 'taskflowId', '')
                         if self._should_close_task(bug, task, tfid):
                             self._close_task_by_id(bug, task.taskId, dry_run, tfid)
                             stats.closed_synced += 1
+                            break
                         else:
                             close_skipped_not_regression += 1
                             tb_status_name = self._get_taskflow_status_name(task.status)
                             logger.debug("[关闭同步] Bug#%d TB %s 状态=%s，无需关闭",
-                                         bug.id, task.taskId[:16], tb_status_name)
-                        break
+                                         bug.id, identifier, tb_status_name)
+                # VLNS路径没找到时，回退到禅道{id}/#{id}搜索
+                if not found_task:
+                    for tag in (f"禅道{bug.id}", f"#{bug.id}"):
+                        try:
+                            tasks = self.teambition.search_tasks(tag)
+                        except Exception:
+                            continue
+                        if tasks:
+                            task = tasks[0]
+                            found_task = True
+                            tfid = getattr(task, 'taskflowId', '')
+                            if self._should_close_task(bug, task, tfid):
+                                self._close_task_by_id(bug, task.taskId, dry_run, tfid)
+                                stats.closed_synced += 1
+                            else:
+                                close_skipped_not_regression += 1
+                                tb_status_name = self._get_taskflow_status_name(task.status)
+                                logger.debug("[关闭同步] Bug#%d TB %s 状态=%s，无需关闭",
+                                             bug.id, task.taskId[:16], tb_status_name)
+                            break
             if not found_task:
                 close_skipped_no_match += 1
 
@@ -1333,11 +1399,15 @@ class SyncEngine:
         # 钉钉通知：关闭同步结果
         if self.dingtalk_bot and stats.closed_synced > 0:
             try:
+                source_name = {"zentao": "禅道", "jira": "Jira",
+                               "teambition": "外部TB"}.get(
+                    getattr(self, "source_type", "zentao"), "禅道")
                 lines = [
                     "## 智能缺陷管理平台 关闭同步结果",
                     "",
                     "| 指标 | 数值 |",
                     "| --- | --- |",
+                    f"| 源平台 | {source_name} |",
                 ]
                 if self.project_name:
                     lines.append(f"| TB所属项目 | {self.project_name} |")
@@ -1398,8 +1468,8 @@ class SyncEngine:
         return False
 
     def _find_existing_task(self, bug: ZentaoBug):
-        # Tier 1: 精确匹配 【禅道{id}】
-        tag = f"【禅道{bug.id}】"
+        # Tier 1: 精确匹配标签（【禅道{id}】 或 【323A-24】）
+        tag = self._format_source_tag(bug)
         results = self.teambition.search_tasks(tag)
         active = [t for t in results
                   if not getattr(t, 'isArchived', False)
@@ -1409,37 +1479,37 @@ class SyncEngine:
 
         # Tier 1.1: 宽松搜索 — 搜索 "禅道{id}" / "#{id}" 再正则校验
         # 覆盖多条合并 (【禅道60365、60357、…】) 和带前缀 (【禅道YX+58926】、#5555)
-        # 优化：禅道 keyword 搜索为 0 结果时，跳过 #{id} 搜索（节省 1 次 API 调用）
-        if not self.loose_tag_dedup:
-            return None
-        zen_keyword = f"禅道{bug.id}"
-        zen_results = self.teambition.search_tasks(zen_keyword)
-        for task in zen_results:
-            if getattr(task, 'isArchived', False):
-                continue
-            if not self._match_project(task, self.project_name):
-                continue
-            if self._task_title_contains_zentao_id(task, bug.id):
-                task_id_disp = (task.taskId or '?')[:16]
-                logger.info("宽松标签匹配: Bug#%d → TB %s (%s)",
-                            bug.id, task_id_disp,
-                            (task.content or '')[:60])
-                return task
-        # 禅道搜索为 0 → 尝试 # 号前缀变体
-        hash_keyword = f"#{bug.id}"
-        if hash_keyword != zen_keyword:
-            hash_results = self.teambition.search_tasks(hash_keyword)
-            for task in hash_results:
+        # 仅禅道/Jira 源使用；外部 TB 的 uniqueId 会与 #id 前缀误匹配，跳过此层
+        # loose_tag_dedup=False 时仅跳过本层，仍继续 Tier 1.5/Tier 2 去重
+        if self.source_type != "teambition" and self.loose_tag_dedup:
+            zen_keyword = f"禅道{bug.id}"
+            zen_results = self.teambition.search_tasks(zen_keyword)
+            for task in zen_results:
                 if getattr(task, 'isArchived', False):
                     continue
                 if not self._match_project(task, self.project_name):
                     continue
                 if self._task_title_contains_zentao_id(task, bug.id):
                     task_id_disp = (task.taskId or '?')[:16]
-                    logger.info("宽松标签匹配(#): Bug#%d → TB %s (%s)",
+                    logger.info("宽松标签匹配: Bug#%d → TB %s (%s)",
                                 bug.id, task_id_disp,
                                 (task.content or '')[:60])
                     return task
+            # 禅道搜索为 0 → 尝试 # 号前缀变体
+            hash_keyword = f"#{bug.id}"
+            if hash_keyword != zen_keyword:
+                hash_results = self.teambition.search_tasks(hash_keyword)
+                for task in hash_results:
+                    if getattr(task, 'isArchived', False):
+                        continue
+                    if not self._match_project(task, self.project_name):
+                        continue
+                    if self._task_title_contains_zentao_id(task, bug.id):
+                        task_id_disp = (task.taskId or '?')[:16]
+                        logger.info("宽松标签匹配(#): Bug#%d → TB %s (%s)",
+                                    bug.id, task_id_disp,
+                                    (task.content or '')[:60])
+                        return task
 
         # Tier 1.5: VLNS/CPAX 编号精确匹配（按 taskIdentifier 直接查 TB）
         # extract_vlns_numbers 只看 actions（备注/历史），补充从 bug 标题提取：
@@ -1718,31 +1788,7 @@ class SyncEngine:
         return self._pinyin_member_index.get(normalized)
 
     def _map_type_to_category(self, bug_type: str, assigned_to: str = "") -> str:
-        """确定 Teambition 缺陷分类
-
-        优先级：
-          1. 指派人姓名匹配（从 assigned_to 配置的部门前缀派生）
-          2. 指派人带部门前缀匹配（如 "IOT-陈斌"）
-          3. Jira 英文名的部门映射（如 "jiansen shi" → "IOT"）
-          4. Bug 类型映射（type_category_map）
-          5. 默认值
-        """
-        if assigned_to and self._assignee_name_category:
-            category = self._assignee_name_category.get(assigned_to)
-            if category:
-                return category
-        # 兼容：assignedTo 本身带部门前缀的情况
-        if assigned_to and self.assignee_category_map:
-            prefix = extract_department_prefix(assigned_to)
-            if prefix and prefix in self.assignee_category_map:
-                return self.assignee_category_map[prefix]
-        # Jira 英文名部门映射
-        if assigned_to and self._jira_user_map_lower:
-            jira_match = self._lookup_jira_user(assigned_to)
-            if jira_match:
-                dept = jira_match.get("department", "")
-                if dept and dept in self.assignee_category_map:
-                    return self.assignee_category_map[dept]
+        """确定 Teambition 缺陷分类（按 Bug 类型映射，部门前缀兜底已移除）"""
         return self.type_category_map.get(bug_type, "应用-其他问题")
 
     def _build_customfields(self, bug: ZentaoBug,
@@ -1884,8 +1930,24 @@ class SyncEngine:
         如禅道标题已有其他【xxx】前缀标签，放在禅道标签后面
         """
         base = bug.get_base_title()
-        tag = self.source_tag_in_tb.replace("{bug_id}", str(bug.id))
+        tag = self._format_source_tag(bug)
         return f"{tag}{base}"
+
+    def _format_source_tag(self, bug: ZentaoBug) -> str:
+        """生成源平台标题标注标签（替换 {bug_id} / {task_id} 占位符）"""
+        tag = self.source_tag_in_tb
+        tag = tag.replace("{bug_id}", str(bug.id))
+        tag = tag.replace("{task_id}", bug.task_id or str(bug.id))
+        return tag
+
+    def _get_source_filters(self) -> dict:
+        """获取源平台的筛选条件。
+
+        禅道/Jira 源从 zentao 配置读；外部 TB 源从 teambition_source 配置读。
+        """
+        if self.source_type == "teambition":
+            return self.config.get("teambition_source", {}).get("filters", {})
+        return self.config.get("zentao", {}).get("filters", {})
 
     def _build_zentao_title(self, original_title: str,
                             task_id: str) -> str:
@@ -1916,7 +1978,11 @@ class SyncEngine:
         # 来源信息作为备注末尾的元数据
         severity_name = SEVERITY_NAMES.get(str(bug.severity), bug.severity)
         tb_severity = self._map_severity(bug.severity)
-        meta_parts = [f"禅道 #{bug.id}"]
+        # 源标识：禅道用 bug id，外部 TB 用专属任务 ID（如 323A-135）
+        if getattr(self, "source_type", "zentao") == "teambition":
+            meta_parts = [f"外部TB #{bug.task_id or bug.id}"]
+        else:
+            meta_parts = [f"禅道 #{bug.id}"]
         if bug.openedBuild:
             meta_parts.append(f"版本: {bug.openedBuild}")
         meta_parts.append(f"SN: {bug.snCode or '/'}")
@@ -1968,17 +2034,33 @@ class SyncEngine:
             actor = c.get("actor", "")
             date = c.get("date", "")
             comment = c.get("comment", "").strip()
-            if not comment:
-                continue
+            attachments = c.get("attachments", [])
             if cutoff_time and date:
                 norm_date = self._normalize_dt(date)
                 norm_cutoff = self._normalize_dt(cutoff_time)
                 if norm_date and norm_cutoff and norm_date <= norm_cutoff:
                     continue
-            processed = self._replace_comment_media_with_placeholders(
-                comment, file_ids_with_type
-            )
-            processed = self._html_to_text(processed)
+
+            if getattr(self, "source_type", "zentao") == "teambition":
+                # 外部 TB：评论是纯文本 + 附件名列表（用真实文件名）
+                parts = []
+                if comment:
+                    parts.append(comment)
+                if attachments:
+                    names = [a.get("name", "") for a in attachments if a.get("name")]
+                    if names:
+                        parts.append("[附件: " + ", ".join(names) + "]")
+                processed = "\n".join(parts)
+                if not processed:
+                    continue
+            else:
+                # 禅道：评论 HTML → 占位符 + 纯文本
+                if not comment:
+                    continue
+                processed = self._replace_comment_media_with_placeholders(
+                    comment, file_ids_with_type
+                )
+                processed = self._html_to_text(processed)
             processed_comments.append((processed, actor, date))
         return processed_comments, file_ids_with_type
 
@@ -2002,7 +2084,10 @@ class SyncEngine:
             processed = re.sub(
                 r'__ATTACH_\d+__', '上传失败', processed
             )
-            content_parts = ["【禅道评论】"]
+            if getattr(self, "source_type", "zentao") == "teambition":
+                content_parts = ["【外部TB评论】"]
+            else:
+                content_parts = ["【禅道评论】"]
             if actor:
                 content_parts.append(actor)
             if date:
@@ -2292,22 +2377,23 @@ class SyncEngine:
         for file_id in inline_ids:
             if file_id in uploaded:
                 continue  # 避免与 bug.files 重复上传
-            # 内联图片文件名固定为 image_{file_id}.png，也检查是否已上传
-            inline_name = f"image_{file_id}.png"
-            if inline_name in existing_filenames:
-                logger.info("跳过已上传内联图片: file_id=%s", file_id)
-                skipped += 1
-                continue
             logger.info("下载内联图片: file_id=%s", file_id)
 
             def _do_inline(fid=file_id):
                 att = self.source.download_image(int(fid))
+                # 下载后用真实文件名检查是否已上传（download_image 已返回真实名）
+                if att.filename in existing_filenames:
+                    return "skip"
                 result = self.teambition.upload_attachment(task_id, att)
                 if result:
                     uploaded[fid] = (result[0], att.filename, result[1])
                     return True
                 return False
-            if not self._retry(f"内联图片 file#{file_id}", _do_inline):
+            outcome = self._retry(f"内联图片 file#{file_id}", _do_inline)
+            if outcome == "skip":
+                logger.info("跳过已上传内联图片: file_id=%s", file_id)
+                skipped += 1
+            elif not outcome:
                 logger.warning("内联图片上传失败（已耗尽重试）: file_id=%s", file_id)
 
         # Step 2.5: 上传评论中的媒体（图片/视频），与上述通道共用 uploaded 字典去重
@@ -2414,12 +2500,25 @@ class SyncEngine:
     # ── 重试机制 ──────────────────────────────────────
 
     def _retry(self, label: str, fn, retries: int = 0):
-        """执行 fn，失败时指数退避重试。成功返回 True，最终失败返回 False。"""
+        """执行 fn，失败时指数退避重试。
+
+        返回 fn 的返回值（True/False/"skip"）：
+        - True / None → 成功
+        - "skip"      → 跳过（不重试）
+        - False       → 失败（重试）
+        异常同样退避重试，最终失败返回 False。
+        """
         max_attempts = retries or self.attachment_retries
         for attempt in range(1, max_attempts + 1):
             try:
-                fn()
-                return True
+                result = fn()
+                if result is False and attempt < max_attempts:
+                    wait = 2 ** attempt
+                    logger.warning("[%s] 第%d次失败(False)，%d秒后重试",
+                                   label, attempt, wait)
+                    time.sleep(wait)
+                    continue
+                return result if result is not None else True
             except Exception as e:
                 if attempt < max_attempts:
                     wait = 2 ** attempt

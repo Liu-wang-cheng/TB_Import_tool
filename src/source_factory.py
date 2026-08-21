@@ -45,6 +45,25 @@ def create_source_client(config: dict):
             client.set_branch_id(int(filters["branch"]))
         return ZentaoAdapter(client)
 
+    elif platform == "teambition":
+        from src.teambition_source_adapter import TeambitionSourceAdapter
+        from src.teambition_source_client import TeambitionSourceClient
+
+        tb_src_cfg = config.get("teambition_source", {})
+        url = tb_src_cfg.get("url", "")
+        project_id = tb_src_cfg.get("project_id", "")
+        client = TeambitionSourceClient(
+            base_url=url,
+            account=tb_src_cfg.get("account", ""),
+            password=tb_src_cfg.get("password", ""),
+            cookie_file=tb_src_cfg.get("cookie_file", ""),
+            project_id=project_id,
+        )
+        # 优先从 url 解析 project_id
+        if url and not project_id:
+            project_id = client.extract_project_id(url)
+        return TeambitionSourceAdapter(client, project_id=project_id)
+
     elif platform == "jira":
         raise NotImplementedError(
             "Jira 平台适配器尚未实现。"

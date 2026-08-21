@@ -157,6 +157,8 @@ def main():
         filters["date_to"] = args.date_to
     if args.assigned_to:
         filters["assigned_to"] = args.assigned_to
+        # 指派人已迁移到公用 assignee.yaml，同步引擎从这读
+        config.setdefault("assignee", {})["assigned_to"] = args.assigned_to
     if args.sync_attachments:
         config.setdefault("sync", {})["sync_attachments"] = True
     if args.no_attachments:
@@ -202,10 +204,10 @@ def main():
         operator_id=fallback_id,
     )
 
-    # 初始化钉钉机器人
+    # 初始化钉钉机器人（默认启用，--no-dingtalk 可显式关闭）
     dingtalk_bot = None
     dt_cfg = config.get("dingtalk", {})
-    dt_enabled = dt_cfg.get("enabled", False)
+    dt_enabled = dt_cfg.get("enabled", True)
     if args.dingtalk:
         dt_enabled = True
     if args.no_dingtalk:

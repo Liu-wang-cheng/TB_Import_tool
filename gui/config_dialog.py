@@ -82,7 +82,7 @@ class ConfigDialog(QDialog):
         platform_row = QHBoxLayout()
         platform_row.addWidget(QLabel("平台类型:"))
         self.source_platform = QComboBox()
-        self.source_platform.addItems(["禅道", "Jira"])
+        self.source_platform.addItems(["禅道", "外部TB"])
         self.source_platform.currentIndexChanged.connect(self._on_platform_changed)
         platform_row.addWidget(self.source_platform)
         platform_row.addStretch()
@@ -91,7 +91,7 @@ class ConfigDialog(QDialog):
         # StackedWidget：根据平台切换配置页面
         self.source_stack = QStackedWidget()
         self.source_stack.addWidget(self._build_zentao_page())
-        self.source_stack.addWidget(self._build_jira_placeholder_page())
+        self.source_stack.addWidget(self._build_teambition_page())
         layout.addWidget(self.source_stack)
 
         return w
@@ -126,47 +126,32 @@ class ConfigDialog(QDialog):
 
         self.zt_assigned_to = QTextEdit()
         self.zt_assigned_to.setMaximumHeight(80)
-        self.zt_assigned_to.setPlaceholderText("每行一个，如:\nIOT-陈斌\n应用-罗林旺")
+        self.zt_assigned_to.setPlaceholderText("每行一个，如:\n胡继珍\n乐动开发-343")
         form.addRow("指派人筛选:", self.zt_assigned_to)
 
         return w
 
-    def _build_jira_placeholder_page(self):
-        """Jira 预留页面（灰色不可编辑）"""
+    def _build_teambition_page(self):
+        """外部 TB 源配置页面（缺陷列表网址 + 账号密码）"""
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(12)
 
-        notice = QLabel("⚠ Jira 平台暂未适配，此配置仅供预览")
-        notice.setStyleSheet("color: #999; font-size: 13px;")
-        layout.addWidget(notice)
-
         form = QFormLayout()
 
-        self.jira_base_url = QLineEdit()
-        self.jira_base_url.setPlaceholderText("https://jira.example.com")
-        self.jira_base_url.setEnabled(False)
-        form.addRow("服务器地址:", self.jira_base_url)
+        self.tb_src_url = QLineEdit()
+        self.tb_src_url.setPlaceholderText(
+            "https://www.teambition.com/project/xxx/bug/section/all")
+        form.addRow("缺陷列表网址:", self.tb_src_url)
 
-        self.jira_username = QLineEdit()
-        self.jira_username.setEnabled(False)
-        form.addRow("用户名:", self.jira_username)
+        self.tb_src_account = QLineEdit()
+        self.tb_src_account.setPlaceholderText("手机号/邮箱")
+        form.addRow("登录账号:", self.tb_src_account)
 
-        self.jira_api_token = QLineEdit()
-        self.jira_api_token.setEchoMode(QLineEdit.Password)
-        self.jira_api_token.setEnabled(False)
-        form.addRow("API Token:", self.jira_api_token)
-
-        self.jira_project_key = QLineEdit()
-        self.jira_project_key.setPlaceholderText("如 PROJ")
-        self.jira_project_key.setEnabled(False)
-        form.addRow("项目 Key:", self.jira_project_key)
-
-        self.jira_jql = QTextEdit()
-        self.jira_jql.setMaximumHeight(60)
-        self.jira_jql.setPlaceholderText("如: project = PROJ AND status = Open")
-        self.jira_jql.setEnabled(False)
-        form.addRow("JQL 筛选:", self.jira_jql)
+        self.tb_src_password = QLineEdit()
+        self.tb_src_password.setEchoMode(QLineEdit.Password)
+        self.tb_src_password.setPlaceholderText("留空则扫码登录")
+        form.addRow("登录密码:", self.tb_src_password)
 
         layout.addLayout(form)
         layout.addStretch()
@@ -409,6 +394,8 @@ class ConfigDialog(QDialog):
         form = QFormLayout(w)
 
         self.dt_enabled = QCheckBox("启用钉钉通知")
+        self.dt_enabled.setChecked(True)
+        self.dt_enabled.setEnabled(False)  # 置灰：钉钉通知强制开启，不允许关闭
         form.addRow("", self.dt_enabled)
 
         self.dt_webhook = QLineEdit()
@@ -436,7 +423,7 @@ class ConfigDialog(QDialog):
         # source.yaml 只存平台类型
         source = self._load_yaml("source.yaml")
         platform = source.get("platform", "zentao")
-        self.source_platform.setCurrentIndex(1 if platform == "jira" else 0)
+        self.source_platform.setCurrentIndex(1 if platform == "teambition" else 0)
 
         # 禅道配置：独立从 zentao.yaml 加载
         zt = self._load_yaml("zentao.yaml")
@@ -447,18 +434,18 @@ class ConfigDialog(QDialog):
         product = filters.get("product", "")
         self.zt_product.setText(str(product) if product else "")
         self.zt_module_filter.setText(str(filters.get("module_filter", "") or ""))
-        assigned_to = filters.get("assigned_to", []) or []
+        # 指派人：从公用 assignee.yaml 读（外部 TB 和禅道共用）
+        assignee = self._load_yaml("assignee.yaml")
+        assigned_to = assignee.get("assigned_to", []) or []
         if isinstance(assigned_to, str):
             assigned_to = [assigned_to]
-        self.zt_assigned_to.setPlainText("\n".join(assigned_to))
+        self.zt_assigned_to.setPlainText("\n".join(str(a) for a in assigned_to))
 
-        # Jira 配置：独立从 jira.yaml 加载
-        jira = self._load_yaml("jira.yaml")
-        self.jira_base_url.setText(jira.get("base_url", ""))
-        self.jira_username.setText(jira.get("username", ""))
-        self.jira_api_token.setText(jira.get("api_token", ""))
-        self.jira_project_key.setText(jira.get("project_key", ""))
-        self.jira_jql.setPlainText(jira.get("jql", ""))
+        # 外部 TB 源配置：独立从 teambition_source.yaml 加载
+        tb_src = self._load_yaml("teambition_source.yaml")
+        self.tb_src_url.setText(str(tb_src.get("url", "") or ""))
+        self.tb_src_account.setText(str(tb_src.get("account", "") or ""))
+        self.tb_src_password.setText(str(tb_src.get("password", "") or ""))
 
         # Teambition
         tb = self._load_yaml("teambition.yaml")
@@ -481,7 +468,7 @@ class ConfigDialog(QDialog):
 
         # 钉钉
         dt = self._load_yaml("dingtalk.yaml")
-        self.dt_enabled.setChecked(dt.get("enabled", False))
+        self.dt_enabled.setChecked(dt.get("enabled", True))
         self.dt_webhook.setText(dt.get("webhook_url", ""))
         self.dt_secret.setText(dt.get("secret", ""))
         self.dt_at_all.setChecked(dt.get("at_all", False))
@@ -545,7 +532,7 @@ class ConfigDialog(QDialog):
         import yaml
 
         platform_idx = self.source_platform.currentIndex()
-        platform = "jira" if platform_idx == 1 else "zentao"
+        platform = "teambition" if platform_idx == 1 else "zentao"
 
         # 1. source.yaml —— 只存平台类型
         source_path = os.path.join(self.config_dir, "source.yaml")
@@ -556,8 +543,6 @@ class ConfigDialog(QDialog):
         # 2. zentao.yaml —— 禅道专属配置
         product = self.zt_product.text().strip()
         product_val = int(product) if product.isdigit() else (product or None)
-        assigned_text = self.zt_assigned_to.toPlainText().strip()
-        assigned_to = [line.strip() for line in assigned_text.splitlines() if line.strip()] if assigned_text else None
 
         zt_path = os.path.join(self.config_dir, "zentao.yaml")
         update_yaml_values(zt_path, {
@@ -566,25 +551,31 @@ class ConfigDialog(QDialog):
             "password": self.zt_password.text().strip(),
             "filters.product": product_val,
             "filters.module_filter": self.zt_module_filter.text().strip() or None,
-            "filters.assigned_to": assigned_to,
         })
 
-        # 3. jira.yaml —— Jira 专属配置（预留）
-        jira_path = os.path.join(self.config_dir, "jira.yaml")
-        jira_data = {
-            "base_url": self.jira_base_url.text().strip(),
-            "username": self.jira_username.text().strip(),
-            "api_token": self.jira_api_token.text().strip(),
-            "project_key": self.jira_project_key.text().strip(),
-            "jql": self.jira_jql.toPlainText().strip(),
+        # 指派人：保存到公用 assignee.yaml（外部 TB 和禅道共用）
+        assigned_text = self.zt_assigned_to.toPlainText().strip()
+        assigned_to = [line.strip() for line in assigned_text.splitlines()
+                       if line.strip()] if assigned_text else None
+        assignee_path = os.path.join(self.config_dir, "assignee.yaml")
+        if os.path.exists(assignee_path):
+            update_yaml_values(assignee_path, {
+                "assigned_to": assigned_to,
+            })
+
+        # 3. teambition_source.yaml —— 外部 TB 源专属配置
+        tb_src_path = os.path.join(self.config_dir, "teambition_source.yaml")
+        tb_src_data = {
+            "url": self.tb_src_url.text().strip(),
+            "account": self.tb_src_account.text().strip(),
+            "password": self.tb_src_password.text().strip(),
         }
-        # jira.yaml 不存在则创建
-        if not os.path.exists(jira_path):
-            with open(jira_path, "w", encoding="utf-8") as f:
-                f.write("# Jira 源平台配置（预留）\n")
-                yaml.safe_dump(jira_data, f, allow_unicode=True, sort_keys=False)
+        if not os.path.exists(tb_src_path):
+            with open(tb_src_path, "w", encoding="utf-8") as f:
+                f.write("# 外部 Teambition 源配置\n")
+                yaml.safe_dump(tb_src_data, f, allow_unicode=True, sort_keys=False)
         else:
-            update_yaml_values(jira_path, jira_data)
+            update_yaml_values(tb_src_path, tb_src_data)
 
     def _save_teambition(self):
         path = os.path.join(self.config_dir, "teambition.yaml")
@@ -652,7 +643,7 @@ class ConfigDialog(QDialog):
     def _save_dingtalk(self):
         path = os.path.join(self.config_dir, "dingtalk.yaml")
         update_yaml_values(path, {
-            "enabled": self.dt_enabled.isChecked(),
+            "enabled": True,  # 强制开启（开关置灰不允许关闭）
             "webhook_url": self.dt_webhook.text().strip(),
             "secret": self.dt_secret.text().strip(),
             "at_all": self.dt_at_all.isChecked(),

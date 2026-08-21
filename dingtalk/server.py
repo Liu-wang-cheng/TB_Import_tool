@@ -139,9 +139,13 @@ def run_sync(reply_webhook: str, dry_run: bool = False):
             tb_cfg.get("belong_project_value", "")
             or tb_cfg.get("project", {}).get("name", "")
         )
+        source_name = {"zentao": "禅道", "jira": "Jira",
+                       "teambition": "外部TB"}.get(
+            getattr(source, "source_type", "zentao"), "禅道")
         DingTalkBot.reply_sync_result(reply_webhook, stats, elapsed,
                                       dry_run=dry_run,
-                                      project_name=project_name)
+                                      project_name=project_name,
+                                      source_name=source_name)
 
     except Exception as e:
         elapsed = time.time() - start_time

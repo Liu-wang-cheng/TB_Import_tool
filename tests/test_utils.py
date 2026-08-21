@@ -36,14 +36,11 @@ class TestResolveAssignedTo:
         assert "IOT-陈斌" in result
         assert "陈斌" in result
 
-    def test_duplicate_suffix_not_added(self):
-        filters = {
-            "assigned_to": ["IOT-陈斌"],
-            "assigned_to_known": ["IOT-陈斌", "应用-陈斌"],
-        }
-        result = resolve_assigned_to(filters)
-        # 后缀 "陈斌" 有冲突，不应被加入
-        assert "陈斌" not in result
+    def test_non_department_prefix_not_split(self):
+        # 非白名单前缀（账号名如 "乐动开发-343"）不拆分，保持完整
+        result = resolve_assigned_to({"assigned_to": ["乐动开发-343"]})
+        assert result == ["乐动开发-343"]
+        assert "343" not in result
 
     def test_mixed_with_me(self):
         filters = {

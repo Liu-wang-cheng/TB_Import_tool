@@ -195,6 +195,9 @@ def _format_value(value) -> str:
     s = str(value)
     if not s or s in ("null", "true", "false", "yes", "no"):
         return f'"{s}"'
+    # 纯数字字符串必须加引号，否则 PyYAML 会解析为 int（如指派人 "343"）
+    if s.isdigit():
+        return f'"{s}"'
     # 日期格式字符串必须加引号，否则 PyYAML 会解析为 datetime.date
     if _DATE_RE.match(s):
         return f'"{s}"'

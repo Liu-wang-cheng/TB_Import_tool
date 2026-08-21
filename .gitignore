@@ -25,6 +25,9 @@ logs/
 exports/
 tools/exports/
 
+# 登录 Cookie 缓存（含凭证，不提交）
+tools/.tb_cookie.txt
+
 # Python 缓存
 __pycache__/
 *.py[cod]
@@ -65,6 +68,11 @@ tests/.env_test.json
 tools/test_download.py
 tools/probe_instances.py
 tools/test_ai_analysis_bug16376.py
+tools/debug_tb_login.py
+tools/debug_tb_selenium.py
+tools/tb_import_simulate.py
+tools/test_close_sync.py
+tools/verify_tb_import.py
 
 # 文档生成工具/截图（辅助工具，不入库）
 tools/capture_screenshots.py

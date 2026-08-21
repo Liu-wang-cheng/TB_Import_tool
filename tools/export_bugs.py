@@ -29,7 +29,8 @@ def export_bugs(config: dict, output_path: str = ""):
 
     filters = config.get("zentao", {}).get("filters", {})
     normalize_zentao_filters(filters)
-    assigned_to = resolve_assigned_to(filters, source.account)
+    # 指派人从公用 assignee.yaml 读（外部 TB 和禅道共用）
+    assigned_to = resolve_assigned_to(config.get("assignee", {}), source.account)
 
     bugs = source.fetch_all_bugs(
         product_id=filters.get("product_id"),
@@ -81,22 +82,6 @@ def export_bugs(config: dict, output_path: str = ""):
     type_category_map = tb_cfg.get("type_category_map", {})
     default_reproduction = tb_cfg.get("default_reproduction", "中概率")
 
-    # 构建指派人部门前缀→分类映射（与 sync_engine 逻辑一致）
-    assignee_category_map = tb_cfg.get("assignee_category_map", {})
-    assignee_name_category = {}
-    zt_cfg = config.get("zentao", {})
-    assigned_to_list = zt_cfg.get("filters", {}).get("assigned_to", [])
-    if assigned_to_list and assignee_category_map:
-        if isinstance(assigned_to_list, str):
-            assigned_to_list = [assigned_to_list]
-        for entry in assigned_to_list:
-            if "-" in entry:
-                prefix, name = entry.split("-", 1)
-                cat = assignee_category_map.get(prefix.strip())
-                if cat:
-                    assignee_name_category[entry] = cat
-                    assignee_name_category[name.strip()] = cat
-
     # 创建 Excel
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -136,8 +121,7 @@ def export_bugs(config: dict, output_path: str = ""):
         steps = _clean_steps(bug.steps)
         project_cfg = tb_cfg.get("project", {})
         project = project_cfg.get("name", project_cfg.get("project_name", bug.projectName))
-        category = assignee_name_category.get(bug.assignedTo,
-                    type_category_map.get(str(bug.type), "应用-其他问题"))
+        category = type_category_map.get(str(bug.type), "应用-其他问题")
         tb_severity = severity_map.get(str(bug.severity), "B")
         reproduction = default_reproduction
         version = bug.openedBuild or "/"
@@ -160,7 +144,12 @@ def export_bugs(config: dict, output_path: str = ""):
     # 保存
     if not output_path:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join(os.path.dirname(__file__), "exports")
+        # 打包后 exe 同级 exports/，源码环境项目根 exports/
+        if getattr(sys, "frozen", False):
+            base = os.path.dirname(sys.executable)
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        output_dir = os.path.join(base, "exports")
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, f"teambition_import_{ts}.xlsx")
 

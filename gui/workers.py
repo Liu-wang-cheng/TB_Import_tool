@@ -182,11 +182,14 @@ class AuthTestWorker(QThread):
                 from src.source_factory import create_source_client
                 source = create_source_client(self.config)
                 source.authenticate()
-                platform_name = "禅道" if source.source_type == "zentao" else "Jira"
+                platform_name = {"zentao": "禅道", "jira": "Jira",
+                                  "teambition": "外部TB"}.get(source.source_type, "禅道")
                 results.append((platform_name, True, "连接成功"))
                 self.progress.emit(f"{platform_name}连接成功")
             except Exception as e:
-                platform_name = "禅道" if self.config.get("source", {}).get("platform") == "zentao" else "Jira"
+                platform_name = {"zentao": "禅道", "jira": "Jira",
+                                  "teambition": "外部TB"}.get(
+                    self.config.get("source", {}).get("platform"), "禅道")
                 results.append((platform_name, False, str(e)))
                 self.progress.emit(f"{platform_name}连接失败: {e}")
 
@@ -248,28 +251,38 @@ class ListBugsWorker(QThread):
             if callable(invalidate):
                 invalidate()
 
-            platform_name = "禅道" if source.source_type == "zentao" else "Jira"
-            self.progress.emit(f"{platform_name}认证成功，正在获取Bug列表...")
+            platform_name = {"zentao": "禅道", "jira": "Jira",
+                              "teambition": "外部TB"}.get(source.source_type, "禅道")
+            self.progress.emit(f"{platform_name}认证成功，正在获取缺陷列表...")
 
-            filters = self.config.get("zentao", {}).get("filters", {})
-            if source.source_type == "zentao":
-                normalize_zentao_filters(filters)
+            # 指派人公用（assignee.yaml），外部 TB 和禅道都从这读
+            assignee_filters = self.config.get("assignee", {})
+            list_assigned_to = resolve_assigned_to(assignee_filters, source.account)
 
-            # 获取严重程度翻译
+            # 外部 TB：列出时不筛状态（列出所有）
+            if source.source_type == "teambition":
+                filters = self.config.get("teambition_source", {}).get("filters", {})
+                list_statuses = None
+            else:
+                filters = self.config.get("zentao", {}).get("filters", {})
+                if source.source_type == "zentao":
+                    normalize_zentao_filters(filters)
+                list_statuses = filters.get("statuses")
+
+            # 获取严重程度翻译（仅禅道）
             if source.source_type == "zentao":
                 self.severity_labels = source.fetch_severity_labels(
                     filters.get("product_id"))
-            assigned_to = resolve_assigned_to(filters, source.account)
 
             bugs = source.fetch_all_bugs(
                 product_id=filters.get("product_id"),
                 project_id=filters.get("project_id"),
-                statuses=filters.get("statuses"),
+                statuses=list_statuses,
                 date_from=filters.get("date_from"),
                 date_to=filters.get("date_to"),
-                assigned_to=assigned_to,
+                assigned_to=list_assigned_to,
             )
-            self.progress.emit(f"获取到 {len(bugs)} 条Bug")
+            self.progress.emit(f"获取到 {len(bugs)} 条缺陷")
 
             module_filter = (filters.get("module_filter") or "").strip()
             if module_filter and bugs:
@@ -318,7 +331,7 @@ class ListBugsWorker(QThread):
                 try:
                     sev_map = self.config.get("teambition", {}).get("severity_map", {})
                     sev_labels = source.fetch_severity_labels(filters.get("product_id"))
-                    lines = [f"共 {len(bugs)} 条 Bug:", "",
+                    lines = [f"源平台: {platform_name}", f"共 {len(bugs)} 条 Bug:", "",
                              "| ID | 状态 | 严重程度 | 指派给 | 标题 |",
                              "| --- | --- | --- | --- | --- |"]
                     for bug in bugs[:20]:
@@ -338,11 +351,11 @@ class ListBugsWorker(QThread):
                         lines.append(f"| {bug.id} | {bug.status} | {sev} | {assignee} | {title} |")
                     if len(bugs) > 20:
                         lines.append(f"\n> 仅显示前 20 条，共 {len(bugs)} 条")
-                    self.dingtalk_bot.send_markdown("禅道 Bug 列表", "\n".join(lines))
+                    self.dingtalk_bot.send_markdown(f"{platform_name} 缺陷列表", "\n".join(lines))
                 except Exception as e:
                     logger.warning("钉钉通知发送失败: %s", e)
         except Exception as e:
-            logger.exception("列出Bug失败")
+            logger.exception("列出缺陷失败")
             self.error.emit(str(e), traceback.format_exc())
         finally:
             if source:
@@ -370,7 +383,8 @@ class SyncWorker(QThread):
 
             source, teambition = _init_clients(self.config)
 
-            platform_name = "禅道" if source.source_type == "zentao" else "Jira"
+            platform_name = {"zentao": "禅道", "jira": "Jira",
+                              "teambition": "外部TB"}.get(source.source_type, "禅道")
             self.progress.emit(0, 0, f"{platform_name}认证中...")
             source.authenticate()
 

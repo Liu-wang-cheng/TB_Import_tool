@@ -449,15 +449,15 @@ class ZentaoClient:
 
     @staticmethod
     def _strip_dept_prefix(name: str) -> str:
-        """剥离部门前缀，"项目-李珍" / "IOT-陈斌" → "李珍" / "陈斌"。
+        """剥离部门前缀（仅白名单前缀），"IOT-陈斌" → "陈斌"。
 
-        分类器不再依赖部门前缀，指派人筛选统一按纯名字匹配。
+        非白名单前缀（如账号名 "乐动开发-343"）保持完整，避免误拆。
         """
+        from src.utils import extract_department_prefix
         if not name or not isinstance(name, str):
             return ""
-        if "-" in name:
-            suffix = name.split("-", 1)[1].strip()
-            return suffix or name.strip()
+        if extract_department_prefix(name):
+            return name.split("-", 1)[1].strip()
         return name.strip()
 
     def _resolve_assigned_to_cloud(self, assigned_to: list) -> set:

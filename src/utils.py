@@ -115,28 +115,16 @@ def apply_module_filter(bugs, module_filter: str,
 def resolve_assigned_to(filters: dict, zentao_account: str = "") -> list:
     """将 assigned_to 配置解析为用户名列表，"me" 替换为当前账号
 
-    支持带部门前缀的格式如 "IOT-陈斌"，提取 "-" 后的用户名部分用于禅道筛选。
-    同时保留完整原始值，以便禅道客户端同时匹配账号名和真实姓名。
-
-    歧义保护：当 `assigned_to_known`（GUI 完整列表）或 `assigned_to`（过滤列表）中
-    存在多个共享同一去前缀名的项时，**不**追加去前缀形式，只做精确匹配，避免
-    同名跨部门的指派人误命中。
+    对带部门前缀的名字（如 "IOT-陈斌"）追加去前缀形式，用于自适应匹配；
+    非部门前缀的账号名（如 "乐动开发-343"）保持完整不拆分。
     """
     val = filters.get("assigned_to")
     if val is None:
         return None
     if isinstance(val, str):
         val = [val]
-
-    # 后缀冲突检测：优先使用完整 GUI 列表（包含未勾选项），无则回退到过滤列表本身
-    known = filters.get("assigned_to_known") or val
-    if isinstance(known, str):
-        known = [known]
-    suffix_counts = {}
-    for name in known:
-        if name and name.lower() != "me" and "-" in name:
-            suffix = name.split("-", 1)[1]
-            suffix_counts[suffix] = suffix_counts.get(suffix, 0) + 1
+    # 兼容 YAML 把纯数字字符串解析成 int 的情况（如 "343" → 343）
+    val = [str(x) for x in val if x not in (None, "")]
 
     result = []
     for name in val:
@@ -145,24 +133,35 @@ def resolve_assigned_to(filters: dict, zentao_account: str = "") -> list:
                 result.append(zentao_account)
         else:
             result.append(name)
-            if "-" in name:
-                suffix = name.split("-", 1)[1]
-                # 后缀唯一时才添加去前缀形式，避免同名跨部门误匹配
-                if suffix_counts.get(suffix, 0) <= 1:
+            # 只对白名单部门前缀去前缀（"IOT-陈斌"→"陈斌"），"乐动开发-343" 不拆
+            prefix = extract_department_prefix(name)
+            if prefix:
+                suffix = name.split("-", 1)[1].strip()
+                if suffix and suffix not in result:
                     result.append(suffix)
     return result if result else None
 
 
+# 部门前缀白名单：指派人筛选时的自适应去前缀只认这些前缀。
+# 与 teambition.yaml 的 assignee_category_map key 对应，
+# 另含禅道云版的通用前缀 "部门"（如 "部门-邓建和"）。
+# 非白名单前缀（如账号名 "乐动开发-343"）保持完整，避免误拆。
+DEPARTMENT_PREFIXES = frozenset({
+    "IOT", "应用", "嵌入式", "算法", "项目", "测试", "硬件", "驱动", "产品",
+    "部门",
+})
+
+
 def extract_department_prefix(assigned_to: str) -> str:
-    """从禅道 assignedTo 名称中提取部门前缀
+    """从 assignedTo 名称中提取部门前缀（仅白名单前缀）
 
     "IOT-陈斌" → "IOT"，"应用-罗林旺" → "应用"
-    无前缀时返回空字符串
+    非白名单前缀或无前缀时返回空字符串
     """
     if assigned_to and "-" in assigned_to:
         prefix = assigned_to.split("-", 1)[0].strip()
-        # 排除常见的非部门分隔符（如中文姓名中不太可能出现）
-        return prefix
+        if prefix in DEPARTMENT_PREFIXES:
+            return prefix
     return ""
 
 

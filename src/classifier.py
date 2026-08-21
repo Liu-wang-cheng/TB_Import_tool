@@ -415,23 +415,8 @@ class BugClassifier:
       1. TF-IDF 相似度匹配（本地学习，从 TB 已分类 Bug 中深度学习）
       2. LLM 大模型分类（API 调用，批量处理）
       3. LLM 审核（兜底前最后一次 AI 尝试）
-      4. 规则兜底（指派人部门映射）
-
-    部门过滤：
-      有明确部门的执行者（IOT/算法/应用/嵌入式/硬件/驱动）只匹配本部门分类。
-      项目/测试/产品部门不限制，可匹配任意分类。
+      4. 规则兜底（Bug 类型映射）
     """
-
-    _DEPARTMENT_CATEGORIES = {
-        "IOT": "IOT-",
-        "算法": "算法-",
-        "应用": "应用-",
-        "嵌入式": "嵌入式-",
-        "硬件": "硬件-",
-        "驱动": "驱动-",
-    }
-
-    _CROSS_DEPARTMENTS = {"项目", "测试", "产品"}
 
     def __init__(self, config: dict):
         cfg = config.get("classifier", {})
@@ -504,9 +489,6 @@ class BugClassifier:
     def train_similarity(self, samples: List[Tuple[str, str]],
                          save: bool = True):
         """用 TB 已分类 Bug 训练 TF-IDF 相似度分类器"""
-        if not self._sim_classifier.enabled:
-            return
-
         loaded = self._sim_classifier.load()
         if loaded:
             self._sim_classifier.add_samples(samples)
@@ -518,8 +500,6 @@ class BugClassifier:
 
     def load_similarity_model(self) -> bool:
         """从磁盘加载 TF-IDF 模型"""
-        if not self._sim_classifier.enabled:
-            return False
         return self._sim_classifier.load()
 
     def review_training_data(self, max_per_category: int = 3,
@@ -649,58 +629,9 @@ class BugClassifier:
         sim.save()
         return len(removed_indices)
 
-    # ── 部门过滤 ─────────────────────────────────────────
-
     def close(self):
         if self._http:
             self._http.close()
-
-    def _is_cross_department(self, assigned_to: str) -> bool:
-        if not assigned_to or "-" not in assigned_to:
-            return False
-        prefix = assigned_to.split("-", 1)[0].strip()
-        return prefix in self._CROSS_DEPARTMENTS
-
-    def _get_department_filter(self, assigned_to: str) -> Optional[set]:
-        """根据指派人部门提取允许的分类名集合，None 表示不限制"""
-        if not assigned_to:
-            return None
-
-        # Jira 英文名部门映射
-        if self._jira_user_map_lower:
-            name_lower = assigned_to.strip().lower()
-            jira_info = self._jira_user_map_lower.get(name_lower)
-            if not jira_info:
-                # 姓名反转
-                parts = name_lower.split()
-                if len(parts) == 2:
-                    reversed_name = f"{parts[1]} {parts[0]}"
-                    jira_info = self._jira_user_map_lower.get(reversed_name)
-            if jira_info:
-                dept = jira_info.get("department", "")
-                if dept and dept in self._DEPARTMENT_CATEGORIES:
-                    cat_prefix = self._DEPARTMENT_CATEGORIES[dept]
-                    source = self._valid_categories or list(
-                        self._category_desc.keys())
-                    allowed = {cat for cat in source if cat.startswith(cat_prefix)}
-                    return allowed if allowed else None
-
-        # 禅道 "-" 前缀格式
-        if "-" not in assigned_to:
-            return None
-        prefix = assigned_to.split("-", 1)[0].strip()
-
-        if prefix in self._CROSS_DEPARTMENTS:
-            return None
-
-        cat_prefix = self._DEPARTMENT_CATEGORIES.get(prefix)
-        if not cat_prefix:
-            return None
-
-        # 从有效分类列表或分类描述中查找匹配的分类
-        source = self._valid_categories or list(self._category_desc.keys())
-        allowed = {cat for cat in source if cat.startswith(cat_prefix)}
-        return allowed if allowed else None
 
     # ── 分类入口 ─────────────────────────────────────────
 
@@ -709,7 +640,7 @@ class BugClassifier:
                  rule_fallback_fn: Callable = None) -> str:
         """对单条 Bug 进行分类
 
-        分类流程：TF-IDF 相似度 → LLM 分类 → LLM 审核 → 部门兜底
+        分类流程：TF-IDF 相似度 → LLM 分类 → LLM 审核 → 规则兜底
         返回分类名称字符串。永不抛异常，任何失败静默降级。
         """
         cache_key = self._cache_key(bug_title, bug_steps[:200], assigned_to)
@@ -717,14 +648,12 @@ class BugClassifier:
             if cache_key in self._cache:
                 return self._cache[cache_key]
 
-        dept_filter = self._get_department_filter(assigned_to)
-
         # ── 第一层：TF-IDF 相似度匹配 ──
-        if self._sim_classifier.enabled and self._sim_classifier.trained:
+        if self._sim_classifier.trained:
             try:
                 result = self._sim_classifier.classify(
                     bug_title, description=bug_steps)
-                if result and (dept_filter is None or result in dept_filter):
+                if result:
                     with self._cache_lock:
                         self._cache[cache_key] = result
                     return result
@@ -734,7 +663,7 @@ class BugClassifier:
         # ── 第二层：LLM 分类 ──
         if self._llm_enabled and self._api_key:
             result = self._llm_classify_single(
-                bug_title, bug_steps, bug_type, assigned_to, dept_filter)
+                bug_title, bug_steps, bug_type, assigned_to)
             if result:
                 with self._cache_lock:
                     self._cache[cache_key] = result
@@ -743,7 +672,7 @@ class BugClassifier:
         # ── 第三层：LLM 审核 ──
         if self._llm_enabled and self._api_key:
             result = self._llm_review(
-                bug_title, bug_steps, bug_type, assigned_to, dept_filter)
+                bug_title, bug_steps, bug_type, assigned_to)
             if result:
                 with self._cache_lock:
                     self._cache[cache_key] = result
@@ -769,17 +698,14 @@ class BugClassifier:
 
         # 第一层：TF-IDF 相似度匹配
         sim_count = 0
-        if self._sim_classifier.enabled and self._sim_classifier.trained:
+        if self._sim_classifier.trained:
             still_need = []
             for bug in need_llm:
-                dept_filter = self._get_department_filter(
-                    bug.get("assigned_to", ""))
                 try:
                     sim_result = self._sim_classifier.classify(
                         bug.get("title", ""),
                         description=bug.get("steps", ""))
-                    if sim_result and (dept_filter is None
-                                       or sim_result in dept_filter):
+                    if sim_result:
                         results[bug["id"]] = sim_result
                         sim_count += 1
                         ck = self._cache_key(
@@ -814,39 +740,11 @@ class BugClassifier:
 
     # ── 兜底分类 ─────────────────────────────────────────
 
-    _PREFIX_FALLBACK = {
-        "IOT": "IOT-其他问题",
-        "应用": "应用-其他问题",
-        "算法": "算法-其他问题",
-        "嵌入式": "嵌入式-其他问题",
-        "硬件": "硬件-其他问题",
-        "驱动": "驱动-驱动组问题",
-        "杂项": "杂项&模糊地带",
-    }
-
     def _fallback_category(self, bug_type: str, assigned_to: str,
                            rule_fallback_fn: Callable = None) -> str:
-        """TF-IDF 和 LLM 都未命中时，归到对应部门的"其他问题"分类"""
+        """TF-IDF 和 LLM 都未命中时，直接用 Bug 类型映射兜底（部门前缀兜底已移除）"""
         if rule_fallback_fn:
-            rule_result = rule_fallback_fn(bug_type, assigned_to)
-            for prefix, fallback_cat in self._PREFIX_FALLBACK.items():
-                if rule_result.startswith(prefix):
-                    if fallback_cat in self._valid_categories:
-                        return fallback_cat
-                    for cat in self._valid_categories:
-                        if cat.startswith(prefix) and "其他" in cat:
-                            return cat
-
-        if assigned_to and "-" in assigned_to:
-            prefix = assigned_to.split("-", 1)[0].strip()
-            for fb_prefix, fallback_cat in self._PREFIX_FALLBACK.items():
-                if prefix == fb_prefix or prefix.startswith(fb_prefix):
-                    if fallback_cat in self._valid_categories:
-                        return fallback_cat
-                    for cat in self._valid_categories:
-                        if cat.startswith(fb_prefix) and "其他" in cat:
-                            return cat
-
+            return rule_fallback_fn(bug_type, assigned_to)
         return "应用-其他问题"
 
     # ── LLM 单条分类 ────────────────────────────────────
@@ -863,17 +761,11 @@ class BugClassifier:
         return "\n".join(lines)
 
     def _llm_classify_single(self, bug_title: str, bug_steps: str,
-                             bug_type: str, assigned_to: str,
-                             dept_filter: Optional[set] = None) -> Optional[str]:
+                             bug_type: str, assigned_to: str) -> Optional[str]:
         if not self._valid_categories:
             return None
 
-        if dept_filter is not None:
-            valid = [c for c in self._valid_categories if c in dept_filter]
-            if not valid:
-                return None
-        else:
-            valid = self._valid_categories
+        valid = self._valid_categories
 
         type_name = BUG_TYPE_NAMES.get(bug_type, bug_type)
         categories_text = self._build_categories_prompt(valid)
@@ -913,19 +805,12 @@ class BugClassifier:
     # ── LLM 审核 ─────────────────────────────────────────
 
     def _llm_review(self, bug_title: str, bug_steps: str,
-                    bug_type: str, assigned_to: str,
-                    dept_filter: Optional[set] = None) -> Optional[str]:
+                    bug_type: str, assigned_to: str) -> Optional[str]:
         """LLM 审核：TF-IDF 和首次 LLM 都未命中时的最后 AI 尝试"""
         if not self._valid_categories:
             return None
 
-        if dept_filter is not None:
-            valid = [c for c in self._valid_categories if c in dept_filter]
-            if not valid:
-                return None
-        else:
-            valid = self._valid_categories
-
+        valid = self._valid_categories
         candidates = [c for c in valid if "其他" not in c and c != "未分类缺陷"]
         if not candidates:
             return None
@@ -979,77 +864,67 @@ class BugClassifier:
         if not self._valid_categories:
             return {}
         results: Dict[int, str] = {}
+        valid = self._valid_categories
+        categories_text = self._build_categories_prompt(valid)
 
-        groups: Dict[Optional[frozenset], list] = {}
-        for bug in bugs:
-            dept_filter = self._get_department_filter(
-                bug.get("assigned_to", ""))
-            key = frozenset(dept_filter) if dept_filter else None
-            groups.setdefault(key, []).append(bug)
+        for i in range(0, len(bugs), self._batch_size):
+            batch = bugs[i:i + self._batch_size]
+            bug_lines = []
+            has_english = False
+            for idx, bug in enumerate(batch, 1):
+                type_name = BUG_TYPE_NAMES.get(
+                    bug.get("type", ""), bug.get("type", ""))
+                steps = (bug.get("steps", "") or "")[:300]
+                title = bug.get("title", "")
+                if not is_mostly_chinese(title):
+                    has_english = True
+                bug_lines.append(
+                    f"{idx}. [标题: {title}, "
+                    f"描述: {steps}, "
+                    f"类型: {type_name}, "
+                    f"指派: {bug.get('assigned_to', '')}]"
+                )
 
-        for filter_key, group_bugs in groups.items():
-            valid = (list(filter_key) if filter_key is not None
-                     else self._valid_categories)
-            categories_text = self._build_categories_prompt(valid)
+            if has_english:
+                prompt = (
+                    "You are an expert classifier for robot vacuum cleaner software defects. "
+                    "Select the most appropriate category from the list for each bug.\n"
+                    "The categories are in Chinese - output the exact Chinese category name.\n\n"
+                    f"Available categories:\n{categories_text}\n\n"
+                    "Bug list:\n" + "\n".join(bug_lines) + "\n\n"
+                    "Output by number, one per line, category name only:\n"
+                    "1. CategoryName\n2. CategoryName"
+                )
+            else:
+                prompt = (
+                    "你是扫地机器人软件缺陷分类专家。根据Bug信息从分类列表中分别选择最合适的一个分类。\n\n"
+                    f"可用分类：\n{categories_text}\n\n"
+                    "Bug列表：\n" + "\n".join(bug_lines) + "\n\n"
+                    "按序号输出分类，每行一个，只输出分类名称。格式：\n"
+                    "1. 分类名称\n2. 分类名称"
+                )
 
-            for i in range(0, len(group_bugs), self._batch_size):
-                batch = group_bugs[i:i + self._batch_size]
-                bug_lines = []
-                has_english = False
-                for idx, bug in enumerate(batch, 1):
-                    type_name = BUG_TYPE_NAMES.get(
-                        bug.get("type", ""), bug.get("type", ""))
-                    steps = (bug.get("steps", "") or "")[:300]
-                    title = bug.get("title", "")
-                    if not is_mostly_chinese(title):
-                        has_english = True
-                    bug_lines.append(
-                        f"{idx}. [标题: {title}, "
-                        f"描述: {steps}, "
-                        f"类型: {type_name}, "
-                        f"指派: {bug.get('assigned_to', '')}]"
-                    )
+            content = self._call_llm_api(prompt)
+            if not content:
+                continue
 
-                if has_english:
-                    prompt = (
-                        "You are an expert classifier for robot vacuum cleaner software defects. "
-                        "Select the most appropriate category from the list for each bug.\n"
-                        "The categories are in Chinese - output the exact Chinese category name.\n\n"
-                        f"Available categories:\n{categories_text}\n\n"
-                        "Bug list:\n" + "\n".join(bug_lines) + "\n\n"
-                        "Output by number, one per line, category name only:\n"
-                        "1. CategoryName\n2. CategoryName"
-                    )
-                else:
-                    prompt = (
-                        "你是扫地机器人软件缺陷分类专家。根据Bug信息从分类列表中分别选择最合适的一个分类。\n\n"
-                        f"可用分类：\n{categories_text}\n\n"
-                        "Bug列表：\n" + "\n".join(bug_lines) + "\n\n"
-                        "按序号输出分类，每行一个，只输出分类名称。格式：\n"
-                        "1. 分类名称\n2. 分类名称"
-                    )
-
-                content = self._call_llm_api(prompt)
-                if not content:
+            for line in content.strip().splitlines():
+                line = line.strip()
+                if not line:
                     continue
-
-                for line in content.strip().splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    m = re.match(r'(\d+)\s*[.、)]\s*(.+)', line)
-                    if m:
-                        idx = int(m.group(1))
-                        cat = self._validate_category(m.group(2).strip(), valid)
-                        if cat and 1 <= idx <= len(batch):
-                            bug = batch[idx - 1]
-                            results[bug["id"]] = cat
-                            ck = self._cache_key(
-                                bug.get("title", ""),
-                                bug.get("steps", "")[:200],
-                                bug.get("assigned_to", ""))
-                            with self._cache_lock:
-                                self._cache[ck] = cat
+                m = re.match(r'(\d+)\s*[.、)]\s*(.+)', line)
+                if m:
+                    idx = int(m.group(1))
+                    cat = self._validate_category(m.group(2).strip(), valid)
+                    if cat and 1 <= idx <= len(batch):
+                        bug = batch[idx - 1]
+                        results[bug["id"]] = cat
+                        ck = self._cache_key(
+                            bug.get("title", ""),
+                            bug.get("steps", "")[:200],
+                            bug.get("assigned_to", ""))
+                        with self._cache_lock:
+                            self._cache[ck] = cat
 
         return results
 

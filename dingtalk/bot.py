@@ -127,16 +127,19 @@ class DingTalkBot:
     def send_sync_result(self, stats: SyncStats, elapsed: float,
                          title: str = "智能缺陷管理平台 同步结果",
                          dry_run: bool = False,
-                         project_name: str = "") -> bool:
+                         project_name: str = "",
+                         source_name: str = "") -> bool:
         """将同步统计格式化为 Markdown 消息发送"""
-        text = self.format_sync_result(stats, elapsed, title, dry_run, project_name)
+        text = self.format_sync_result(stats, elapsed, title, dry_run,
+                                       project_name, source_name)
         return self.send_markdown(title, text)
 
     @staticmethod
     def format_sync_result(stats, elapsed: float,
                            title: str = "智能缺陷管理平台 同步结果",
                            dry_run: bool = False,
-                           project_name: str = "") -> str:
+                           project_name: str = "",
+                           source_name: str = "") -> str:
         """格式化同步结果为 Markdown 文本（供 send 和 reply 共用）"""
         mode = "【试运行】" if dry_run else ""
         minutes, seconds = divmod(int(elapsed), 60)
@@ -148,6 +151,8 @@ class DingTalkBot:
             "| 指标 | 数值 |",
             "| --- | --- |",
         ]
+        if source_name:
+            lines.append(f"| 源平台 | {source_name} |")
         if project_name:
             lines.append(f"| TB所属项目 | {project_name} |")
         lines.extend([
@@ -245,7 +250,8 @@ class DingTalkBot:
     def reply_sync_result(webhook_url: str, stats, elapsed: float,
                           title: str = "智能缺陷管理平台 同步结果",
                           dry_run: bool = False, secret: str = "",
-                          project_name: str = "") -> bool:
+                          project_name: str = "", source_name: str = "") -> bool:
         """通过 sessionWebhook 发送同步结果 Markdown 回复"""
-        text = DingTalkBot.format_sync_result(stats, elapsed, title, dry_run, project_name)
+        text = DingTalkBot.format_sync_result(stats, elapsed, title, dry_run,
+                                              project_name, source_name)
         return DingTalkBot.reply_markdown(webhook_url, title, text, secret)

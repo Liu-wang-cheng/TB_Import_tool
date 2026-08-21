@@ -3,6 +3,7 @@
 import datetime
 import logging
 import os
+import re
 import sys
 
 import yaml
@@ -55,7 +56,8 @@ class MainWindow(QMainWindow):
         _icon_path = os.path.join(_base, "gui", "resources", "icon.ico")
         if os.path.exists(_icon_path):
             self.setWindowIcon(QIcon(_icon_path))
-        self.resize(880, 680)
+        self.resize(900, 760)
+        self.setMinimumSize(820, 720)
 
         # 窗口居中
         screen = QApplication.primaryScreen()
@@ -140,7 +142,7 @@ class MainWindow(QMainWindow):
         platform_row = QHBoxLayout()
         platform_row.addWidget(QLabel("源平台:"))
         self.filter_platform = QComboBox()
-        self.filter_platform.addItems(["禅道", "Jira"])
+        self.filter_platform.addItems(["禅道", "外部TB"])
         self.filter_platform.setMaximumWidth(120)
         self.filter_platform.currentIndexChanged.connect(self._on_platform_changed)
         platform_row.addWidget(self.filter_platform)
@@ -175,7 +177,8 @@ class MainWindow(QMainWindow):
 
         # 第一行：产品ID、禅道项目ID(模块)
         row1 = QHBoxLayout()
-        row1.addWidget(QLabel("产品ID:"))
+        self.lbl_product = QLabel("产品ID:")
+        row1.addWidget(self.lbl_product)
         self.filter_product = QLineEdit()
         self.filter_product.setPlaceholderText("数字ID")
         self.filter_product.setMaximumWidth(100)
@@ -185,7 +188,7 @@ class MainWindow(QMainWindow):
         row1.addWidget(self.lbl_module)
         self.filter_module = QLineEdit()
         self.filter_module.setPlaceholderText("数字ID")
-        self.filter_module.setMaximumWidth(80)
+        self.filter_module.setMaximumWidth(220)
         row1.addWidget(self.filter_module)
 
         # 状态：固定三个选项，对应 status_code 动态获取
@@ -201,7 +204,8 @@ class MainWindow(QMainWindow):
             "激活+已关闭": ["active", "confirmed", "closed", "resolved"],
         }
 
-        row1.addWidget(QLabel("状态:"))
+        self.lbl_status = QLabel("状态:")
+        row1.addWidget(self.lbl_status)
         self.filter_status = QComboBox()
         self.filter_status.addItems(list(self._status_code_map.keys()))
         self.filter_status.setCurrentIndex(0)  # 默认 "激活"
@@ -388,12 +392,12 @@ class MainWindow(QMainWindow):
 
         self.btn_sync = QPushButton("正式同步")
         self.btn_sync.setObjectName("btnSync")
-        self.btn_sync.setToolTip("正式同步Bug到Teambition")
+        self.btn_sync.setToolTip("正式同步缺陷到Teambition")
         self.btn_sync.clicked.connect(self._on_full_sync)
 
         self.btn_test = QPushButton("连接测试")
         self.btn_test.setObjectName("btnTest")
-        self.btn_test.setToolTip("测试禅道和Teambition连接是否正常")
+        self.btn_test.setToolTip("测试源平台和Teambition连接是否正常")
         self.btn_test.clicked.connect(self._on_test_auth)
 
         self.btn_config = QPushButton("配置")
@@ -456,13 +460,12 @@ class MainWindow(QMainWindow):
         schedule_row.setSpacing(12)
 
         self.chk_scheduled = QCheckBox("启用定时同步")
-        self.chk_scheduled.setToolTip("每天到指定时间自动执行导入同步")
+        self.chk_scheduled.setToolTip("每周指定日期到点自动执行导入同步")
         self.chk_scheduled.stateChanged.connect(self._on_scheduled_switch_changed)
 
-        self.lbl_schedule_time = QLabel("每天")
         self.time_schedule = QTimeEdit()
         self.time_schedule.setDisplayFormat("HH:mm")
-        self.time_schedule.setToolTip("设定每天自动同步的时间点")
+        self.time_schedule.setToolTip("设定自动同步的时间点")
         self.time_schedule.setEnabled(False)
         self.time_schedule.timeChanged.connect(self._save_scheduled_config)
 
@@ -472,11 +475,29 @@ class MainWindow(QMainWindow):
         self.chk_scheduled_notify.stateChanged.connect(lambda: self._save_scheduled_config())
 
         schedule_row.addWidget(self.chk_scheduled)
-        schedule_row.addWidget(self.lbl_schedule_time)
         schedule_row.addWidget(self.time_schedule)
         schedule_row.addWidget(self.chk_scheduled_notify)
         schedule_row.addStretch()
         layout.addLayout(schedule_row)
+
+        # 同步周期：每天 / 每周（周几选择，1=周一 ... 7=周日）
+        weekday_row = QHBoxLayout()
+        weekday_row.setSpacing(8)
+        self.lbl_schedule_days = QLabel("同步周期:")
+        weekday_row.addWidget(self.lbl_schedule_days)
+        self.cmb_schedule_mode = QComboBox()
+        self.cmb_schedule_mode.addItems(["每天", "每周"])
+        self.cmb_schedule_mode.currentIndexChanged.connect(self._on_schedule_mode_changed)
+        weekday_row.addWidget(self.cmb_schedule_mode)
+        self.chk_weekdays = []
+        for name in ("周一", "周二", "周三", "周四", "周五", "周六", "周日"):
+            chk = QCheckBox(name)
+            chk.setEnabled(False)
+            chk.stateChanged.connect(lambda _=0: self._save_scheduled_config())
+            self.chk_weekdays.append(chk)
+            weekday_row.addWidget(chk)
+        weekday_row.addStretch()
+        layout.addLayout(weekday_row)
 
         return layout
 
@@ -516,7 +537,7 @@ class MainWindow(QMainWindow):
             # 状态栏显示当前平台链路
             source_cfg = self.config.get("source", {})
             platform = source_cfg.get("platform", "zentao")
-            platform_name = "Jira" if platform == "jira" else "禅道"
+            platform_name = {"teambition": "外部TB"}.get(platform, "禅道")
             self.status_label.setText(f"源: {platform_name} → 目标: Teambition")
         except FileNotFoundError as e:
             self.status_label.setText(f"配置未找到: {e}")
@@ -682,10 +703,10 @@ class MainWindow(QMainWindow):
         self.status_label.setText(" | ".join(parts))
 
     def _init_dingtalk(self):
-        """根据配置初始化钉钉机器人"""
+        """根据配置初始化钉钉机器人（强制启用，只要有 webhook 就发送）"""
         self._dingtalk_bot = None
         dt_cfg = self.config.get("dingtalk", {})
-        if dt_cfg.get("enabled") and dt_cfg.get("webhook_url"):
+        if dt_cfg.get("webhook_url"):
             try:
                 self._dingtalk_bot = DingTalkBot(
                     webhook_url=dt_cfg["webhook_url"],
@@ -754,39 +775,69 @@ class MainWindow(QMainWindow):
 
     def _on_platform_changed(self, index: int):
         """源平台切换时更新界面标签、提示文字、字段值"""
-        is_zentao = (index == 0)
-        platform = "禅道" if is_zentao else "Jira"
+        platform_map = {0: "禅道", 1: "外部TB"}
+        platform = platform_map.get(index, "禅道")
+        is_teambition = (index == 1)
 
         self.source_group.setTitle(f"{platform}配置")
-        self.lbl_url.setText("禅道Bug页面地址:" if is_zentao else "Jira筛选器URL:")
-        self.filter_url.setPlaceholderText(
-            "粘贴禅道Bug列表页地址，自动解析产品ID和模块，"
-            "如 https://zentao.xxx.com/zentao/bug-browse-11--byModule-122.html"
-            if is_zentao else
-            "粘贴Jira筛选器URL，如 https://jira.xxx.com/issues/?filter=12345"
-        )
-        self.btn_parse_url.setToolTip(
-            "解析URL中的产品ID、项目ID和模块" if is_zentao else "解析Jira筛选器参数"
-        )
-        self.btn_list.setText("列出Bug" if is_zentao else "列出Issue")
-        self.btn_list.setToolTip(
-            f"获取{platform}Bug列表（不需要Teambition认证）" if is_zentao
-            else f"获取{platform}Issue列表（暂未适配）"
-        )
-        self.lbl_module.setText("禅道项目ID:" if is_zentao else "Jira组件:")
-        self.filter_module.setPlaceholderText("数字ID" if is_zentao else "如 Backend")
-        self.edit_zentao_base_url.setPlaceholderText(
-            "https://zentao.xxx.com/zentao" if is_zentao else "https://jira.xxx.com"
-        )
-        self.edit_zentao_account.setPlaceholderText(
-            "禅道登录账号" if is_zentao else "Jira用户名"
-        )
-        self.edit_zentao_password.setPlaceholderText(
-            "密码" if is_zentao else "API Token"
-        )
+        if is_teambition:
+            self.lbl_url.setText("外部TB缺陷列表地址:")
+            self.filter_url.setPlaceholderText(
+                "粘贴外部TB缺陷列表网址，自动解析项目ID，"
+                "如 https://www.teambition.com/project/xxx/bug/section/all"
+            )
+            self.btn_parse_url.setToolTip("解析外部TB网址中的项目ID")
+            self.btn_list.setText("列出缺陷")
+            self.btn_list.setToolTip("获取外部TB缺陷列表")
+            self.lbl_module.setText("项目ID:")
+            self.filter_module.setPlaceholderText("从网址自动解析")
+            self.edit_zentao_base_url.setPlaceholderText(
+                "https://www.teambition.com")
+            self.edit_zentao_account.setPlaceholderText("外部TB登录账号（手机号/邮箱）")
+            self.edit_zentao_password.setPlaceholderText("密码（留空则扫码登录）")
+            # 隐藏产品ID（禅道专属）；状态、指派人保留
+            self.lbl_product.setVisible(False)
+            self.filter_product.setVisible(False)
+            self.lbl_status.setVisible(True)
+            self.filter_status.setVisible(True)
+            # 状态选项与禅道一致（激活/已关闭/激活+已关闭）
+            self.filter_status.blockSignals(True)
+            self.filter_status.clear()
+            self.filter_status.addItems(list(self._status_code_map.keys()))
+            self.filter_status.setCurrentIndex(0)
+            self.filter_status.blockSignals(False)
+        else:
+            self.lbl_url.setText("禅道Bug页面地址:")
+            self.lbl_product.setVisible(True)
+            self.filter_product.setVisible(True)
+            self.lbl_status.setVisible(True)
+            self.filter_status.setVisible(True)
+            # 恢复禅道状态选项
+            self.filter_status.blockSignals(True)
+            self.filter_status.clear()
+            self.filter_status.addItems(list(self._status_code_map.keys()))
+            self.filter_status.setCurrentIndex(0)
+            self.filter_status.blockSignals(False)
+            self.filter_url.setPlaceholderText(
+                "粘贴禅道Bug列表页地址，自动解析产品ID和模块，"
+                "如 https://zentao.xxx.com/zentao/bug-browse-11--byModule-122.html"
+            )
+            self.btn_parse_url.setToolTip("解析URL中的产品ID、项目ID和模块")
+            self.btn_list.setText("列出Bug")
+            self.btn_list.setToolTip(f"获取{platform}Bug列表（不需要Teambition认证）")
+            self.lbl_module.setText("禅道项目ID:")
+            self.filter_module.setPlaceholderText("数字ID")
+            self.edit_zentao_base_url.setPlaceholderText("https://zentao.xxx.com/zentao")
+            self.edit_zentao_account.setPlaceholderText("禅道登录账号")
+            self.edit_zentao_password.setPlaceholderText("密码")
 
         # ── 保存当前平台字段值到 config ──
         old_platform = self._last_platform
+        # 先保存指派人勾选状态，避免 _load_assignee_list 重建列表时丢失。
+        # 仅真正的平台切换时收集；首次加载 old_platform 为 None，filter_assigned 尚未加载，
+        # 此时收集会清空从 assignee.yaml 读到的勾选状态。
+        if old_platform is not None:
+            self._collect_assignee_selection()
         if old_platform == "zentao":
             zt_cfg = self.config.setdefault("zentao", {})
             zt_cfg["base_url"] = self.edit_zentao_base_url.text().strip()
@@ -795,17 +846,16 @@ class MainWindow(QMainWindow):
             filters = zt_cfg.setdefault("filters", {})
             filters["product"] = self.filter_product.text().strip() or None
             filters["module_filter"] = self.filter_module.text().strip() or None
-        elif old_platform == "jira":
-            jira_cfg = self.config.setdefault("jira", {})
-            jira_cfg["base_url"] = self.edit_zentao_base_url.text().strip()
-            jira_cfg["username"] = self.edit_zentao_account.text().strip()
-            jira_cfg["api_token"] = self.edit_zentao_password.text().strip()
-            jira_cfg["project_key"] = self.filter_product.text().strip() or None
-            jira_cfg["jql"] = self.filter_module.text().strip() or None
-        self._last_platform = "zentao" if is_zentao else "jira"
+        elif old_platform == "teambition":
+            tb_src_cfg = self.config.setdefault("teambition_source", {})
+            tb_src_cfg["url"] = self.filter_url.text().strip()
+            tb_src_cfg["account"] = self.edit_zentao_account.text().strip()
+            tb_src_cfg["password"] = self.edit_zentao_password.text().strip()
+            tb_src_cfg["project_id"] = self.filter_module.text().strip()
+        self._last_platform = "zentao" if not is_teambition else "teambition"
 
         # ── 加载目标平台字段值 ──
-        if is_zentao:
+        if not is_teambition:
             zt_cfg = self.config.get("zentao", {})
             filters = zt_cfg.get("filters", {})
             self.edit_zentao_base_url.setText(zt_cfg.get("base_url", ""))
@@ -819,40 +869,8 @@ class MainWindow(QMainWindow):
             # 用户要求 GUI 状态始终默认为"激活"
             self.filter_status.setCurrentIndex(0)
 
-            # 加载指派人列表
-            def _valid_assignee(name):
-                return (name and isinstance(name, str)
-                        and name.strip() and not name.startswith("null-")
-                        and name != "null")
-
-            def _to_filtered_list(raw, fallback):
-                if raw is None:
-                    raw = fallback
-                if isinstance(raw, str):
-                    raw = [raw]
-                if not isinstance(raw, list):
-                    return []
-                return [n for n in raw if _valid_assignee(n)]
-
-            assigned_checked = _to_filtered_list(
-                filters.get("assigned_to"), [])
-            assigned_known = _to_filtered_list(
-                filters.get("assigned_to_known"), assigned_checked)
-            merged = list(assigned_known)
-            for name in assigned_checked:
-                if name not in merged:
-                    merged.append(name)
-            checked_set = set(assigned_checked)
-
-            self.filter_assigned.blockSignals(True)
-            self.filter_assigned.clear()
-            for name in merged:
-                item = QListWidgetItem(name)
-                item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
-                item.setCheckState(Qt.Checked if name in checked_set else Qt.Unchecked)
-                self.filter_assigned.addItem(item)
-            self.filter_assigned.blockSignals(False)
-            self._update_toggle_btn_text()
+            # 加载指派人列表（公用 assignee.yaml，外部 TB 和禅道共用）
+            self._load_assignee_list(self.config.get("assignee", {}))
 
             # 恢复日期筛选状态
             date_from = filters.get("date_from")
@@ -875,25 +893,90 @@ class MainWindow(QMainWindow):
                         getattr(self, f"filter_{attr}").setDate(qd)
             self._on_date_mode_changed(1 if has_date else 0)
         else:
-            jira_cfg = self.config.get("jira", {})
-            self.edit_zentao_base_url.setText(jira_cfg.get("base_url", ""))
-            self.edit_zentao_account.setText(jira_cfg.get("username", ""))
-            self.edit_zentao_password.setText(jira_cfg.get("api_token", ""))
-            self.filter_product.setText(jira_cfg.get("project_key", ""))
-            self.filter_module.setText(jira_cfg.get("jql", ""))
-            self.filter_url.clear()
-            self.filter_assigned.clear()
+            # 外部 TB：加载 url/账号/密码 + 项目ID + 指派人（从 teambition_source 读）
+            tb_src_cfg = self.config.get("teambition_source", {})
+            tb_src_filters = tb_src_cfg.get("filters", {})
+            self.edit_zentao_base_url.setText("")
+            # account 可能是纯数字被 YAML 解析成 int，统一转 str
+            self.edit_zentao_account.setText(
+                str(tb_src_cfg.get("account", "") or ""))
+            self.edit_zentao_password.setText(
+                str(tb_src_cfg.get("password", "") or ""))
+            self.filter_product.setText("")
+            # 项目 ID：从 teambition_source.project_id 读（网址解析后保存）
+            self.filter_module.setText(
+                str(tb_src_cfg.get("project_id", "") or ""))
+            self.filter_url.setText(str(tb_src_cfg.get("url", "") or ""))
+            # 指派人：从公用 assignee.yaml 加载（外部 TB 和禅道共用）
+            self._load_assignee_list(self.config.get("assignee", {}))
 
         # 平台切换后持久化到 YAML，避免异常退出时丢失
         if old_platform is not None and old_platform != self._last_platform:
             self._save_config_to_yaml()
+
+    def _load_assignee_list(self, filters: dict):
+        """从 filters 加载指派人列表到 filter_assigned（禅道/外部TB 共用）"""
+        def _valid_assignee(name):
+            return (name and isinstance(name, str)
+                    and name.strip() and not name.startswith("null-")
+                    and name != "null")
+
+        def _to_filtered_list(raw, fallback):
+            if raw is None:
+                raw = fallback
+            if isinstance(raw, str):
+                raw = [raw]
+            if not isinstance(raw, list):
+                return []
+            return [n for n in raw if _valid_assignee(n)]
+
+        assigned_checked = _to_filtered_list(filters.get("assigned_to"), [])
+        assigned_known = _to_filtered_list(
+            filters.get("assigned_to_known"), assigned_checked)
+        merged = list(assigned_known)
+        for name in assigned_checked:
+            if name not in merged:
+                merged.append(name)
+        checked_set = set(assigned_checked)
+
+        self.filter_assigned.blockSignals(True)
+        self.filter_assigned.clear()
+        seen = set()
+        for name in merged:
+            # 指派人配置里就是最终名字（如 "乐动开发-343"），不去前缀，同名去重
+            display_name = name
+            if display_name in seen:
+                continue
+            seen.add(display_name)
+            item = QListWidgetItem(display_name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
+            item.setCheckState(Qt.Checked if name in checked_set else Qt.Unchecked)
+            self.filter_assigned.addItem(item)
+        self.filter_assigned.blockSignals(False)
+        self._update_toggle_btn_text()
+
+    def _collect_assignee_selection(self):
+        """从 filter_assigned 收集勾选状态，写入 config["assignee"]（不重建列表）"""
+        checked_assigned = []
+        all_assigned = []
+        for i in range(self.filter_assigned.count()):
+            item = self.filter_assigned.item(i)
+            text = item.text()
+            if not text or text == "null" or text.startswith("null-"):
+                continue
+            all_assigned.append(text)
+            if item.checkState() == Qt.Checked:
+                checked_assigned.append(text)
+        assignee_cfg = self.config.setdefault("assignee", {})
+        assignee_cfg["assigned_to"] = checked_assigned if checked_assigned else None
+        assignee_cfg["assigned_to_known"] = all_assigned if all_assigned else None
 
     def _populate_filters(self):
         """从配置文件填充筛选面板"""
         # 源平台
         source_cfg = self.config.get("source", {})
         platform = source_cfg.get("platform", "zentao")
-        platform_idx = 1 if platform == "jira" else 0
+        platform_idx = {"teambition": 1}.get(platform, 0)
         self.filter_platform.blockSignals(True)
         self.filter_platform.setCurrentIndex(platform_idx)
         self.filter_platform.blockSignals(False)
@@ -922,9 +1005,9 @@ class MainWindow(QMainWindow):
     def _apply_filters_to_config(self):
         """将筛选面板的值写回 config dict"""
         platform_idx = self.filter_platform.currentIndex()
-        is_zentao = (platform_idx == 0)
+        is_teambition = (platform_idx == 1)
 
-        if is_zentao:
+        if not is_teambition:
             zt_cfg = self.config.setdefault("zentao", {})
             zt_cfg["base_url"] = self.edit_zentao_base_url.text().strip()
             filters = zt_cfg.setdefault("filters", {})
@@ -950,20 +1033,6 @@ class MainWindow(QMainWindow):
             else:
                 filters["statuses"] = None
 
-            checked_assigned = []
-            all_assigned = []
-            for i in range(self.filter_assigned.count()):
-                text = self.filter_assigned.item(i).text()
-                # 过滤无效条目（None序列化残留、空字符串、null- 前缀等）
-                if not text or text == "null" or text.startswith("null-"):
-                    continue
-                all_assigned.append(text)
-                if self.filter_assigned.item(i).checkState() == Qt.Checked:
-                    checked_assigned.append(text)
-            filters["assigned_to"] = checked_assigned if checked_assigned else None
-            # 完整列表（含未勾选项），用于 resolve_assigned_to 做后缀歧义检测
-            filters["assigned_to_known"] = all_assigned if all_assigned else None
-
             if self.filter_date_mode.currentIndex() == 1:  # 指定时间段
                 date_from = self.filter_date_from.date()
                 if date_from.year() > 2000:
@@ -985,17 +1054,33 @@ class MainWindow(QMainWindow):
             zt_cfg["account"] = self.edit_zentao_account.text().strip()
             zt_cfg["password"] = self.edit_zentao_password.text().strip()
         else:
-            # 保存Jira筛选条件和凭证
-            jira_cfg = self.config.setdefault("jira", {})
-            jira_cfg["project_key"] = self.filter_product.text().strip() or None
-            jira_cfg["jql"] = self.filter_module.text().strip() or None
-            jira_cfg["base_url"] = self.edit_zentao_base_url.text().strip()
-            jira_cfg["username"] = self.edit_zentao_account.text().strip()
-            jira_cfg["api_token"] = self.edit_zentao_password.text().strip()
+            # 保存外部 TB 凭证（url + 账号密码）+ 状态筛选
+            tb_src_cfg = self.config.setdefault("teambition_source", {})
+            tb_src_cfg["url"] = self.filter_url.text().strip()
+            tb_src_cfg["account"] = self.edit_zentao_account.text().strip()
+            tb_src_cfg["password"] = self.edit_zentao_password.text().strip()
+            tb_src_filters = tb_src_cfg.setdefault("filters", {})
+            status_text = self.filter_status.currentText().strip()
+            sync_cfg = self.config.setdefault("sync", {})
+            if status_text == "已关闭":
+                # 只处理已关闭（关闭同步）
+                tb_src_filters["statuses"] = None
+                sync_cfg["sync_closed_status"] = True
+            elif status_text == "激活":
+                # 只处理激活（未完成）
+                tb_src_filters["statuses"] = ["待处理", "重新打开"]
+                sync_cfg["sync_closed_status"] = False
+            else:  # 激活+已关闭
+                tb_src_filters["statuses"] = ["待处理", "重新打开"]
+                sync_cfg["sync_closed_status"] = True
+
+        # 指派人：统一收集（去前缀）写入公用 assignee 配置
+        self._collect_assignee_selection()
 
         # 源平台写回 config（只存平台类型）
         source_cfg = self.config.setdefault("source", {})
-        source_cfg["platform"] = "jira" if platform_idx == 1 else "zentao"
+        source_cfg["platform"] = {1: "teambition"}.get(
+            platform_idx, "zentao")
 
         # TB 配置（与源平台无关）
         tb_cfg = self.config.setdefault("teambition", {})
@@ -1041,8 +1126,6 @@ class MainWindow(QMainWindow):
                 "filters.project": zt_filters.get("project"),
                 "filters.module_filter": zt_filters.get("module_filter"),
                 "filters.statuses": zt_filters.get("statuses"),
-                "filters.assigned_to": zt_filters.get("assigned_to"),
-                "filters.assigned_to_known": zt_filters.get("assigned_to_known"),
                 "filters.date_from": zt_filters.get("date_from"),
                 "filters.date_to": zt_filters.get("date_to"),
                 "filters.branch": zt_filters.get("branch"),
@@ -1058,6 +1141,29 @@ class MainWindow(QMainWindow):
                 "api_token": jira_cfg.get("api_token"),
                 "project_key": jira_cfg.get("project_key"),
                 "jql": jira_cfg.get("jql"),
+            })
+
+        # 保存外部 TB 源配置（独立文件）
+        tb_src_cfg = self.config.get("teambition_source", {})
+        tb_src_path = os.path.join(cfg_dir, "teambition_source.yaml")
+        if os.path.exists(tb_src_path):
+            update_yaml_values(tb_src_path, {
+                "url": tb_src_cfg.get("url"),
+                "base_url": tb_src_cfg.get("base_url"),
+                "project_id": tb_src_cfg.get("project_id"),
+                "account": tb_src_cfg.get("account"),
+                "password": tb_src_cfg.get("password"),
+                "filters.statuses": tb_src_cfg.get("filters", {}).get("statuses"),
+                "filters.closed_statuses": tb_src_cfg.get("filters", {}).get("closed_statuses"),
+            })
+
+        # 保存指派人公用配置（独立文件，外部 TB 和禅道共用）
+        assignee_cfg = self.config.get("assignee", {})
+        assignee_path = os.path.join(cfg_dir, "assignee.yaml")
+        if os.path.exists(assignee_path):
+            update_yaml_values(assignee_path, {
+                "assigned_to": assignee_cfg.get("assigned_to"),
+                "assigned_to_known": assignee_cfg.get("assigned_to_known"),
             })
 
         # 保存 Teambition 配置
@@ -1081,11 +1187,13 @@ class MainWindow(QMainWindow):
         """添加指派人条目"""
         from gui.qt_compat import QInputDialog
         name, ok = QInputDialog.getText(
-            self, "添加指派人", "输入指派人（如 IOT-陈斌、应用-罗林旺）:"
+            self, "添加指派人", "输入指派人（如 陈斌、罗林旺）:"
         )
         if ok and name.strip():
+            # 去掉部门前缀，只存名字
+            clean = name.strip().split("-", 1)[-1].strip()
             self.filter_assigned.blockSignals(True)
-            item = QListWidgetItem(name.strip())
+            item = QListWidgetItem(clean)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
             item.setCheckState(Qt.Checked)
             self.filter_assigned.addItem(item)
@@ -1241,9 +1349,35 @@ class MainWindow(QMainWindow):
         self.filter_date_to.setVisible(show)
 
     def _on_parse_url(self):
-        """解析禅道 Bug 页面 URL，自动填充产品ID、项目ID、模块名称"""
+        """解析源平台 URL：禅道解析产品/模块ID，外部 TB 解析项目 ID"""
         url = self.filter_url.text().strip()
         if not url:
+            return
+
+        # 外部 TB 源：解析服务器地址 + 项目 ID（/project/{pid}/）
+        if self.filter_platform.currentIndex() == 1:
+            m = re.search(r'/project/([0-9a-f]{24})', url)
+            if m:
+                tb_src = self.config.setdefault("teambition_source", {})
+                tb_src["url"] = url
+                tb_src["project_id"] = m.group(1)
+                # 解析服务器地址（域名部分，如 https://www.teambition.com）
+                m2 = re.match(r'(https?://[^/]+)', url)
+                if m2:
+                    tb_src["base_url"] = m2.group(1)
+                    self.edit_zentao_base_url.setText(m2.group(1))
+                self.filter_module.setText(m.group(1))
+                self.status_label.setText(
+                    f"已解析外部TB项目ID: {m.group(1)}")
+                self._save_config_to_yaml()
+                return
+            self.status_label.setText("未能识别外部TB网址格式")
+            QMessageBox.information(
+                self, "解析结果",
+                "无法从该网址解析出外部TB项目 ID。\n\n"
+                "支持的格式：\n"
+                "  https://www.teambition.com/project/{项目ID}/bug/section/all"
+            )
             return
 
         parsed = parse_zentao_url(url)
@@ -1351,9 +1485,9 @@ class MainWindow(QMainWindow):
                 open_codes = groups.get("open", ["active", "confirmed"])
                 closed_codes = groups.get("closed", ["resolved", "closed"])
                 self._status_code_map = {
-                    "激活+已关闭": list(open_codes) + list(closed_codes),
                     "激活": list(open_codes),
                     "已关闭": list(closed_codes),
+                    "激活+已关闭": list(open_codes) + list(closed_codes),
                 }
                 logger.info("动态加载状态码分组: %s", self._status_code_map)
         except Exception as e:
@@ -1465,20 +1599,48 @@ class MainWindow(QMainWindow):
         self.chk_scheduled_notify.setEnabled(enabled)
         if scheduled.get("notify", True):
             self.chk_scheduled_notify.setChecked(True)
+        # 同步周期：每天 / 每周
+        mode = scheduled.get("mode", "daily")
+        self.cmb_schedule_mode.setCurrentIndex(0 if mode == "daily" else 1)
+        # 每周同步日（1=周一 ... 7=周日），默认工作日
+        days = scheduled.get("days", [])
+        if not days:
+            days = [1, 2, 3, 4, 5]
+        for i, chk in enumerate(self.chk_weekdays, start=1):
+            chk.setChecked(i in days)
+        self._update_weekday_enabled()
 
     def _on_scheduled_switch_changed(self):
-        """开关状态变化：联动时间选择器 + 持久化"""
+        """开关状态变化：联动时间选择器 + 每周同步日 + 持久化"""
         enabled = self.chk_scheduled.isChecked()
         self.time_schedule.setEnabled(enabled)
         self.chk_scheduled_notify.setEnabled(enabled)
+        self._update_weekday_enabled()
+        self._save_scheduled_config()
+
+    def _update_weekday_enabled(self):
+        """根据启用开关和同步周期，更新星期选择的可用状态"""
+        enabled = self.chk_scheduled.isChecked()
+        weekly = self.cmb_schedule_mode.currentIndex() == 1
+        for chk in self.chk_weekdays:
+            chk.setEnabled(enabled and weekly)
+
+    def _on_schedule_mode_changed(self):
+        """同步周期切换：每周模式启用星期选择，每天模式禁用"""
+        self._update_weekday_enabled()
         self._save_scheduled_config()
 
     def _save_scheduled_config(self):
         """持久化定时同步配置到 sync.yaml"""
+        mode = "daily" if self.cmb_schedule_mode.currentIndex() == 0 else "weekly"
+        days = [i for i, chk in enumerate(self.chk_weekdays, start=1)
+                if chk.isChecked()]
         scheduled = {
             "enabled": self.chk_scheduled.isChecked(),
             "time": self.time_schedule.time().toString("HH:mm"),
             "notify": self.chk_scheduled_notify.isChecked(),
+            "mode": mode,
+            "days": days,
         }
         if "sync" not in self.config:
             self.config["sync"] = {}
@@ -1491,9 +1653,16 @@ class MainWindow(QMainWindow):
             logger.warning("保存定时同步配置失败: %s", e)
 
     def _check_scheduled_sync(self):
-        """每分钟检查一次：是否到时间触发定时同步"""
+        """每分钟检查一次：是否到设定日期和时间触发定时同步"""
         if not self.chk_scheduled.isChecked():
             return
+        # 每周模式：检查今天是否在设定的同步日里（1=周一 ... 7=周日）
+        if self.cmb_schedule_mode.currentIndex() == 1:
+            today_dow = QDate.currentDate().dayOfWeek()
+            checked_days = [i for i, chk in enumerate(self.chk_weekdays, start=1)
+                            if chk.isChecked()]
+            if today_dow not in checked_days:
+                return
         target_time = self.time_schedule.time()
         now = QTime.currentTime()
         if now.hour() == target_time.hour() and now.minute() == target_time.minute():

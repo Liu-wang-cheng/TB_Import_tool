@@ -38,6 +38,8 @@ class ZentaoBug:
     snCode: str = ""
     frequency: str = ""
     files: list = field(default_factory=list)
+    # 外部 TB 源的专属任务编号（如 "323A-24"），用于去重标签
+    task_id: str = ""
 
     def get_base_title(self) -> str:
         title = self.title

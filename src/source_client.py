@@ -21,7 +21,7 @@ class SourceClient(Protocol):
     ZentaoAdapter 可直接透传底层 ZentaoClient，无需字段重命名。
     """
 
-    source_type: str  # "zentao" | "jira"
+    source_type: str  # "zentao" | "jira" | "teambition"
     account: str
 
     def authenticate(self) -> None:
