@@ -318,6 +318,59 @@ class TestApplyModuleFilterDigitWithSet:
         assert [b.id for b in result] == [1, 2]
 
 
+class TestCloseSyncModuleFilter:
+    """关闭同步的数字模块ID也走递归后代集合"""
+
+    def _make_engine(self, source, teambition):
+        engine = SyncEngine.__new__(SyncEngine)
+        engine.sync_closed_status = "closed"
+        engine.source_type = "zentao"
+        engine.module_filter = "123"
+        engine.source = source
+        engine.teambition = teambition
+        engine.config = {"zentao": {"filters": {"product": 11}}}
+        engine.dingtalk_bot = None
+        return engine
+
+    def test_close_sync_digit_uses_descendant_set(self):
+        source = Mock()
+        source.source_type = "zentao"
+        source.resolve_module_descendant_ids = Mock(return_value={"123", "136"})
+        b1 = ZentaoBug(id=1, title="【VLNS-100】a", module="136")
+        b2 = ZentaoBug(id=2, title="【VLNS-101】b", module="999")
+        source.fetch_all_bugs.return_value = [b1, b2]
+        teambition = Mock()
+        teambition.get_task_by_identifier.return_value = None
+        teambition.search_tasks.return_value = []
+        engine = self._make_engine(source, teambition)
+        stats = SyncStats()
+
+        engine._run_close_sync_phase(stats, False)
+
+        # 走递归解析而非精确匹配
+        source.resolve_module_descendant_ids.assert_called_once_with(11, "123")
+        # 模块999的bug被递归集合滤掉，只处理模块136那条
+        assert teambition.get_task_by_identifier.call_count == 1
+
+    def test_close_sync_fallback_exact_when_tree_unavailable(self):
+        source = Mock()
+        source.source_type = "zentao"
+        source.resolve_module_descendant_ids = Mock(return_value=None)
+        b1 = ZentaoBug(id=1, title="【VLNS-100】a", module="123")
+        b2 = ZentaoBug(id=2, title="【VLNS-101】b", module="136")
+        source.fetch_all_bugs.return_value = [b1, b2]
+        teambition = Mock()
+        teambition.get_task_by_identifier.return_value = None
+        teambition.search_tasks.return_value = []
+        engine = self._make_engine(source, teambition)
+        stats = SyncStats()
+
+        engine._run_close_sync_phase(stats, False)
+
+        # 树不可用时回退精确匹配：只处理模块123那条
+        assert teambition.get_task_by_identifier.call_count == 1
+
+
 class TestDingTalkZeroBugs:
     """缺陷数量为 0 时不推送钉钉"""
 

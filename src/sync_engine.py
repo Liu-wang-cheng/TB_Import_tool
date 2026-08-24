@@ -1274,7 +1274,19 @@ class SyncEngine:
         if self.module_filter:
             mf = self.module_filter.strip()
             if mf.isdigit():
-                closed_bugs = [b for b in closed_bugs if str(b.module) == mf]
+                # 数字ID：递归包含子模块（与主同步/网页 byModule 一致）
+                desc_set = None
+                resolve_desc = getattr(self.source, "resolve_module_descendant_ids", None)
+                if resolve_desc and self.source_type != "teambition":
+                    try:
+                        desc_set = resolve_desc(int(pid), mf)
+                    except Exception as e:
+                        logger.warning("[关闭同步] 模块后代解析失败: %s", e)
+                if desc_set is not None:
+                    closed_bugs = [b for b in closed_bugs
+                                   if str(b.module) in desc_set]
+                else:
+                    closed_bugs = [b for b in closed_bugs if str(b.module) == mf]
                 logger.info("[关闭同步] 模块ID '%s' 过滤后剩余 %d 条", mf, len(closed_bugs))
             else:
                 try:
