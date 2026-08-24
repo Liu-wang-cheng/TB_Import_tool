@@ -1,8 +1,8 @@
 {
   "version": "2.7.5",
-  "sha256": "",
-  "download_url": "",
+  "sha256": "36a25d12f799c4425a03c225a0b0880bd8c7b23fc23bf8b36d3595c3ba994261",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.7.5/SmartDefectPlatform.zip",
   "release_date": "2026-08-24",
-  "release_notes": "v2.7.5 修复：export_bugs 导出的数字模块ID过滤同样改为递归包含子模块（此前精确匹配漏掉子模块缺陷）",
+  "release_notes": "v2.7.5 修复：export_bugs 导出的数字模块ID过滤改为递归包含子模块（此前精确匹配漏掉子模块缺陷）",
   "min_version": "1.0"
 }
