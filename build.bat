@@ -91,10 +91,10 @@ echo.
 dir "dist\%EXE_NAME%\%EXE_NAME%.exe" 2>nul
 echo.
 
-REM Zip the onedir output
+REM Zip the onedir output（用 Python zipfile，避免 PowerShell Compress-Archive 模块缺失）
 echo [ZIP] Creating release package...
 if exist "dist\%EXE_NAME%.zip" del "dist\%EXE_NAME%.zip"
-powershell -Command "Compress-Archive -Path 'dist\%EXE_NAME%\*' -DestinationPath 'dist\%EXE_NAME%.zip' -Force"
+python -c "import zipfile,os;src=r'dist\%EXE_NAME%';out=r'dist\%EXE_NAME%.zip';[(zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED).write(os.path.join(r,f),os.path.relpath(os.path.join(r,f),src))) for r,_,fs in os.walk(src) for f in fs]"
 if %errorlevel% neq 0 (
     echo [ERROR] Zip failed
     goto :fail
