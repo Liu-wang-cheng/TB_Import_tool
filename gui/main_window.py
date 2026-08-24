@@ -1619,11 +1619,10 @@ class MainWindow(QMainWindow):
         self._save_scheduled_config()
 
     def _update_weekday_enabled(self):
-        """根据启用开关和同步周期，更新星期选择的可用状态"""
-        enabled = self.chk_scheduled.isChecked()
+        """根据同步周期更新星期选择的可用状态（每周模式启用，每天模式禁用）"""
         weekly = self.cmb_schedule_mode.currentIndex() == 1
         for chk in self.chk_weekdays:
-            chk.setEnabled(enabled and weekly)
+            chk.setEnabled(weekly)
 
     def _on_schedule_mode_changed(self):
         """同步周期切换：每周模式启用星期选择，每天模式禁用"""

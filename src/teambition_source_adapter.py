@@ -91,23 +91,28 @@ class TeambitionSourceAdapter:
             assignedToAccount=executor_id,
             openedBy=creator_name,
             openedByAccount=creator_id,
-            openedDate=task.get("created", ""),
+            # 缺陷产生时间：优先外部TB自定义字段的时间字段，其次 startDate，最后创建时间
+            openedDate=cfs.get("found_time") or task.get("startDate") or task.get("created", ""),
             project=self.project_id,
             projectName=task.get("content", "")[:50],
             snCode=cfs.get("sn_code", ""),
+            openedBuild=cfs.get("version", ""),
             files=files,
             task_id=task_id,
         )
 
     def _extract_customfields(self, task: dict) -> dict:
-        """从 task.customfields 提取 severity/category/frequency/sn_code
+        """从 task.customfields 提取 severity/category/frequency/sn_code/version
 
         字段名未知，按值特征猜测：
         - severity：值含 致命/严重/一般/建议/S/A/B/C
         - category：commongroup 类型的值（如"固件缺陷"）
-        - frequency：值含 概率
+        - frequency：值含 概率 或 %（如"中(≤30%)"、"必现(=100%)"）
+        - version：值形如 X.Y.Z（如 "1.0.12"、"V1.0.38"）
+        - sn_code：值形如 HQ... 或 长字母数字
         """
-        result = {"severity": "", "category": "", "frequency": "", "sn_code": ""}
+        result = {"severity": "", "category": "", "frequency": "",
+                  "sn_code": "", "version": "", "found_time": ""}
         for cf in task.get("customfields", []):
             value = cf.get("value", [])
             title = ""
@@ -131,6 +136,13 @@ class TeambitionSourceAdapter:
             # SN 编码：值形如 HQ... 或 长字母数字
             if re.match(r'^[A-Z]{2,}[0-9A-Z]{6,}$', title) and not result["sn_code"]:
                 result["sn_code"] = title
+            # 版本：值形如 X.Y.Z 或 vX.Y.Z（去掉 V 前缀）
+            if re.match(r'^[vV]?\d+\.\d+(\.\d+)?$', title) and not result["version"]:
+                result["version"] = re.sub(r'^[vV]', '', title)
+            # 缺陷产生时间：值形如 2026.8.21——15:50 或 2026-08-21 15:50
+            if re.search(r'\d{4}[./-]\d{1,2}[./-]\d{1,2}', title) \
+                    and not result["found_time"]:
+                result["found_time"] = title
         return result
 
     def _register_files(self, task: dict) -> list:

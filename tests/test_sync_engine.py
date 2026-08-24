@@ -466,7 +466,7 @@ class TestSeverityMapping:
     def test_unknown_defaults_to_c(self):
         e = self.make_engine()
         assert e._map_severity("未知") == "C"
-        assert e._map_severity("") == "C"
+        assert e._map_severity("") == "B"  # 严重程度为空默认 B
 
     def test_yaml_int_key(self):
         """YAML 解析 {1: 'A'} 后 _map_severity('2') 应正确匹配"""

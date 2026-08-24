@@ -1605,8 +1605,8 @@ class SyncEngine:
         """
         s = str(severity).strip() if severity else ""
         if not s:
-            logger.warning("严重程度为空，默认返回C")
-            return "C"
+            logger.warning("严重程度为空，默认返回B")
+            return "B"
 
         # 1. 将 API 返回值统一翻译为中文标签
         #    不同实例返回格式不同：数字(1-4)、字母(A-D)、中文(致命/严重/一般/建议)
@@ -1791,6 +1791,20 @@ class SyncEngine:
         """确定 Teambition 缺陷分类（按 Bug 类型映射，部门前缀兜底已移除）"""
         return self.type_category_map.get(bug_type, "应用-其他问题")
 
+    def _map_tb_frequency(self, raw: str) -> Optional[str]:
+        """外部 TB 复现概率值 → 内部 TB 复现概率（如"中(≤30%)"→"中概率"）"""
+        if not raw:
+            return None
+        if "必现" in raw:
+            return "必现"
+        if "高" in raw:
+            return "高概率"
+        if "中" in raw:
+            return "中概率"
+        if "低" in raw:
+            return "低概率"
+        return None
+
     def _build_customfields(self, bug: ZentaoBug,
                             severity: str, category: str) -> list:
         fields = []
@@ -1805,28 +1819,33 @@ class SyncEngine:
                          "1/1": "必现", "2/2": "必现", "2/3": "高概率", "1/2": "中概率",
                          "1/3": "低概率", "0/1": "低概率"}
             repro = None
-            # 1) 优先从重现步骤文本中提取
-            import re as _re
-            steps_text = bug.steps or ""
-            from src.extractor import clean_template_text
-            steps_clean = clean_template_text(steps_text, strip_html=False)
-            # 先匹配模板格式 "概率 1/1" 或 "概率|1/1" 或 "概率：1/1"
-            m = _re.search(r'概率[：:\s|]*(\d+/\d+)', steps_clean)
-            if m:
-                repro = repro_map.get(m.group(1))
-            # 匹配 "复现概率：必现" 等关键词格式
+            # 外部 TB：优先用其复现概率自定义字段（如"中(≤30%)"→"中概率"）
+            if getattr(self, "source_type", "zentao") == "teambition":
+                raw_tb = str(getattr(bug, "frequency", "") or "").strip()
+                repro = self._map_tb_frequency(raw_tb)
+            # 1) 从重现步骤文本中提取（外部TB未命中时兜底）
             if not repro:
-                m = _re.search(r'(?:复现|重现)(?:概率|频率)[：:\s]*([^\s<]+)',
-                              steps_clean)
-            if not repro and not m:
-                m = _re.search(r'(?:必现|高概率|中概率|低概率|偶尔|随机)',
-                              steps_clean)
-            if m and not repro:
-                word = m.group(1) if m.lastindex else m.group(0)
-                repro = repro_map.get(word) or (
-                    repro_map.get(int(word)) if word.isdigit() else word)
-            # 2) API frequency 兜底
-            if not repro:
+                import re as _re
+                steps_text = bug.steps or ""
+                from src.extractor import clean_template_text
+                steps_clean = clean_template_text(steps_text, strip_html=False)
+                # 先匹配模板格式 "概率 1/1" 或 "概率|1/1" 或 "概率：1/1"
+                m = _re.search(r'概率[：:\s|]*(\d+/\d+)', steps_clean)
+                if m:
+                    repro = repro_map.get(m.group(1))
+                # 匹配 "复现概率：必现" 等关键词格式
+                if not repro:
+                    m = _re.search(r'(?:复现|重现)(?:概率|频率)[：:\s]*([^\s<]+)',
+                                  steps_clean)
+                if not repro and not m:
+                    m = _re.search(r'(?:必现|高概率|中概率|低概率|偶尔|随机)',
+                                  steps_clean)
+                if m and not repro:
+                    word = m.group(1) if m.lastindex else m.group(0)
+                    repro = repro_map.get(word) or (
+                        repro_map.get(int(word)) if word.isdigit() else word)
+            # 2) API frequency 兜底（禅道：用 repro_map 映射）
+            if not repro and getattr(self, "source_type", "zentao") != "teambition":
                 raw = getattr(bug, "frequency", "") or ""
                 s_raw = str(raw).strip()
                 repro = repro_map.get(s_raw) or (
@@ -1862,7 +1881,14 @@ class SyncEngine:
                 })
         if self.cf_ids.get("found_time"):
             found_time = None
-            if self.extraction_enabled:
+            # 外部 TB：优先用其"缺陷产生时间"自定义字段（已存入 openedDate），
+            # 如 "2026.8.21——15:50" → "2026-08-21 15:50"
+            if getattr(self, "source_type", "zentao") == "teambition" \
+                    and bug.openedDate:
+                from src.extractor import extract_datetime
+                found_time = extract_datetime(bug.openedDate, None)
+            # 从重现步骤提取（外部TB未命中或禅道）
+            if not found_time and self.extraction_enabled:
                 from src.extractor import extract_datetime
                 # 从 openedDate 解析参考日期，用于 M/D 和纯时间格式补全
                 reference_date = None
@@ -1875,7 +1901,9 @@ class SyncEngine:
                     except (ValueError, TypeError):
                         pass
                 found_time = extract_datetime(bug.steps, reference_date)
-            if not found_time and bug.openedDate:
+            # 禅道用 openedDate（外部TB的 openedDate 已在上面优先处理）
+            if not found_time and bug.openedDate \
+                    and getattr(self, "source_type", "zentao") != "teambition":
                 # openedDate 本身就是北京时间，提取 YYYY-MM-DD HH:MM
                 dt_str = bug.openedDate.strip().replace("T", " ")
                 if len(dt_str) >= 16:
@@ -2434,7 +2462,7 @@ class SyncEngine:
             if existing_filenames:
                 existing_values = self._get_existing_attachment_values(task_id, attachment_cf_id)
                 values.extend(existing_values)
-            # 追加新上传的
+            # 追加新上传的（内部 TB 自动补全 metaString）
             for entry in uploaded.values():
                 values.append({"id": entry[0], "title": entry[1]})
             if values:
