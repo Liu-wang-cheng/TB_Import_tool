@@ -65,9 +65,17 @@ class ZentaoAdapter:
     def download_image(self, file_id: int) -> AttachmentFile:
         return self._client.download_image(file_id)
 
+    def fetch_file_name(self, file_id: int) -> str:
+        """探测文件真实文件名（files 字段缺失时的回退）"""
+        return self._client.fetch_file_name(file_id)
+
     def resolve_module_ids_by_name(self, product_id: int,
                                     name: str) -> Optional[Set[int]]:
         return self._client.resolve_module_ids_by_name(product_id, name)
+
+    def resolve_module_descendant_ids(self, product_id: int,
+                                      module_id) -> Optional[Set[int]]:
+        return self._client.resolve_module_descendant_ids(product_id, module_id)
 
     def search_product(self, name: str) -> Optional[int]:
         return self._client.search_product(name)

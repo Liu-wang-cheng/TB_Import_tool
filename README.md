@@ -149,6 +149,33 @@ build.bat
 
 ## 版本历史
 
+### v2.7.2 (2026-08-24)
+
+- **修复**：模块过滤改为递归包含子模块（与禅道网页 byModule 一致）
+  - 背景：网页 `bug-browse-11--byModule-123.html` 显示 2207 条缺陷，工具按模块 ID 精确匹配只找到 1 条 —— 禅道网页是"模块+全部后代"递归筛选，而工具只匹配 `bug.module == "123"`
+  - 根因：模块 API `/api.php/v1/modules` 只返回根模块（无父子层级），子模块（如 123 下的 136/137/158/159）无法枚举，数字 ID 过滤漏掉全部子模块缺陷
+  - 修复：新增 `fetch_module_tree()`（API 根模块 + 回退浏览页 JSON `modules` 字段构建完整树）、`resolve_module_descendant_ids()`（模块+全部后代集合）；sync_engine / CLI list-bugs / GUI 列出全部走递归集合过滤
+- **修复**：禅道 clean URL 探测逻辑（`_probe_clean_url`）
+  - 根因：动态路径 `/index.php?m=api&f=getsessionid` 未登录时返回 200 但内容是登录重定向 HTML，被误判为"动态 URL 模式"，导致 `_ensure_session` 拿到 HTML 报"非JSON"，Session 登录（文件下载回退链）失败
+  - 修复：动态路径返回 200 时校验响应体是否为有效 JSON，非 JSON 判定为 clean 模式
+- **优化**：列出缺陷 / 试运行时获取到的缺陷数量为 0 时不再推送钉钉消息
+- **修复**：备注内联图片占位符显示真实文件名（不再 fallback 成 `image_{id}.png`）
+  - 根因：部分禅道版本（如 18.3）REST 详情与网页 JSON 的 `files` 字段返回空，`file_id→真实文件名` 映射缺失，备注图片显示 `[图片: image_17629.png]` 这类假名
+  - 修复：新增 `fetch_file_name()` 探测 `file-download-{id}.html` 响应头的 Content-Disposition 真实文件名（带缓存），`_build_note` 对未映射的 file_id 自动补全
+- **新增 22 个单元测试**：模块树构建/后代解析、clean URL 探测、钉钉 0 条判断、文件真实名探测与备注占位符
+
+### v2.7.1 (2026-08-24)
+
+- **优化**：外部 TB 自定义字段优先同步（缺陷产生时间/版本/复现概率/SN，对应不上从备注提取）
+- **修复**：严重程度为空时默认 B
+- **修复**：定时同步每周天数
+
+### v2.7.0 (2026-08-21)
+
+- **新增**：外部 TB 源（teambition_source）—— 从外部 Teambition 项目导入缺陷到内部 TB
+- **新增**：定时同步每周天数选择
+- **优化**：分类器去除部门过滤
+
 ### v2.6.8 (2026-06-24)
 
 - **新增**：定时同步功能 — 主界面设置每天固定时间自动执行导入同步

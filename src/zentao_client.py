@@ -54,6 +54,9 @@ class ZentaoClient:
         # 避免 _get_bug_raw 每个 bug 重复 normalize 同一份 users 数据
         self._normalized_users_cache: dict = {}
         self._normalized_users_cache_lock = threading.Lock()
+        # 文件 ID → 真实文件名缓存（探测 file-download 响应头，供备注占位符使用）
+        self._file_name_cache: dict = {}
+        self._file_name_cache_lock = threading.Lock()
 
     def invalidate_cloud_browse_cache(self):
         """清空所有禅道客户端缓存，确保下次拉取拿到最新数据。
@@ -100,14 +103,28 @@ class ZentaoClient:
         self._branch_id = branch_id
 
     def _probe_clean_url(self) -> bool:
-        """探测禅道实例是否启用 clean URL（伪静态）"""
+        """探测禅道实例是否启用 clean URL（伪静态）
+
+        动态路径 /index.php?m=api&f=getsessionid 未登录时也可能返回 200，
+        但内容是"重定向到登录页"的 HTML 而非 JSON。仅凭 status_code 会
+        误判为动态模式，导致 _ensure_session 拿到 HTML 报"非JSON"。
+        因此动态路径返回 200 时需校验响应体是否为有效 JSON。
+        """
         if self._clean_url is not None:
             return self._clean_url
         try:
             resp = self._http.get(
                 f"{self.base_url}/index.php?m=api&f=getsessionid",
                 timeout=5)
-            self._clean_url = (resp.status_code != 200)
+            if resp.status_code != 200:
+                self._clean_url = True
+            else:
+                try:
+                    resp.json()
+                    self._clean_url = False
+                except Exception:
+                    # 动态路径返回非JSON（如登录重定向HTML）→ 用 clean URL
+                    self._clean_url = True
         except Exception:
             self._clean_url = False
         logger.debug("禅道 URL 模式: %s",
@@ -1135,6 +1152,134 @@ class ZentaoClient:
                 logger.debug("模块API %s %s 失败: %s", path, params, e)
         return []
 
+    def fetch_module_tree(self, product_id: int,
+                          branch_id: int = 0) -> Optional[dict]:
+        """获取产品完整模块树 {str(id): {"name", "parent", "path"}}。
+
+        优先用模块 API（fetch_product_modules，含 BFS 展开子模块）；
+        若 API 只返回根模块（无父子层级，常见于旧版禅道），回退抓
+        浏览页 JSON 的 modules 字段（{id: "/完整路径"} 格式，含全部层级）。
+
+        返回 None 表示无法获取完整树（调用方应回退到精确匹配）。
+        """
+        modules = self.fetch_product_modules(product_id)
+        id_map = {}
+        parent_map = {}
+        for m in modules or []:
+            mid = m.get("id")
+            if mid is None:
+                continue
+            mid = str(mid)
+            id_map[mid] = m.get("name", "")
+            parent_map[mid] = str(
+                m.get("parent") or m.get("parentID")
+                or m.get("pid") or "0")
+        has_hierarchy = any(p in id_map for p in parent_map.values())
+        if has_hierarchy:
+            return {
+                mid: {"name": id_map[mid], "parent": parent_map[mid], "path": ""}
+                for mid in id_map
+            }
+
+        # API 只有根模块 → 回退浏览页 JSON 的完整模块树
+        tree = self._fetch_module_tree_from_browse(product_id, branch_id)
+        if tree:
+            return tree
+
+        if modules:
+            logger.warning(
+                "模块API仅返回 %d 个根级模块且浏览页JSON不可用，无法构建完整模块树",
+                len(modules))
+        return None
+
+    def _fetch_module_tree_from_browse(self, product_id: int,
+                                       branch_id: int = 0) -> Optional[dict]:
+        """从浏览页 JSON 的 modules 字段构建完整模块树。
+
+        浏览页 JSON 结构: {"status":"success","data":"{...,\"modules\":{id:\"/路径\"}}"}
+        模块路径唯一，据此推导父子关系。
+        """
+        if not self._cloud_session_auth:
+            try:
+                self._ensure_session()
+            except Exception as e:
+                logger.warning("Session 登录失败，无法抓取浏览页模块树: %s", e)
+                return None
+        path = self._build_url(
+            f"bug-browse-{product_id}-{branch_id}.json",
+            f"index.php?m=bug&f=browse&productID={product_id}"
+            f"&branch={branch_id}")
+        try:
+            resp = self._http.get(f"{self.base_url}/{path}", timeout=30)
+            if resp.status_code >= 400 or not resp.text.lstrip().startswith("{"):
+                return None
+            data = json.loads(resp.text)
+            inner = data.get("data", {})
+            if isinstance(inner, str):
+                inner = json.loads(inner)
+            modules = inner.get("modules", {})
+            if not isinstance(modules, dict):
+                return None
+        except Exception as e:
+            logger.warning("抓取浏览页模块树失败: %s", e)
+            return None
+
+        # id → 去 HTML 转义的完整路径（如 "/HS341/乐动方案/软件测试"）
+        paths = {}
+        for mid, p in modules.items():
+            if str(mid) == "0":
+                continue
+            paths[str(mid)] = str(p).replace("&amp;", "&").rstrip("/")
+        if not paths:
+            return None
+        path_to_id = {p: mid for mid, p in paths.items()}
+
+        tree = {}
+        for mid, p in paths.items():
+            last = p.rfind("/")
+            parent_path = p[:last] if last > 0 else ""
+            tree[mid] = {
+                "name": p[last + 1:],
+                "parent": path_to_id.get(parent_path, "0"),
+                "path": p,
+            }
+        logger.info("浏览页JSON构建模块树 %d 个模块（产品 %s）", len(tree), product_id)
+        return tree
+
+    def resolve_module_descendant_ids(self, product_id: int,
+                                      module_id) -> Optional[set]:
+        """模块 ID 及其全部后代 ID 集合（禅道网页 byModule 的递归语义）。
+
+        - 返回 set（含空）：完整树可用，按此集合过滤
+        - 返回 None：树不可用或模块不存在 → 调用方回退精确匹配
+        """
+        try:
+            tree = self.fetch_module_tree(product_id)
+        except Exception as e:
+            logger.warning("模块树解析失败(回退精确匹配): %s", e)
+            return None
+        if not tree:
+            return None
+        mid = str(module_id)
+        if mid not in tree:
+            logger.info("模块 %s 不在产品 %s 模块树中，按精确匹配处理", mid, product_id)
+            return None
+        children = {}
+        for cid, node in tree.items():
+            children.setdefault(node.get("parent", "0"), []).append(cid)
+        result = {mid}
+        queue = [mid]
+        while queue:
+            cur = queue.pop()
+            for c in children.get(cur, []):
+                if c not in result:
+                    result.add(c)
+                    queue.append(c)
+        logger.info("模块 %s(%s) 含子模块共 %d 个ID: %s",
+                    mid, tree[mid]["name"], len(result),
+                    ",".join(sorted(result))[:200])
+        return result
+
     def resolve_module_ids_by_name(self, product_id: int,
                                     name: str) -> Optional[set]:
         """根据模块名称（子串匹配）解析为模块 ID 集合。
@@ -1430,6 +1575,40 @@ class ZentaoClient:
             data=resp.content,
             size=len(resp.content),
         )
+
+    def fetch_file_name(self, file_id: int) -> str:
+        """探测禅道文件的真实文件名（file-download 响应头 Content-Disposition）。
+
+        部分禅道版本的 REST API 详情 files 字段为空（步骤内联图片拿不到
+        元信息），备注占位符会 fallback 成 image_{id}.png。此方法用
+        stream 方式只读响应头即关闭连接，结果按 file_id 缓存。
+        """
+        fid = str(file_id)
+        with self._file_name_cache_lock:
+            if fid in self._file_name_cache:
+                return self._file_name_cache[fid]
+        name = ""
+        try:
+            if self._cloud_session_auth:
+                self._ensure_session()
+            resp = self._http.get(
+                f"{self.base_url}/file-download-{fid}.html",
+                stream=True, timeout=20)
+            if resp.status_code == 200:
+                cd = resp.headers.get("Content-Disposition", "")
+                match = re.search(
+                    r'filename\*?=(?:UTF-8\'\')?"?([^";\n]+)"?',
+                    cd, re.IGNORECASE)
+                if match:
+                    name = match.group(1)
+            resp.close()
+        except Exception as e:
+            logger.warning("探测文件 %s 名称失败: %s", fid, e)
+        with self._file_name_cache_lock:
+            self._file_name_cache[fid] = name
+        if name:
+            logger.debug("文件 %s 真实名: %s", fid, name)
+        return name
 
     def download_image(self, file_id: int) -> AttachmentFile:
         # 优先用 file-download clean URL（与 download_attachment 一致），

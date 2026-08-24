@@ -192,25 +192,43 @@ class SyncEngine:
         if self.module_filter and bugs:
             mf = self.module_filter.strip()
             if mf.isdigit():
-                # 数字ID：先按 module ID 快路径过滤；零结果时兜底为名称子串匹配
-                id_filtered = [b for b in bugs if str(b.module) == mf]
-                if id_filtered:
-                    bugs = id_filtered
+                # 数字ID：按"模块+全部子模块"递归过滤（与禅道网页 byModule 一致）
+                resolve_desc = getattr(self.source, "resolve_module_descendant_ids", None)
+                desc_set = None
+                if resolve_desc and filters.get("product_id"):
+                    try:
+                        desc_set = resolve_desc(int(filters["product_id"]), mf)
+                    except Exception as e:
+                        logger.warning("模块后代解析失败: %s", e)
+                if desc_set is not None:
+                    before = len(bugs)
+                    bugs = [b for b in bugs if str(b.module) in desc_set]
                     if self.sync_closed_status:
-                        logger.debug("模块ID '%s' 预过滤后剩余 %d 条", mf, len(bugs))
+                        logger.debug("模块ID '%s'(含%d个子模块) 过滤 %d→%d 条",
+                                     mf, len(desc_set) - 1, before, len(bugs))
                     else:
-                        logger.info("模块ID '%s' 预过滤后剩余 %d 条", mf, len(bugs))
+                        logger.info("模块ID '%s'(含%d个子模块) 过滤 %d→%d 条",
+                                    mf, len(desc_set) - 1, before, len(bugs))
                 else:
-                    # 数字当名称子串匹配：调用 utils 的并发详情拉取路径
-                    bugs = apply_module_filter(
-                        bugs, mf,
-                        fetch_detail_fn=self.source.fetch_bug_detail,
-                        treat_digit_as_name=True,
-                    )
-                    if self.sync_closed_status:
-                        logger.debug("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
+                    # 树不可用：先按 module ID 快路径过滤；零结果时兜底名称子串匹配
+                    id_filtered = [b for b in bugs if str(b.module) == mf]
+                    if id_filtered:
+                        bugs = id_filtered
+                        if self.sync_closed_status:
+                            logger.debug("模块ID '%s' 预过滤后剩余 %d 条", mf, len(bugs))
+                        else:
+                            logger.info("模块ID '%s' 预过滤后剩余 %d 条", mf, len(bugs))
                     else:
-                        logger.info("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
+                        # 数字当名称子串匹配：调用 utils 的并发详情拉取路径
+                        bugs = apply_module_filter(
+                            bugs, mf,
+                            fetch_detail_fn=self.source.fetch_bug_detail,
+                            treat_digit_as_name=True,
+                        )
+                        if self.sync_closed_status:
+                            logger.debug("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
+                        else:
+                            logger.info("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
             elif filters.get("product_id"):
                 t0 = time.time()
                 self._module_id_set = self.source.resolve_module_ids_by_name(
@@ -342,8 +360,11 @@ class SyncEngine:
             progress_callback(max(stats.total, 1), max(stats.total, 1),
                               "同步完成")
 
-        # 钉钉通知（关闭同步开启时，仅在有新建/重新激活时才发主同步通知）
+        # 钉钉通知（关闭同步开启时，仅在有新建/重新激活时才发主同步通知；
+        # 获取到的缺陷数量为 0 时不推送）
         if self.dingtalk_bot and (
+            stats.total > 0 or stats.closed_synced > 0
+        ) and (
             not self.sync_closed_status
             or stats.created > 0
             or stats.reactivated > 0
@@ -1997,6 +2018,20 @@ class SyncEngine:
                 for f in (bug.files or [])
                 if f.get("id")
             }
+            # 部分禅道版本详情 API 的 files 字段为空，内联图片拿不到元信息；
+            # 对 steps 中引用的 file_id 探测真实文件名（带缓存），避免占位符
+            # fallback 成 image_{id}.png
+            if "<img" in steps:
+                probe = getattr(self.source, "fetch_file_name", None)
+                if probe:
+                    for fid in self._extract_inline_image_ids(steps):
+                        if fid and fid not in file_id_to_name:
+                            try:
+                                name = probe(fid)
+                                if name:
+                                    file_id_to_name[fid] = name
+                            except Exception:
+                                pass
             cleaned = self._clean_html_for_tb(steps, file_id_to_name)
             if cleaned:
                 parts.append(

@@ -1,8 +1,8 @@
 {
-  "version": "2.7.1",
-  "sha256": "8b47fdf78cfe967c779351beb92d033283460af084cbf7701d5a6bb7cdca6f93",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.7.1/SmartDefectPlatform.zip",
+  "version": "2.7.2",
+  "sha256": "",
+  "download_url": "",
   "release_date": "2026-08-24",
-  "release_notes": "v2.7.1 更新：外部TB自定义字段优先同步（缺陷产生时间/版本/复现概率/SN，对应不上从备注提取）；严重程度为空默认B；定时同步每周天数修复",
+  "release_notes": "v2.7.2 更新：模块过滤递归包含子模块（与网页byModule一致）；禅道clean URL探测修复；缺陷0条不推钉钉；备注图片占位符显示真实文件名",
   "min_version": "1.0"
 }

@@ -69,6 +69,16 @@ class SourceClient(Protocol):
         """模块/组件名称解析为 ID 集合（禅道模块树 / Jira 组件）"""
         ...
 
+    def resolve_module_descendant_ids(self, product_id: int,
+                                      module_id) -> Optional[Set[int]]:
+        """模块 ID 及全部后代 ID 集合（网页 byModule 的递归语义）。
+
+        - 返回 set：按此集合过滤（含空集合）
+        - 返回 None：树不可用或模块不存在 → 调用方回退精确匹配
+        无模块层级概念的源（如外部 TB）应返回 None。
+        """
+        ...
+
     def search_product(self, name: str) -> Optional[int]:
         """根据名称搜索产品/项目 ID"""
         ...

@@ -56,9 +56,15 @@ def list_bugs(source, filters: dict, severity_map: dict = None,
     )
     module_filter = (filters.get("module_filter") or "").strip()
     module_id_set = None
-    if module_filter and not module_filter.isdigit() and filters.get("product_id"):
-        module_id_set = source.resolve_module_ids_by_name(
-            int(filters["product_id"]), module_filter)
+    if module_filter and filters.get("product_id"):
+        pid = int(filters["product_id"])
+        if module_filter.isdigit():
+            # 数字ID：递归包含子模块（与禅道网页 byModule 一致）
+            resolve_desc = getattr(source, "resolve_module_descendant_ids", None)
+            if resolve_desc:
+                module_id_set = resolve_desc(pid, module_filter)
+        else:
+            module_id_set = source.resolve_module_ids_by_name(pid, module_filter)
     bugs = apply_module_filter(
         bugs, module_filter,
         fetch_detail_fn=source.fetch_bug_detail,
@@ -256,15 +262,25 @@ def main():
                 )
                 module_filter_dt = (filters.get("module_filter") or "").strip()
                 module_id_set_dt = None
-                if module_filter_dt and not module_filter_dt.isdigit() \
-                        and filters.get("product_id"):
-                    module_id_set_dt = source.resolve_module_ids_by_name(
-                        int(filters["product_id"]), module_filter_dt)
+                if module_filter_dt and filters.get("product_id"):
+                    pid = int(filters["product_id"])
+                    if module_filter_dt.isdigit():
+                        # 数字ID：递归包含子模块（与禅道网页 byModule 一致）
+                        resolve_desc = getattr(source, "resolve_module_descendant_ids", None)
+                        if resolve_desc:
+                            module_id_set_dt = resolve_desc(pid, module_filter_dt)
+                    else:
+                        module_id_set_dt = source.resolve_module_ids_by_name(
+                            pid, module_filter_dt)
                 bugs = apply_module_filter(
                     bugs, module_filter_dt,
                     fetch_detail_fn=source.fetch_bug_detail,
                     module_id_set=module_id_set_dt,
                 )
+                if not bugs:
+                    # 缺陷数量为 0 时不推送钉钉消息
+                    logger.info("缺陷数量为0，跳过钉钉推送")
+                    return
                 sev_map = tb_cfg.get("severity_map", {})
                 lines = [f"共 {len(bugs)} 条 Bug:", "", "| ID | 状态 | 严重程度 | 指派给 | 标题 |",
                          "| --- | --- | --- | --- | --- |"]

@@ -337,6 +337,11 @@ class TeambitionSourceAdapter:
         """外部 TB 无模块概念，返回 None（触发 sync_engine 回退）"""
         return None
 
+    def resolve_module_descendant_ids(self, product_id: int,
+                                      module_id) -> Optional[Set[int]]:
+        """外部 TB 无模块概念，返回 None"""
+        return None
+
     def search_product(self, name: str) -> Optional[int]:
         return None
 

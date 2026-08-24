@@ -288,17 +288,25 @@ class ListBugsWorker(QThread):
             if module_filter and bugs:
                 import time
                 t0 = time.time()
-                # 名称过滤：优先用模块API一次性解析为ID集合，避免逐条取详情
+                # 优先用模块API一次性解析为ID集合，避免逐条取详情
                 module_id_set = None
                 product_id = filters.get("product_id")
-                if not module_filter.isdigit() and product_id:
-                    self.progress.emit(f"通过模块API解析名称 '{module_filter}'...")
-                    module_id_set = source.resolve_module_ids_by_name(
-                        int(product_id), module_filter)
+                if product_id:
+                    if module_filter.isdigit():
+                        # 数字ID：递归包含子模块（与禅道网页 byModule 一致）
+                        resolve_desc = getattr(source, "resolve_module_descendant_ids", None)
+                        if resolve_desc:
+                            self.progress.emit(
+                                f"解析模块 {module_filter} 及其子模块...")
+                            module_id_set = resolve_desc(int(product_id), module_filter)
+                    else:
+                        self.progress.emit(f"通过模块API解析名称 '{module_filter}'...")
+                        module_id_set = source.resolve_module_ids_by_name(
+                            int(product_id), module_filter)
                     # 区分"API成功(含空集合)"与"模块树不完整(回退)"
                     if module_id_set is not None:
                         self.progress.emit(
-                            f"模块名称命中 {len(module_id_set)} 个ID，按ID快速过滤"
+                            f"模块命中 {len(module_id_set)} 个ID，按ID快速过滤"
                             f"({len(bugs)} 条 Bug)..."
                         )
                     else:
@@ -326,8 +334,8 @@ class ListBugsWorker(QThread):
 
             self.finished.emit(bugs)
 
-            # 钉钉通知
-            if self.dingtalk_bot:
+            # 钉钉通知（缺陷数量为 0 时不推送）
+            if self.dingtalk_bot and bugs:
                 try:
                     sev_map = self.config.get("teambition", {}).get("severity_map", {})
                     sev_labels = source.fetch_severity_labels(filters.get("product_id"))
