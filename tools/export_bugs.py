@@ -42,12 +42,18 @@ def export_bugs(config: dict, output_path: str = ""):
     )
     logger.info("获取到 %d 条 Bug", len(bugs))
 
-    # 模块过滤：数字直接命中 bug.module；名称优先用模块API预解析为ID集合
+    # 模块过滤：数字按"模块+全部子模块"递归；名称优先用模块API预解析为ID集合
     module_filter = (filters.get("module_filter") or "").strip()
     module_id_set = None
     if module_filter:
         if module_filter.isdigit():
-            bugs = apply_module_filter(bugs, module_filter)
+            # 数字ID：递归包含子模块（与网页 byModule 一致）
+            resolve_desc = getattr(source, "resolve_module_descendant_ids", None)
+            if resolve_desc and filters.get("product_id"):
+                module_id_set = resolve_desc(
+                    int(filters["product_id"]), module_filter)
+            bugs = apply_module_filter(
+                bugs, module_filter, module_id_set=module_id_set)
             logger.info("模块ID过滤后剩余 %d 条", len(bugs))
         elif filters.get("product_id"):
             module_id_set = source.resolve_module_ids_by_name(
