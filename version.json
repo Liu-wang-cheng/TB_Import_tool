@@ -1,8 +1,8 @@
 {
   "version": "2.7.4",
-  "sha256": "",
-  "download_url": "",
+  "sha256": "6a2f535d9113177aa496c35099ef28992eae24293ee1f6417f88dfa142611bf5",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.7.4/SmartDefectPlatform.zip",
   "release_date": "2026-08-24",
-  "release_notes": "v2.7.4 修复：关闭同步的数字模块ID过滤同样改为递归包含子模块（此前漏掉子模块的已关闭缺陷，如模块123从3条恢复到1689条）",
+  "release_notes": "v2.7.4 修复：关闭同步的数字模块ID过滤改为递归包含子模块（此前漏掉子模块的已关闭缺陷，如模块123从3条恢复到1689条）",
   "min_version": "1.0"
 }
