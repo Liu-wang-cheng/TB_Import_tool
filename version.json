@@ -1,8 +1,8 @@
 {
-  "version": "2.7.0",
-  "sha256": "7f18c290ca17f740999bf101871c3d356b4b98ec440c21de5ad9afe2401d30d7",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.7.0/SmartDefectPlatform.zip",
-  "release_date": "2026-08-21",
-  "release_notes": "v2.7.0 更新：定时同步支持每天/每周特定天数；外部TB Cookie保存路径修复（exe同级tools目录，避免OTA升级丢失）；登录步骤日志显示到GUI；Cookie保存自动建目录",
+  "version": "2.7.1",
+  "sha256": "8b47fdf78cfe967c779351beb92d033283460af084cbf7701d5a6bb7cdca6f93",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.7.1/SmartDefectPlatform.zip",
+  "release_date": "2026-08-24",
+  "release_notes": "v2.7.1 更新：外部TB自定义字段优先同步（缺陷产生时间/版本/复现概率/SN，对应不上从备注提取）；严重程度为空默认B；定时同步每周天数修复",
   "min_version": "1.0"
 }
