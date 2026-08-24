@@ -49,6 +49,10 @@ def apply_module_filter(bugs, module_filter: str,
         return bugs
 
     if mf.isdigit() and not treat_digit_as_name:
+        # 调用方已预解析 ID 集合（数字 ID 时是"模块+全部后代"的递归集合，
+        # 名称时是名称命中的 ID 集合）→ 用集合过滤；未预解析则精确匹配
+        if module_id_set is not None:
+            return [b for b in bugs if str(b.module) in module_id_set]
         return [b for b in bugs if str(b.module) == mf]
 
     # 调用方已通过模块 API 预解析了名称→ID集合（空集合也视为预解析成功）

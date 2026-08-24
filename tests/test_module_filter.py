@@ -2,6 +2,7 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
+from src.utils import apply_module_filter
 from src.zentao_client import ZentaoClient
 from src.sync_engine import SyncEngine
 from src.models import SyncStats, ZentaoBug
@@ -284,6 +285,37 @@ class TestBuildNoteFileNameProbe:
         )
         note = engine._build_note(bug)
         assert "[图片: image_17629.png]" in note
+
+
+class TestApplyModuleFilterDigitWithSet:
+    """数字模块ID + 预解析后代集合时，必须用集合过滤（递归语义）"""
+
+    def _bug(self, bid, module):
+        return ZentaoBug(id=bid, title=f"bug{bid}", module=str(module))
+
+    def test_digit_uses_descendant_set(self):
+        """v2.7.2 回归：数字快路径此前忽略 module_id_set，只精确匹配"""
+        bugs = [self._bug(1, "123"), self._bug(2, "136"),
+                self._bug(3, "158"), self._bug(4, "999")]
+        result = apply_module_filter(bugs, "123",
+                                     module_id_set={"123", "136", "158"})
+        assert [b.id for b in result] == [1, 2, 3]
+
+    def test_digit_without_set_exact_match(self):
+        bugs = [self._bug(1, "123"), self._bug(2, "136")]
+        result = apply_module_filter(bugs, "123")
+        assert [b.id for b in result] == [1]
+
+    def test_digit_empty_set_returns_none(self):
+        bugs = [self._bug(1, "123")]
+        result = apply_module_filter(bugs, "123", module_id_set=set())
+        assert result == []
+
+    def test_name_uses_set(self):
+        bugs = [self._bug(1, "123"), self._bug(2, "136")]
+        result = apply_module_filter(bugs, "乐动方案",
+                                     module_id_set={"123", "136"})
+        assert [b.id for b in result] == [1, 2]
 
 
 class TestDingTalkZeroBugs:

@@ -1,8 +1,8 @@
 {
-  "version": "2.7.2",
-  "sha256": "39dca8eb5f11def7361ee5a77916b714dbaf7bb07d0223167dd6be82256210eb",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.7.2/SmartDefectPlatform.zip",
+  "version": "2.7.3",
+  "sha256": "",
+  "download_url": "",
   "release_date": "2026-08-24",
-  "release_notes": "v2.7.2 更新：模块过滤递归包含子模块（与禅道网页byModule一致，如模块123含子模块后从1条变为348条）；禅道clean URL探测修复（Session登录恢复）；缺陷0条不推送钉钉；备注内联图片占位符显示真实文件名",
+  "release_notes": "v2.7.3 修复：模块递归过滤在 apply_module_filter 数字快路径中被忽略的回归（v2.7.2 引入），数字模块ID+子模块集合现在正确生效",
   "min_version": "1.0"
 }
