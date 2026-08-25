@@ -243,62 +243,12 @@ def main():
             sys.exit(1)
         return
 
-    # 列出Bug模式（不需要 Teambition 认证和名称解析）
+    # 列出Bug模式（不需要 Teambition 认证和名称解析；不推送钉钉通知）
     if args.list_bugs:
         severity_map = tb_cfg.get("severity_map", {})
         product_id = filters.get("product_id")
         severity_labels = source.fetch_severity_labels(product_id)
         list_bugs(source, filters, severity_map, severity_labels)
-        if dingtalk_bot:
-            try:
-                assigned_to = resolve_assigned_to(filters, source.account)
-                bugs = source.fetch_all_bugs(
-                    product_id=filters.get("product_id"),
-                    project_id=filters.get("project_id"),
-                    statuses=filters.get("statuses"),
-                    date_from=filters.get("date_from"),
-                    date_to=filters.get("date_to"),
-                    assigned_to=assigned_to,
-                )
-                module_filter_dt = (filters.get("module_filter") or "").strip()
-                module_id_set_dt = None
-                if module_filter_dt and filters.get("product_id"):
-                    pid = int(filters["product_id"])
-                    if module_filter_dt.isdigit():
-                        # 数字ID：递归包含子模块（与禅道网页 byModule 一致）
-                        resolve_desc = getattr(source, "resolve_module_descendant_ids", None)
-                        if resolve_desc:
-                            module_id_set_dt = resolve_desc(pid, module_filter_dt)
-                    else:
-                        module_id_set_dt = source.resolve_module_ids_by_name(
-                            pid, module_filter_dt)
-                bugs = apply_module_filter(
-                    bugs, module_filter_dt,
-                    fetch_detail_fn=source.fetch_bug_detail,
-                    module_id_set=module_id_set_dt,
-                )
-                if not bugs:
-                    # 缺陷数量为 0 时不推送钉钉消息
-                    logger.info("缺陷数量为0，跳过钉钉推送")
-                    return
-                sev_map = tb_cfg.get("severity_map", {})
-                lines = [f"共 {len(bugs)} 条 Bug:", "", "| ID | 状态 | 严重程度 | 指派给 | 标题 |",
-                         "| --- | --- | --- | --- | --- |"]
-                for bug in bugs[:20]:
-                    s = str(bug.severity).strip() if bug.severity else ""
-                    label = severity_labels.get(s, s) if severity_labels else s
-                    tb_sev = sev_map.get(s)
-                    if tb_sev is None and s.isdigit():
-                        tb_sev = sev_map.get(int(s))
-                    sev = f"{label}→{tb_sev}" if tb_sev is not None else label
-                    assignee = bug.assignedTo[:8] if bug.assignedTo else "-"
-                    title = bug.title
-                    lines.append(f"| {bug.id} | {bug.status} | {sev} | {assignee} | {title} |")
-                if len(bugs) > 20:
-                    lines.append(f"\n> 仅显示前 20 条，共 {len(bugs)} 条")
-                dingtalk_bot.send_markdown("禅道 Bug 列表", "\n".join(lines))
-            except Exception as e:
-                logger.warning("钉钉通知发送失败: %s", e)
         return
 
     # Teambition 认证（试运行模式也需要认证，用于去重和字段检测）

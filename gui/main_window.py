@@ -1498,7 +1498,7 @@ class MainWindow(QMainWindow):
         self._apply_filters_to_config()
         self.log_text.clear()
         self.status_label.setText("正在获取Bug列表...")
-        worker = ListBugsWorker(self.config, dingtalk_bot=self._dingtalk_bot, parent=self)
+        worker = ListBugsWorker(self.config, parent=self)
         worker.progress.connect(self._on_progress_message)
         worker.finished.connect(self._on_list_result)
         worker.error.connect(self._on_worker_error)

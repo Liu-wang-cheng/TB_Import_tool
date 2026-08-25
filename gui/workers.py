@@ -228,10 +228,9 @@ class ListBugsWorker(QThread):
     error = pyqtSignal(str, str)  # (message, traceback_detail)
     severity_labels: dict = {}  # 禅道页面翻译的严重程度
 
-    def __init__(self, config, dingtalk_bot=None, parent=None):
+    def __init__(self, config, parent=None):
         super().__init__(parent)
         self.config = copy.deepcopy(config)
-        self.dingtalk_bot = dingtalk_bot
 
     def run(self):
         source = None
@@ -333,35 +332,6 @@ class ListBugsWorker(QThread):
                 )
 
             self.finished.emit(bugs)
-
-            # 钉钉通知（缺陷数量为 0 时不推送）
-            if self.dingtalk_bot and bugs:
-                try:
-                    sev_map = self.config.get("teambition", {}).get("severity_map", {})
-                    sev_labels = source.fetch_severity_labels(filters.get("product_id"))
-                    lines = [f"源平台: {platform_name}", f"共 {len(bugs)} 条 Bug:", "",
-                             "| ID | 状态 | 严重程度 | 指派给 | 标题 |",
-                             "| --- | --- | --- | --- | --- |"]
-                    for bug in bugs[:20]:
-                        s = str(bug.severity).strip() if bug.severity else ""
-                        label = sev_labels.get(s, s) if sev_labels else s
-                        # 与 _map_severity 一致：先翻译标签，再回退原始值
-                        tb_sev = sev_map.get(label)
-                        if tb_sev is None and label.isdigit():
-                            tb_sev = sev_map.get(int(label))
-                        if tb_sev is None and label != s:
-                            tb_sev = sev_map.get(s)
-                            if tb_sev is None and s.isdigit():
-                                tb_sev = sev_map.get(int(s))
-                        sev = f"{label}→{tb_sev}" if tb_sev is not None else label
-                        assignee = bug.assignedTo[:8] if bug.assignedTo else "-"
-                        title = bug.title
-                        lines.append(f"| {bug.id} | {bug.status} | {sev} | {assignee} | {title} |")
-                    if len(bugs) > 20:
-                        lines.append(f"\n> 仅显示前 20 条，共 {len(bugs)} 条")
-                    self.dingtalk_bot.send_markdown(f"{platform_name} 缺陷列表", "\n".join(lines))
-                except Exception as e:
-                    logger.warning("钉钉通知发送失败: %s", e)
         except Exception as e:
             logger.exception("列出缺陷失败")
             self.error.emit(str(e), traceback.format_exc())
