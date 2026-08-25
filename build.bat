@@ -94,7 +94,7 @@ echo.
 REM Zip the onedir output（用 Python zipfile，避免 PowerShell Compress-Archive 模块缺失）
 echo [ZIP] Creating release package...
 if exist "dist\%EXE_NAME%.zip" del "dist\%EXE_NAME%.zip"
-python -c "import zipfile,os;src=r'dist\%EXE_NAME%';out=r'dist\%EXE_NAME%.zip';[(zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED).write(os.path.join(r,f),os.path.relpath(os.path.join(r,f),src))) for r,_,fs in os.walk(src) for f in fs]"
+python -c "import zipfile,os;src=r'dist\%EXE_NAME%';out=r'dist\%EXE_NAME%.zip';zf=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED);[zf.write(os.path.join(r,f),os.path.relpath(os.path.join(r,f),src)) for r,_,fs in os.walk(src) for f in fs];zf.close()"
 if %errorlevel% neq 0 (
     echo [ERROR] Zip failed
     goto :fail
