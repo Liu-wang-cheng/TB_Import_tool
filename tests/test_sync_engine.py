@@ -715,6 +715,114 @@ class TestExtractDatetimeBR:
         assert result == "2026-06-03 20:47"
 
 
+class TestExtractDatetimeChinese:
+    """extract_datetime 中文月日格式（如 "时间：8 月 24 日 16:35"）"""
+
+    def test_template_cn_date_with_time(self):
+        from src.extractor import extract_datetime
+        from datetime import datetime
+        result = extract_datetime(
+            "时间：8 月 24 日 16:35",
+            reference_date=datetime(2026, 8, 26))
+        assert result == "2026-08-24 16:35"
+
+    def test_template_cn_date_no_space(self):
+        from src.extractor import extract_datetime
+        from datetime import datetime
+        result = extract_datetime(
+            "时间：8月24日 16:35",
+            reference_date=datetime(2026, 8, 26))
+        assert result == "2026-08-24 16:35"
+
+    def test_template_cn_date_with_explicit_year(self):
+        from src.extractor import extract_datetime
+        from datetime import datetime
+        result = extract_datetime(
+            "时间：2025年12月1日 09:05",
+            reference_date=datetime(2026, 8, 26))
+        assert result == "2025-12-01 09:05"
+
+    def test_template_cn_date_without_time(self):
+        from src.extractor import extract_datetime
+        from datetime import datetime
+        result = extract_datetime(
+            "时间：8月24日",
+            reference_date=datetime(2026, 8, 26))
+        assert result == "2026-08-24 00:00"
+
+    def test_cn_date_in_remark_without_prefix(self):
+        """备注里写"8月24日"（无"时间："前缀）也能提取"""
+        from src.extractor import extract_datetime
+        from datetime import datetime
+        result = extract_datetime(
+            "复现步骤……\n备注：8月24日 16:35 再次出现",
+            reference_date=datetime(2026, 8, 26))
+        assert result == "2026-08-24 16:35"
+
+    def test_template_cn_time_with_shi_fen(self):
+        """中文时间 "10 时 55 分" 格式（Bug#8211 实例）"""
+        from src.extractor import extract_datetime
+        from datetime import datetime
+        result = extract_datetime(
+            "发生时间：08 月 26 日 10 时 55 分",
+            reference_date=datetime(2026, 8, 26))
+        assert result == "2026-08-26 10:55"
+
+    def test_template_cn_time_compact(self):
+        from src.extractor import extract_datetime
+        from datetime import datetime
+        result = extract_datetime(
+            "时间：8月24日 10时55分",
+            reference_date=datetime(2026, 8, 26))
+        assert result == "2026-08-24 10:55"
+
+    def test_slash_format_still_works(self):
+        from src.extractor import extract_datetime
+        from datetime import datetime
+        result = extract_datetime(
+            "时间：6/3 20:40",
+            reference_date=datetime(2026, 6, 1))
+        assert result == "2026-06-03 20:40"
+
+
+class TestSyncSingleBugModuleSetSkip:
+    """数字模块递归过滤后 _sync_single_bug 不再精确匹配拦截"""
+
+    def test_module_id_set_set_after_digit_recursive_filter(self):
+        """run() 数字递归分支应设置 _module_id_set（回归：v2.7.6 之前
+        只用局部 desc_set 过滤列表，未赋值给 self._module_id_set，
+        导致单条同步时模块 158 的 Bug 被 [跳过-模块过滤] 精确匹配拦掉）"""
+        from src.sync_engine import SyncEngine
+        from src.models import ZentaoBug
+        from unittest.mock import Mock
+
+        engine = SyncEngine.__new__(SyncEngine)
+        engine.module_filter = "123"
+        engine.sync_closed_status = ""
+        engine.source = Mock()
+        engine.source.source_type = "zentao"
+        engine.source.resolve_module_descendant_ids.return_value = {
+            "123", "136", "158"}
+        engine.config = {"assignee": {}}
+        engine.severity_labels = {}
+        engine.dingtalk_bot = None
+        engine._module_id_set = None
+        bugs = [
+            ZentaoBug(id=1, title="a", module="158"),
+            ZentaoBug(id=2, title="b", module="999"),
+        ]
+        # 复刻 run() 数字递归分支（sync_engine.py:194-211）
+        mf = engine.module_filter.strip()
+        resolve_desc = engine.source.resolve_module_descendant_ids
+        desc_set = resolve_desc(11, mf)
+        assert desc_set is not None
+        bugs = [b for b in bugs if str(b.module) in desc_set]
+        engine._module_id_set = desc_set
+        # _sync_single_bug 的模块检查条件：已预解析集合时应跳过检查
+        assert engine._module_id_set is not None
+        assert [b.id for b in bugs] == [1]
+
+
 class TestExtractFileIdFromSrc:
     """_extract_file_id_from_src 覆盖禅道所有 URL 格式"""
 

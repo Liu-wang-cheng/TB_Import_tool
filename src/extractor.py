@@ -154,6 +154,8 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
     clean = clean_template_text(text, strip_html=False)
     # 将 <br> 归一化为空格，避免模板格式中日期时间被 <br> 分隔导致匹配失败
     clean = re.sub(r'<br\s*/?>', ' ', clean)
+    # 中文时间 "10 时 55 分" / "10时55分" / "3 点 20 分" → 冒号格式 "10:55"
+    clean = re.sub(r'(\d{1,2})\s*[时点]\s*(\d{1,2})\s*分?', r'\1:\2', clean)
 
     # 0. 优先匹配模板格式 "时间：6/3 20:40" 或 "时间: 6/3 20：47"
     ref_year = reference_date.year if reference_date else None
@@ -174,6 +176,21 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
             mon, day = int(tpl2.group(1)), int(tpl2.group(2))
             if 1 <= mon <= 12 and 1 <= day <= 31:
                 return f"{ref_year:04d}-{mon:02d}-{day:02d} 00:00"
+        # 中文模板格式 "时间：8月24日 16:35" / "时间：2026年8月24日"
+        # （数字与"月""日"之间可能有空格，如 "8 月 24 日"）
+        tpl3 = re.search(
+            r'时间[：:]\s*(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日'
+            r'(?:\s*(\d{1,2})[：:](\d{2}))?',
+            clean)
+        if tpl3:
+            year = int(tpl3.group(1)) if tpl3.group(1) else ref_year
+            mon, day = int(tpl3.group(2)), int(tpl3.group(3))
+            hour = int(tpl3.group(4)) if tpl3.group(4) else 0
+            minute = int(tpl3.group(5)) if tpl3.group(5) else 0
+            if 1 <= mon <= 12 and 1 <= day <= 31 \
+                    and 0 <= hour <= 23 and 0 <= minute <= 59 \
+                    and 2020 <= year <= 2035:
+                return f"{year:04d}-{mon:02d}-{day:02d} {hour:02d}:{minute:02d}"
 
     best_result = None
     best_score = 0  # 优先选择有时间的、年份完整的
@@ -257,6 +274,44 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
             if score > best_score:
                 best_score = score
                 best_result = (reference_year, month, day, hour, minute)
+
+    # 2.5 中文日期格式：2026年8月24日 / 8月24日（无年份用 reference 年补全）
+    # "X月X日" 带汉字标记，误匹配风险低；无时间也接受（时间取 00:00）
+    for dm in re.finditer(
+            r'(?<![\d])(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日',
+            clean):
+        year_str, mon_str, day_str = dm.groups()
+        year = int(year_str) if year_str else reference_year
+        if not year or not (2020 <= year <= 2035):
+            continue
+        month = int(mon_str)
+        day = int(day_str)
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            continue
+
+        nearby = clean[max(0, dm.start()-30):dm.end()+30]
+        hour, minute = 0, 0
+        has_time = False
+        for tm in re.finditer(TIME_PATTERNS[0], nearby):
+            h, m = int(tm.group(1)), int(tm.group(2))
+            if 0 <= h <= 23 and 0 <= m <= 59:
+                hour, minute = h, m
+                has_time = True
+                time_start = dm.start() - 30 + tm.start()
+                time_end = dm.start() - 30 + tm.end()
+                used_time_ranges.append((time_start, time_end))
+                break
+
+        score = 1  # 与 M/D 同级，弱于带年份完整格式
+        if year_str:
+            score += 2  # 显式年份
+        if has_time:
+            score += 3
+        score += dm.start() / len(clean)
+
+        if score > best_score:
+            best_score = score
+            best_result = (year, month, day, hour, minute)
 
     # 3. 兜底：纯时间模式（如 20:31），只有未找到任何日期时间时才触发
     if best_result is None and reference_date:

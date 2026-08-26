@@ -203,6 +203,9 @@ class SyncEngine:
                 if desc_set is not None:
                     before = len(bugs)
                     bugs = [b for b in bugs if str(b.module) in desc_set]
+                    # 标记已预解析，_sync_single_bug 的单条模块检查据此跳过
+                    # （否则其精确匹配回退会把子模块 Bug 误判为不匹配）
+                    self._module_id_set = desc_set
                     if self.sync_closed_status:
                         logger.debug("模块ID '%s'(含%d个子模块) 过滤 %d→%d 条",
                                      mf, len(desc_set) - 1, before, len(bugs))
