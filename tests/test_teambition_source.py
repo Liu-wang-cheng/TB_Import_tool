@@ -83,6 +83,49 @@ class TestTaskToBug:
         bug = adapter._task_to_bug(make_task(uniqueId=None))
         assert bug.id != 0
 
+    def test_no_unique_id_stable_across_processes(self):
+        """无 uniqueId 时 bug_id 必须跨进程稳定（不能用 str hash，
+        PYTHONHASHSEED 随机会导致去重标签跨运行不一致）"""
+        import os
+        adapter = make_adapter()
+        tid = "69e1a55475a4096ed84a4e62"
+        bug1 = adapter._task_to_bug(make_task(uniqueId=None, _id=tid))
+        # 强制不同 hash seed 再建一次
+        seed = os.environ.get("PYTHONHASHSEED", "0")
+        os.environ["PYTHONHASHSEED"] = "42"
+        try:
+            adapter2 = make_adapter()
+            bug2 = adapter2._task_to_bug(make_task(uniqueId=None, _id=tid))
+        finally:
+            if seed:
+                os.environ["PYTHONHASHSEED"] = seed
+            else:
+                os.environ.pop("PYTHONHASHSEED", None)
+        assert bug1.id == bug2.id
+        # 应为 _id 的 hex 数值，而非随机 hash
+        assert bug1.id == int(tid, 16)
+
+    def test_found_time_normalized(self):
+        """点分日期 '2026.8.21——15:50' 归一化为 ISO 格式，
+        避免 _filter_bugs 的字典序比较出错（'.' > '-'）"""
+        adapter = make_adapter()
+        task = make_task(customfields=[
+            {"type": "date", "value": [{"title": "2026.8.21——15:50"}]},
+        ])
+        bug = adapter._task_to_bug(task)
+        assert bug.openedDate == "2026-08-21 15:50"
+
+    def test_severity_not_matched_from_commongroup(self):
+        """commongroup 分类值（如"一般性建议类问题"）不应被猜成严重程度"""
+        adapter = make_adapter()
+        task = make_task(customfields=[
+            {"type": "commongroup", "value": [{"title": "一般性建议类问题"}]},
+            {"type": "dropDown", "value": [{"title": "严重"}]},
+        ])
+        bug = adapter._task_to_bug(task)
+        assert bug.type == "一般性建议类问题"
+        assert bug.severity == "严重"
+
 
 class TestFilterBugs:
     """_filter_bugs 客户端筛选"""

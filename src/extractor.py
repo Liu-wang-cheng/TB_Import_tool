@@ -71,8 +71,9 @@ def learn_sn_patterns(sn_values: List[str]) -> List[str]:
         pat = rf'\b({re.escape(prefix)}[0-9A-Z]{quantifier})\b'
         patterns.append(pat)
 
-    # 兜底：如果没有学到有效模式，保留默认
-    return patterns if patterns else DEFAULT_SN_PATTERNS.copy()
+    # 学到前缀模式后仍需保留默认模板模式（"SN码：" 等最可靠格式），
+    # 否则不命中已学前缀的 SN（如模板填写的 48HCNFB...）提取不到
+    return patterns + DEFAULT_SN_PATTERNS.copy()
 
 
 def extract_sn(text: str, patterns: list = None) -> Optional[str]:
@@ -170,14 +171,9 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
             if 1 <= mon <= 12 and 1 <= day <= 31 \
                     and 0 <= hour <= 23 and 0 <= minute <= 59:
                 return f"{ref_year:04d}-{mon:02d}-{day:02d} {hour:02d}:{minute:02d}"
-        # 模板格式无时间部分 "时间：6/3"
-        tpl2 = re.search(r'时间[：:]\s*(\d{1,2})/(\d{1,2})(?!\s*\d)', clean)
-        if tpl2:
-            mon, day = int(tpl2.group(1)), int(tpl2.group(2))
-            if 1 <= mon <= 12 and 1 <= day <= 31:
-                return f"{ref_year:04d}-{mon:02d}-{day:02d} 00:00"
         # 中文模板格式 "时间：8月24日 16:35" / "时间：2026年8月24日"
-        # （数字与"月""日"之间可能有空格，如 "8 月 24 日"）
+        # （数字与"月""日"之间可能有空格，如 "8 月 24 日"）。
+        # 放在斜杠无时间格式之前：中文带时间的比斜杠无时间更精确
         tpl3 = re.search(
             r'时间[：:]\s*(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日'
             r'(?:\s*(\d{1,2})[：:](\d{2}))?',
@@ -191,6 +187,12 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
                     and 0 <= hour <= 23 and 0 <= minute <= 59 \
                     and 2020 <= year <= 2035:
                 return f"{year:04d}-{mon:02d}-{day:02d} {hour:02d}:{minute:02d}"
+        # 模板格式无时间部分 "时间：6/3"
+        tpl2 = re.search(r'时间[：:]\s*(\d{1,2})/(\d{1,2})(?!\s*\d)', clean)
+        if tpl2:
+            mon, day = int(tpl2.group(1)), int(tpl2.group(2))
+            if 1 <= mon <= 12 and 1 <= day <= 31:
+                return f"{ref_year:04d}-{mon:02d}-{day:02d} 00:00"
 
     best_result = None
     best_score = 0  # 优先选择有时间的、年份完整的

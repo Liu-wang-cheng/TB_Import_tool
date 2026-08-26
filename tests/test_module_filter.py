@@ -371,6 +371,19 @@ class TestCloseSyncModuleFilter:
         assert teambition.get_task_by_identifier.call_count == 1
 
 
+class TestLearnSnPatternsKeepsDefaults:
+    """learn_sn_patterns 学到前缀后必须保留默认模板模式（H4）"""
+
+    def test_learned_patterns_keep_template_default(self):
+        from src.extractor import learn_sn_patterns, extract_sn, DEFAULT_SN_PATTERNS
+        learned = learn_sn_patterns(["HQABC123456789", "HQXYZ987654321"])
+        # 学到的前缀 + 默认模板模式都应保留
+        assert any("HQ" in p for p in learned)
+        assert any("SN" in p for p in learned)
+        # 模板格式 SN 仍能提取（修复前返回 None）
+        assert extract_sn("SN码：48HCNFBN0049X 其他", learned) == "48HCNFBN0049X"
+
+
 class TestDingTalkZeroBugs:
     """缺陷数量为 0 时不推送钉钉"""
 

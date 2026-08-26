@@ -1,8 +1,8 @@
 {
-  "version": "2.7.6",
-  "sha256": "06911f6db40659aaba4935c76dfad2a10313715d62aee08dcd95fdbd2cf587b0",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.7.6/SmartDefectPlatform.zip",
-  "release_date": "2026-08-25",
-  "release_notes": "v2.7.6 调整：列出缺陷（禅道/外部TB）不再推送钉钉通知，仅保留同步结果的钉钉通知",
+  "version": "2.7.7",
+  "sha256": "",
+  "download_url": "",
+  "release_date": "2026-08-26",
+  "release_notes": "v2.7.7 修复：列出缺陷严重程度翻译不显示；配置对话框保存后筛选被回滚；SN模板模式兜底；外部TB去重ID跨运行不稳定；外部TB点分日期筛选错误；关闭窗口时线程崩溃；YAML引号转义与注释保留",
   "min_version": "1.0"
 }

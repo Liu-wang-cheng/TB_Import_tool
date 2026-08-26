@@ -88,6 +88,9 @@ class ZentaoClient:
         # _normalize_users 结果缓存
         with self._normalized_users_cache_lock:
             self._normalized_users_cache.clear()
+        # 文件真实名探测缓存
+        with self._file_name_cache_lock:
+            self._file_name_cache.clear()
         # class-level 严重程度翻译缓存：只清当前实例 key，不影响其他 client
         cache_key = (self.base_url, self.account)
         ZentaoClient._severity_labels_cache.pop(cache_key, None)

@@ -56,8 +56,14 @@ class TeambitionSourceAdapter:
         unique_id = task.get("uniqueId") or 0
         bug_id = int(unique_id) if str(unique_id).isdigit() else 0
         if bug_id == 0:
-            # 无编号时用 _id 的数值 hash 兜底（避免 id=0 冲突）
-            bug_id = abs(hash(task.get("_id", ""))) % (10 ** 9)
+            # 无编号时用 _id（24位 hex）转数值兜底（避免 id=0 冲突）。
+            # 不能用 abs(hash())：str hash 跨进程随机（PYTHONHASHSEED），
+            # 去重标签会跨运行不一致导致重复建任务。
+            _tid = str(task.get("_id", ""))
+            try:
+                bug_id = int(_tid, 16)
+            except ValueError:
+                bug_id = abs(hash(_tid)) % (10 ** 9)
 
         # 专属任务 ID：uniqueIdPrefix-uniqueId（如 "323A-24"），用于去重标签
         task_id = ""
@@ -91,8 +97,11 @@ class TeambitionSourceAdapter:
             assignedToAccount=executor_id,
             openedBy=creator_name,
             openedByAccount=creator_id,
-            # 缺陷产生时间：优先外部TB自定义字段的时间字段，其次 startDate，最后创建时间
-            openedDate=cfs.get("found_time") or task.get("startDate") or task.get("created", ""),
+            # 缺陷产生时间：优先外部TB自定义字段的时间字段，其次 startDate，最后创建时间。
+            # 归一化为 YYYY-MM-DD HH:MM（点分日期如 "2026.8.21——15:50" 直接比较会
+            # 因 '.' > '-' 导致 _filter_bugs 的日期筛选系统性错误）
+            openedDate=self._normalize_datetime(
+                cfs.get("found_time") or task.get("startDate") or task.get("created", "")),
             project=self.project_id,
             projectName=task.get("content", "")[:50],
             snCode=cfs.get("sn_code", ""),
@@ -100,6 +109,25 @@ class TeambitionSourceAdapter:
             files=files,
             task_id=task_id,
         )
+
+    @staticmethod
+    def _normalize_datetime(value) -> str:
+        """把外部TB时间字符串归一化为 YYYY-MM-DD HH:MM（失败原样返回）。"""
+        if not value or not isinstance(value, str):
+            return value or ""
+        try:
+            from src.extractor import extract_datetime
+            from datetime import datetime
+            ref = None
+            v = value.strip()
+            try:
+                ref = datetime.fromisoformat(v)
+            except (ValueError, TypeError):
+                pass
+            result = extract_datetime(v, ref)
+            return result if result else value
+        except Exception:
+            return value
 
     def _extract_customfields(self, task: dict) -> dict:
         """从 task.customfields 提取 severity/category/frequency/sn_code/version
@@ -127,8 +155,11 @@ class TeambitionSourceAdapter:
             # 缺陷分类：commongroup 类型
             if cf_type == "commongroup" and not result["category"]:
                 result["category"] = title
-            # 严重程度：值含严重程度关键字
-            if re.search(r'致命|严重|一般|建议|^[SABC]$', title) and not result["severity"]:
+            # 严重程度：值含严重程度关键字（排除 commongroup 分类值，
+            # 如"一般性建议类问题"会同时命中"一般/建议"）
+            if cf_type != "commongroup" \
+                    and re.search(r'致命|严重|一般|建议|^[SABC]$', title) \
+                    and not result["severity"]:
                 result["severity"] = title
             # 复现概率：值含"概率"或"%"（如"中(≤30%)"、"高概率"）
             if ("概率" in title or "%" in title) and not result["frequency"]:

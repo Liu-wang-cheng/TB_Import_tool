@@ -164,15 +164,13 @@ def _replace_list_value(lines: list, key_line: int, indent: str,
     # 重写 key 行为纯 key:（清除旧的标量值如 null/None 残留）
     lines[key_line] = f"{indent}{key}:\n"
 
-    # 找到列表项的结束位置
+    # 找到列表项的结束位置（停在第一个非列表项行，
+    # 不吞掉列表后的空行与下一节的注释）
     item_indent = indent + "  "
     end = key_line + 1
     while end < len(lines):
         stripped = lines[end].rstrip()
-        # 列表项以 "  - " 开头
         if stripped.startswith(item_indent + "- "):
-            end += 1
-        elif stripped == "" or stripped.startswith("#"):
             end += 1
         else:
             break
@@ -202,5 +200,7 @@ def _format_value(value) -> str:
     if _DATE_RE.match(s):
         return f'"{s}"'
     if any(c in s for c in ':#{}[]&*!|>\'"%@`'):
-        return f'"{s}"'
+        # 用 json.dumps 生成合法转义（内嵌引号/反斜杠/换行），YAML 双引号串兼容
+        import json
+        return json.dumps(s, ensure_ascii=False)
     return s

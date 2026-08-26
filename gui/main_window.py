@@ -88,15 +88,25 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(2000, self._check_for_updates)
 
     def closeEvent(self, event):
-        """窗口关闭时清理后台线程"""
-        if self._module_thread and self._module_thread.isRunning():
-            self._module_thread.wait(2000)
-        if self._update_download_worker and self._update_download_worker.isRunning():
-            self._update_download_worker.wait(3000)
-        if self._update_check_worker and self._update_check_worker.isRunning():
-            self._update_check_worker.wait(3000)
-        if self._worker and self._worker.isRunning():
-            self._worker.wait(3000)
+        """窗口关闭时清理后台线程
+
+        所有线程等待超时后拒绝关闭并提示，避免 QThread 运行中被销毁崩溃
+        （"QThread: Destroyed while thread is still running"）。
+        """
+        running = []
+        for th in (self._module_thread, self._update_download_worker,
+                   self._update_check_worker, self._worker):
+            if th is not None and th.isRunning():
+                th.wait(3000)
+                if th.isRunning():
+                    running.append(th)
+        if running:
+            QMessageBox.warning(
+                self, "任务进行中",
+                "仍有后台任务正在执行（如同步/列出/更新），"
+                "请等待任务完成后再关闭窗口。")
+            event.ignore()
+            return
         event.accept()
 
     # ── UI 构建 ───────────────────────────────────────
@@ -773,7 +783,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning("协同学习模型重建失败: %s", e)
 
-    def _on_platform_changed(self, index: int):
+    def _on_platform_changed(self, index: int, save_current: bool = True):
         """源平台切换时更新界面标签、提示文字、字段值"""
         platform_map = {0: "禅道", 1: "外部TB"}
         platform = platform_map.get(index, "禅道")
@@ -832,26 +842,29 @@ class MainWindow(QMainWindow):
             self.edit_zentao_password.setPlaceholderText("密码")
 
         # ── 保存当前平台字段值到 config ──
+        # save_current=False 用于 _populate_filters（config 刚从磁盘重载，
+        # UI 仍是旧值，此时回写会把刚加载的新配置覆盖回旧值）
         old_platform = self._last_platform
         # 先保存指派人勾选状态，避免 _load_assignee_list 重建列表时丢失。
         # 仅真正的平台切换时收集；首次加载 old_platform 为 None，filter_assigned 尚未加载，
         # 此时收集会清空从 assignee.yaml 读到的勾选状态。
-        if old_platform is not None:
+        if old_platform is not None and save_current:
             self._collect_assignee_selection()
-        if old_platform == "zentao":
-            zt_cfg = self.config.setdefault("zentao", {})
-            zt_cfg["base_url"] = self.edit_zentao_base_url.text().strip()
-            zt_cfg["account"] = self.edit_zentao_account.text().strip()
-            zt_cfg["password"] = self.edit_zentao_password.text().strip()
-            filters = zt_cfg.setdefault("filters", {})
-            filters["product"] = self.filter_product.text().strip() or None
-            filters["module_filter"] = self.filter_module.text().strip() or None
-        elif old_platform == "teambition":
-            tb_src_cfg = self.config.setdefault("teambition_source", {})
-            tb_src_cfg["url"] = self.filter_url.text().strip()
-            tb_src_cfg["account"] = self.edit_zentao_account.text().strip()
-            tb_src_cfg["password"] = self.edit_zentao_password.text().strip()
-            tb_src_cfg["project_id"] = self.filter_module.text().strip()
+        if save_current:
+            if old_platform == "zentao":
+                zt_cfg = self.config.setdefault("zentao", {})
+                zt_cfg["base_url"] = self.edit_zentao_base_url.text().strip()
+                zt_cfg["account"] = self.edit_zentao_account.text().strip()
+                zt_cfg["password"] = self.edit_zentao_password.text().strip()
+                filters = zt_cfg.setdefault("filters", {})
+                filters["product"] = self.filter_product.text().strip() or None
+                filters["module_filter"] = self.filter_module.text().strip() or None
+            elif old_platform == "teambition":
+                tb_src_cfg = self.config.setdefault("teambition_source", {})
+                tb_src_cfg["url"] = self.filter_url.text().strip()
+                tb_src_cfg["account"] = self.edit_zentao_account.text().strip()
+                tb_src_cfg["password"] = self.edit_zentao_password.text().strip()
+                tb_src_cfg["project_id"] = self.filter_module.text().strip()
         self._last_platform = "zentao" if not is_teambition else "teambition"
 
         # ── 加载目标平台字段值 ──
@@ -981,7 +994,8 @@ class MainWindow(QMainWindow):
         self.filter_platform.setCurrentIndex(platform_idx)
         self.filter_platform.blockSignals(False)
         # _on_platform_changed 会根据平台加载对应的凭证和筛选条件
-        self._on_platform_changed(platform_idx)
+        # （save_current=False：config 刚重载，UI 是旧值，禁止回写覆盖新配置）
+        self._on_platform_changed(platform_idx, save_current=False)
 
         # Teambition 配置（与源平台无关）
         tb_cfg = self.config.get("teambition", {})
@@ -1494,8 +1508,9 @@ class MainWindow(QMainWindow):
             logger.warning("动态加载状态码失败，使用兜底: %s", e)
 
     def _on_list_bugs(self):
-        self._refresh_status_codes()
+        # 先落盘 UI 当前筛选值，_refresh_status_codes 才能用最新 base_url/凭证
         self._apply_filters_to_config()
+        self._refresh_status_codes()
         self.log_text.clear()
         self.status_label.setText("正在获取Bug列表...")
         worker = ListBugsWorker(self.config, parent=self)
@@ -1508,9 +1523,10 @@ class MainWindow(QMainWindow):
 
     def _on_list_result(self, bugs):
         self.progress_bar.setValue(100)
+        # 先取 worker 的 severity_labels 再调 _worker_finished（其内置空 _worker）
+        sev_labels = getattr(self._worker, 'severity_labels', {}) if self._worker else {}
         self._worker_finished(save_config=True)
         sev_map = self.config.get("teambition", {}).get("severity_map", {})
-        sev_labels = getattr(self._worker, 'severity_labels', {}) if self._worker else {}
         self._log(f"\n共 {len(bugs)} 条 Bug:\n")
         for bug in bugs[:100]:
             s = str(bug.severity).strip() if bug.severity else ""
@@ -1527,8 +1543,8 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"共 {len(bugs)} 条Bug")
 
     def _on_dry_run(self):
-        self._refresh_status_codes()
         self._apply_filters_to_config()
+        self._refresh_status_codes()
         self.log_text.clear()
         self.status_label.setText("试运行中...")
         worker = SyncWorker(self.config, dry_run=True,
@@ -1541,8 +1557,8 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _on_full_sync(self):
-        self._refresh_status_codes()
         self._apply_filters_to_config()
+        self._refresh_status_codes()
         # 获取目标项目名称用于确认提示
         tb_cfg = self.config.get("teambition", {})
         project_cfg = tb_cfg.get("project", {})

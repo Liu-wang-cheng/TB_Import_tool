@@ -64,6 +64,38 @@ class TestNullToList:
         assert data["filters"]["assigned_to_known"] == ["u1", "u2", "only_me"]
 
 
+class TestQuoteEscapeAndCommentKeep:
+    """M5/M6：引号转义 + 列表替换不吞注释"""
+
+    def test_value_with_embedded_quote_escaped(self, tmp_yaml):
+        tmp_yaml.write("filters:\n  module_filter: old\n")
+        tmp_yaml.flush()
+        update_yaml_values(tmp_yaml.name,
+                           {"filters.module_filter": '测试"引号"值'})
+        # 必须仍是合法 YAML
+        data = yaml.safe_load(open(tmp_yaml.name))
+        assert data["filters"]["module_filter"] == '测试"引号"值'
+
+    def test_list_replace_keeps_following_comment(self, tmp_yaml):
+        tmp_yaml.write(
+            "filters:\n"
+            "  assigned_to:\n"
+            "    - a\n"
+            "\n"
+            "# 下面是指派人的说明注释\n"
+            "assigned_to_known:\n"
+            "  - x\n")
+        tmp_yaml.flush()
+        update_yaml_values(tmp_yaml.name,
+                           {"filters.assigned_to": ["b", "c"]})
+        content = open(tmp_yaml.name).read()
+        # 注释必须保留
+        assert "# 下面是指派人的说明注释" in content
+        data = yaml.safe_load(content)
+        assert data["filters"]["assigned_to"] == ["b", "c"]
+        assert data["assigned_to_known"] == ["x"]
+
+
 class TestDateFormat:
     """日期字符串加引号保护（防止 PyYAML 误解析为 datetime.date）"""
 
