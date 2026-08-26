@@ -210,6 +210,48 @@ def _find_new_exe(extract_dir: str):
     return None
 
 
+def _current_version() -> str:
+    """读取当前运行版本的 VERSION（打包后读内置资源目录）"""
+    try:
+        with open(os.path.join(_get_resource_dir(), "VERSION"),
+                  "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def _version_tuple(v: str) -> tuple:
+    """"2.7.9" → (2, 7, 9)，用于语义化版本比较（防 "2.10" < "2.9" 陷阱）"""
+    try:
+        return tuple(int(x) for x in v.split(".") if x.isdigit())
+    except Exception:
+        return ()
+
+
+def _extract_version(extract_dir: str) -> str:
+    """读取解压目录中新版本的 VERSION
+
+    优先从找到的 exe 同级目录读取（兼容 exe 在子目录的 zip 结构），
+    其次解压目录顶层（_internal/VERSION 或 VERSION）。
+    """
+    candidates = []
+    new_exe = _find_new_exe(extract_dir)
+    if new_exe:
+        base = os.path.dirname(new_exe)
+        candidates.append(os.path.join(base, "_internal", "VERSION"))
+        candidates.append(os.path.join(base, "VERSION"))
+    candidates.append(os.path.join(extract_dir, "_internal", "VERSION"))
+    candidates.append(os.path.join(extract_dir, "VERSION"))
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                return ""
+    return ""
+
+
 def _repair_update_state() -> bool:
     """更新自愈：启动时处理上次更新中断的状态。
 
@@ -218,8 +260,10 @@ def _repair_update_state() -> bool:
     优先级：
     1. _internal 缺失 + _internal_old 存在 → 自动回滚（rename 恢复）
     2. _internal 与 _internal_old 都存在 → 新 _internal 已就位，清理 _internal_old
-    3. _update_replace.bat 残留 + _update_extracted 有完整新 exe
-       → 询问用户是否继续更新，确认后重新生成新模板 bat 并重启替换
+    3. _update_replace.bat 残留时：
+       - 解压目录版本 高于 当前运行版本 → 询问用户是否继续更新
+       - 版本一致（更新已完成，bat 尚未自删/被锁定）→ 静默清理，不弹窗
+       - 无 exe / 版本无法读取（损坏）→ 清理后正常启动
     4. 其余临时文件（_update_extracted / _update_download.zip）清理
     """
     app_dir = _get_app_dir()
@@ -240,17 +284,26 @@ def _repair_update_state() -> bool:
         shutil.rmtree(internal_old, ignore_errors=True)
         logging.info("已清理旧 _internal_old")
 
-    # 3. 失败重试：bat 残留且解压目录有完整新 exe 时询问用户；
-    #    无可用新 exe（下载损坏）或用户拒绝时删除残留 bat，走正常启动
+    # 3. bat 残留：仅在解压目录版本高于当前版本时询问继续更新
     if os.path.exists(bat_path):
-        if _find_new_exe(extract_dir) and _ask_retry_update():
-            if _restart_to_update():
-                return True
-        else:
-            if not _find_new_exe(extract_dir):
-                logging.warning("更新残留的解压目录无可用 exe，清理后正常启动")
+        new_exe = _find_new_exe(extract_dir)
+        cur_ver = _current_version()
+        new_ver = _extract_version(extract_dir)
+        need_update = bool(new_exe and cur_ver and new_ver
+                           and _version_tuple(new_ver) > _version_tuple(cur_ver))
+        if need_update:
+            if _ask_retry_update():
+                if _restart_to_update():
+                    return True
             else:
                 logging.info("用户取消继续更新，正常启动")
+        elif new_exe and new_ver and cur_ver:
+            # 更新已完成（新版本已运行，bat 尚在清理自身）→ 静默清理
+            logging.info("更新已完成（版本 %s），清理更新残留", new_ver)
+        elif not new_exe:
+            logging.warning("更新残留的解压目录无可用 exe，清理后正常启动")
+        else:
+            logging.info("解压目录版本无法读取，清理更新残留")
         try:
             os.remove(bat_path)
         except OSError:

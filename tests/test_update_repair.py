@@ -47,11 +47,14 @@ class TestRepairRollback:
 
 class TestRepairRetry:
     def test_retry_when_user_confirms(self, app_dir, monkeypatch):
-        """bat 残留 + 解压目录有 exe + 用户确认 → 重新生成并进入更新"""
+        """bat 残留 + 解压目录有更高版本 exe + 用户确认 → 重新生成并进入更新"""
         extract = _mkdir(os.path.join(app_dir, "_update_extracted", "new"))
         open(os.path.join(extract, "新程序.exe"), "w").close()
+        _mkdir(os.path.join(extract, "_internal"))
+        open(os.path.join(extract, "_internal", "VERSION"), "w").write("2.8.0")
         bat = os.path.join(app_dir, "_update_replace.bat")
         open(bat, "w").close()
+        monkeypatch.setattr(gui_main, "_current_version", lambda: "2.7.9")
         monkeypatch.setattr(gui_main, "_ask_retry_update", lambda: True)
         monkeypatch.setattr(gui_main, "_restart_to_update", lambda: True)
         assert gui_main._repair_update_state() is True
@@ -80,6 +83,47 @@ class TestRepairRetry:
         assert asked == []
         assert not os.path.exists(bat)
         assert not os.path.exists(os.path.join(app_dir, "_update_extracted"))
+
+
+class TestRepairNoFalseRetry:
+    """更新成功后的残留不应触发"继续更新"弹窗"""
+
+    def test_same_version_no_retry(self, app_dir, monkeypatch):
+        """解压目录版本 == 当前版本（更新已完成，bat 尚未自删）→ 静默清理"""
+        extract = _mkdir(os.path.join(app_dir, "_update_extracted", "new"))
+        open(os.path.join(extract, "程序.exe"), "w").close()
+        _mkdir(os.path.join(extract, "_internal"))
+        open(os.path.join(extract, "_internal", "VERSION"), "w").write("2.7.9")
+        open(os.path.join(app_dir, "_update_replace.bat"), "w").close()
+        # 当前运行版本与解压目录一致
+        monkeypatch.setattr(gui_main, "_current_version", lambda: "2.7.9")
+        asked = []
+        monkeypatch.setattr(gui_main, "_ask_retry_update",
+                            lambda: asked.append(1) or True)
+        assert gui_main._repair_update_state() is False
+        assert asked == []  # 不弹窗
+        assert not os.path.exists(os.path.join(app_dir, "_update_replace.bat"))
+        assert not os.path.exists(os.path.join(app_dir, "_update_extracted"))
+
+    def test_newer_version_still_asks(self, app_dir, monkeypatch):
+        """解压目录版本高于当前版本 → 正常询问"""
+        extract = _mkdir(os.path.join(app_dir, "_update_extracted", "new"))
+        open(os.path.join(extract, "程序.exe"), "w").close()
+        _mkdir(os.path.join(extract, "_internal"))
+        open(os.path.join(extract, "_internal", "VERSION"), "w").write("2.8.0")
+        open(os.path.join(app_dir, "_update_replace.bat"), "w").close()
+        monkeypatch.setattr(gui_main, "_current_version", lambda: "2.7.9")
+        asked = []
+        monkeypatch.setattr(gui_main, "_ask_retry_update",
+                            lambda: asked.append(1) or True)
+        monkeypatch.setattr(gui_main, "_restart_to_update", lambda: True)
+        assert gui_main._repair_update_state() is True
+        assert asked == [1]
+
+    def test_version_tuple_compares_numerically(self):
+        assert gui_main._version_tuple("2.10.0") > gui_main._version_tuple("2.7.9")
+        assert gui_main._version_tuple("2.7.9") > gui_main._version_tuple("2.7.8")
+        assert gui_main._version_tuple("abc") == ()
 
 
 class TestFindNewExe:
