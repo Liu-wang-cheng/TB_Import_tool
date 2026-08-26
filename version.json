@@ -1,8 +1,8 @@
 {
-  "version": "2.7.8",
-  "sha256": "15ab511a0a9d5bd0d7516013d0253292732282a1364421bc7e4aa8e84f5e9afe",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.7.8/SmartDefectPlatform.zip",
+  "version": "2.7.9",
+  "sha256": "",
+  "download_url": "",
   "release_date": "2026-08-26",
-  "release_notes": "v2.7.8 修复：自动更新脚本不再嵌入绝对/中文路径（GBK系统读取UTF-8 bat乱码导致更新失败），改用 %~dp0 动态解析",
+  "release_notes": "v2.7.9 更新：同步支持多个禅道产品/项目与多个模块ID（逗号分隔）；URL解析同服务器自动合并产品/项目ID、不同服务器弹窗确认；更新自愈（启动自动回滚/继续未完成更新）；GUI模块ID改名与提示优化",
   "min_version": "1.0"
 }
