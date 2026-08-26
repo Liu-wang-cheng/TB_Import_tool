@@ -1,7 +1,7 @@
 {
   "version": "2.7.9",
-  "sha256": "",
-  "download_url": "",
+  "sha256": "b8f4b8b1634f7bf748e8895f2ce3951d4252d1bc3ac1fd34404f540b98562781",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.7.9/SmartDefectPlatform.zip",
   "release_date": "2026-08-26",
   "release_notes": "v2.7.9 更新：同步支持多个禅道产品/项目与多个模块ID（逗号分隔）；URL解析同服务器自动合并产品/项目ID、不同服务器弹窗确认；更新自愈（启动自动回滚/继续未完成更新）；GUI模块ID改名与提示优化",
   "min_version": "1.0"
