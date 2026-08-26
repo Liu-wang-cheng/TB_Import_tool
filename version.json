@@ -1,8 +1,8 @@
 {
   "version": "2.7.7",
-  "sha256": "",
-  "download_url": "",
+  "sha256": "d8732423a7208c3ae24023c4f99e72be4d41ec1290dbe6e620167f94e425e5eb",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.7.7/SmartDefectPlatform.zip",
   "release_date": "2026-08-26",
-  "release_notes": "v2.7.7 修复：列出缺陷严重程度翻译不显示；配置对话框保存后筛选被回滚；SN模板模式兜底；外部TB去重ID跨运行不稳定；外部TB点分日期筛选错误；关闭窗口时线程崩溃；YAML引号转义与注释保留",
+  "release_notes": "v2.7.7 release",
   "min_version": "1.0"
 }
