@@ -213,7 +213,19 @@ def main():
         print(f"[ERROR] {artifact_path} 不存在")
         sys.exit(1)
 
-    notes = " ".join(sys.argv[4:]) if len(sys.argv) > 4 else f"v{version} release"
+    notes = " ".join(sys.argv[4:]) if len(sys.argv) > 4 else ""
+    if not notes:
+        # 未传说明时优先读本地 version.json 的 release_notes（发布前已写好），
+        # 避免 build.bat 自动发布时退回 "vX release" 占位说明
+        vf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "version.json")
+        try:
+            with open(vf, "r", encoding="utf-8") as f:
+                vdata = json.load(f)
+            notes = (vdata.get("release_notes") or "").strip()
+        except Exception:
+            notes = ""
+        if not notes or notes == f"v{version} release":
+            notes = f"v{version} release"
 
     print(f"[1/4] 计算 SHA256...")
     sha256 = compute_sha256(artifact_path)
