@@ -190,15 +190,17 @@ class MainWindow(QMainWindow):
         self.lbl_product = QLabel("产品ID:")
         row1.addWidget(self.lbl_product)
         self.filter_product = QLineEdit()
-        self.filter_product.setPlaceholderText("数字ID")
-        self.filter_product.setMaximumWidth(100)
+        self.filter_product.setPlaceholderText("数字ID，逗号分隔多个")
+        self.filter_product.setMaximumWidth(140)
+        self.filter_product.setToolTip("禅道产品ID，支持多个用逗号分隔（如 11,20）")
         row1.addWidget(self.filter_product)
 
-        self.lbl_module = QLabel("禅道项目ID:")
+        self.lbl_module = QLabel("模块ID:")
         row1.addWidget(self.lbl_module)
         self.filter_module = QLineEdit()
-        self.filter_module.setPlaceholderText("数字ID")
-        self.filter_module.setMaximumWidth(220)
+        self.filter_module.setPlaceholderText("数字ID，含子模块")
+        self.filter_module.setMaximumWidth(200)
+        self.filter_module.setToolTip("禅道模块ID（网页 byModule-{ID}），自动包含全部子模块")
         row1.addWidget(self.filter_module)
 
         # 状态：固定三个选项，对应 status_code 动态获取
@@ -800,7 +802,8 @@ class MainWindow(QMainWindow):
             self.btn_list.setText("列出缺陷")
             self.btn_list.setToolTip("获取外部TB缺陷列表")
             self.lbl_module.setText("项目ID:")
-            self.filter_module.setPlaceholderText("从网址自动解析")
+            self.filter_module.setPlaceholderText("从网址自动解析，逗号分隔多个")
+            self.filter_module.setToolTip("外部TB项目ID，支持多个用逗号分隔")
             self.edit_zentao_base_url.setPlaceholderText(
                 "https://www.teambition.com")
             self.edit_zentao_account.setPlaceholderText("外部TB登录账号（手机号/邮箱）")
@@ -835,8 +838,9 @@ class MainWindow(QMainWindow):
             self.btn_parse_url.setToolTip("解析URL中的产品ID、项目ID和模块")
             self.btn_list.setText("列出Bug")
             self.btn_list.setToolTip(f"获取{platform}Bug列表（不需要Teambition认证）")
-            self.lbl_module.setText("禅道项目ID:")
-            self.filter_module.setPlaceholderText("数字ID")
+            self.lbl_module.setText("模块ID:")
+            self.filter_module.setPlaceholderText("数字ID，含子模块")
+            self.filter_module.setToolTip("禅道模块ID（网页 byModule-{ID}），自动包含全部子模块")
             self.edit_zentao_base_url.setPlaceholderText("https://zentao.xxx.com/zentao")
             self.edit_zentao_account.setPlaceholderText("禅道登录账号")
             self.edit_zentao_password.setPlaceholderText("密码")
@@ -874,7 +878,11 @@ class MainWindow(QMainWindow):
             self.edit_zentao_base_url.setText(zt_cfg.get("base_url", ""))
             self.edit_zentao_account.setText(zt_cfg.get("account", ""))
             self.edit_zentao_password.setText(zt_cfg.get("password", ""))
-            self.filter_product.setText(str(filters.get("product", "") or ""))
+            # 产品ID：单值或列表统一显示为逗号串
+            _prod = filters.get("product", "") or ""
+            if isinstance(_prod, (list, tuple)):
+                _prod = ",".join(str(x) for x in _prod)
+            self.filter_product.setText(str(_prod))
             self.filter_module.setText(str(filters.get("module_filter", "") or ""))
             self.filter_url.setText("")
 
@@ -916,9 +924,12 @@ class MainWindow(QMainWindow):
             self.edit_zentao_password.setText(
                 str(tb_src_cfg.get("password", "") or ""))
             self.filter_product.setText("")
-            # 项目 ID：从 teambition_source.project_id 读（网址解析后保存）
-            self.filter_module.setText(
-                str(tb_src_cfg.get("project_id", "") or ""))
+            # 项目 ID：从 teambition_source.project_id 读（网址解析后保存），
+            # 列表统一显示为逗号串
+            _pid = tb_src_cfg.get("project_id", "") or ""
+            if isinstance(_pid, (list, tuple)):
+                _pid = ",".join(str(x) for x in _pid)
+            self.filter_module.setText(str(_pid))
             self.filter_url.setText(str(tb_src_cfg.get("url", "") or ""))
             # 指派人：从公用 assignee.yaml 加载（外部 TB 和禅道共用）
             self._load_assignee_list(self.config.get("assignee", {}))
@@ -1026,11 +1037,20 @@ class MainWindow(QMainWindow):
             zt_cfg["base_url"] = self.edit_zentao_base_url.text().strip()
             filters = zt_cfg.setdefault("filters", {})
 
+            # 产品ID：支持逗号分隔多个 → 存列表（单值兼容）
             product = self.filter_product.text().strip()
-            filters["product"] = int(product) if product.isdigit() else (product or None)
+            if product:
+                products = [x.strip() for x in product.replace("，", ",").split(",")
+                            if x.strip()]
+                filters["product"] = (
+                    [int(x) for x in products if x.isdigit()]
+                    if all(x.isdigit() for x in products) else products)
+            else:
+                filters["product"] = None
             # 清空产品时同步清理残留的 product_id，避免后续用到旧值
             if not product:
                 filters.pop("product_id", None)
+                filters.pop("product_ids", None)
 
             module = self.filter_module.text().strip()
             filters["module_filter"] = module if module else ""
@@ -1396,21 +1416,79 @@ class MainWindow(QMainWindow):
 
         parsed = parse_zentao_url(url)
         filled = []
+        zt_filters = self.config.setdefault("zentao", {}).setdefault("filters", {})
 
-        if parsed["product_id"]:
-            self.filter_product.setText(str(parsed["product_id"]))
-            filled.append(f"产品ID={parsed['product_id']}")
+        # 服务器地址对比：同地址 → 产品/项目ID与现有合并；不同地址 → 弹窗确认
+        same_server = True
         if parsed["base_url"]:
-            self.edit_zentao_base_url.setText(parsed["base_url"])
-            filled.append(f"禅道地址={parsed['base_url']}")
+            cur_base = self.edit_zentao_base_url.text().strip().rstrip("/")
+            if cur_base and cur_base != parsed["base_url"].rstrip("/"):
+                same_server = False
+                ret = QMessageBox.question(
+                    self, "服务器地址不同",
+                    f"URL 解析出的禅道服务器与当前配置不一致：\n\n"
+                    f"当前配置: {cur_base}\n"
+                    f"URL 指向: {parsed['base_url']}\n\n"
+                    f"是否切换到该服务器并解析？（切换后产品/项目/模块按新服务器重置）",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if ret != QMessageBox.Yes:
+                    self.status_label.setText("已取消解析（服务器地址不同）")
+                    return
+                # 切换服务器：重置产品/项目/模块，不合并
+                self.edit_zentao_base_url.setText(parsed["base_url"])
+                self.filter_product.clear()
+                self.filter_module.clear()
+                zt_filters.pop("project", None)
+                zt_filters.pop("product", None)
+                zt_filters.pop("module_filter", None)
+                filled.append(f"已切换服务器: {parsed['base_url']}")
+            else:
+                self.edit_zentao_base_url.setText(parsed["base_url"])
+                filled.append(f"禅道地址={parsed['base_url']}")
+
+        def _merge_ids(existing: str, new_val) -> str:
+            """同服务器下把新ID合并进现有逗号列表（去重保序）"""
+            items = [x.strip() for x in existing.replace("，", ",").split(",")
+                     if x.strip()]
+            new_str = str(new_val).strip()
+            if new_str and new_str not in items:
+                items.append(new_str)
+            return ",".join(items)
+
+        if same_server:
+            # 产品ID：与现有合并（同服务器多产品）
+            if parsed["product_id"]:
+                merged = _merge_ids(self.filter_product.text(), parsed["product_id"])
+                self.filter_product.setText(merged)
+                filled.append(f"产品ID={merged}")
+            # 项目ID：写入配置（无GUI输入框，URL 自动解析即可）
+            if parsed["project_id"]:
+                cur_projects = [str(x) for x in
+                                (zt_filters.get("project") or [])
+                                if x not in (None, "")]
+                if isinstance(zt_filters.get("project"), str):
+                    cur_projects = [x.strip() for x in
+                                    zt_filters["project"].split(",") if x.strip()]
+                if str(parsed["project_id"]) not in cur_projects:
+                    cur_projects.append(str(parsed["project_id"]))
+                zt_filters["project"] = cur_projects or None
+                filled.append(f"项目ID={parsed['project_id']}")
+        else:
+            # 新服务器：直接设置解析出的值
+            if parsed["product_id"]:
+                self.filter_product.setText(str(parsed["product_id"]))
+                filled.append(f"产品ID={parsed['product_id']}")
+            if parsed["project_id"]:
+                zt_filters["project"] = [parsed["project_id"]]
+                filled.append(f"项目ID={parsed['project_id']}")
+
         if parsed["branch_id"] is not None:
-            zt_filters = self.config.setdefault("zentao", {}).setdefault("filters", {})
             zt_filters["branch"] = parsed["branch_id"]
             filled.append(f"分支ID={parsed['branch_id']}")
         # 模块ID：直接填入数字（不做名称转换）
         if parsed["module_id"]:
             self.filter_module.setText(str(parsed["module_id"]))
-            filled.append(f"禅道项目ID={parsed['module_id']}")
+            filled.append(f"模块ID={parsed['module_id']}")
         elif parsed["product_id"] or parsed["base_url"]:
             self.filter_module.clear()
 

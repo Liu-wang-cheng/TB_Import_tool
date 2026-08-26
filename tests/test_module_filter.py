@@ -384,6 +384,70 @@ class TestLearnSnPatternsKeepsDefaults:
         assert extract_sn("SN码：48HCNFBN0049X 其他", learned) == "48HCNFBN0049X"
 
 
+class TestNormalizeMultiIds:
+    """多产品/多项目配置解析（单值/列表/逗号串）"""
+
+    def test_single_value(self):
+        from src.utils import normalize_zentao_filters
+        f = normalize_zentao_filters({"product": 11})
+        assert f["product_ids"] == [11]
+        assert f["product_id"] == 11
+
+    def test_list_value(self):
+        from src.utils import normalize_zentao_filters
+        f = normalize_zentao_filters({"product": [11, 20], "project": [5]})
+        assert f["product_ids"] == [11, 20]
+        assert f["project_ids"] == [5]
+
+    def test_comma_string(self):
+        from src.utils import normalize_zentao_filters
+        f = normalize_zentao_filters({"product": "11,20"})
+        assert f["product_ids"] == [11, 20]
+
+    def test_empty(self):
+        from src.utils import normalize_zentao_filters
+        f = normalize_zentao_filters({"product": None, "project": None})
+        assert f.get("product_ids") in (None, [])
+        assert f.get("project_ids") in (None, [])
+
+    def test_existing_product_id(self):
+        from src.utils import normalize_zentao_filters
+        f = normalize_zentao_filters({"product_id": 11})
+        assert f["product_ids"] == [11]
+
+    def test_as_str_list_uuid(self):
+        from src.utils import _as_str_list
+        assert _as_str_list("abc,def") == ["abc", "def"]
+        assert _as_str_list(["a", "b"]) == ["a", "b"]
+        assert _as_str_list(None) == []
+
+
+class TestMultiProductMerge:
+    """多产品拉取合并去重"""
+
+    def _bug(self, bid, module):
+        return ZentaoBug(id=bid, title=f"bug{bid}", module=str(module))
+
+    def test_merge_and_dedup_by_id(self):
+        """模拟 run() 的多产品循环：同 id 跨产品重复只保留一次"""
+        product_ids = [11, 20]
+        # 模拟两产品各自返回（id=1 在两个产品中重复）
+        batches = {
+            11: [self._bug(1, "136"), self._bug(2, "158")],
+            20: [self._bug(1, "136"), self._bug(3, "999")],
+        }
+        bugs = []
+        for pid in product_ids:
+            bugs.extend(batches[pid])
+        seen = set()
+        dedup = []
+        for b in bugs:
+            if b.id not in seen:
+                seen.add(b.id)
+                dedup.append(b)
+        assert [b.id for b in dedup] == [1, 2, 3]
+
+
 class TestDingTalkZeroBugs:
     """缺陷数量为 0 时不推送钉钉"""
 

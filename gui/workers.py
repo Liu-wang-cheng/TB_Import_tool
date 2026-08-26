@@ -291,19 +291,47 @@ class ListBugsWorker(QThread):
                     normalize_zentao_filters(filters)
                 list_statuses = filters.get("statuses")
 
-            # 获取严重程度翻译（仅禅道）
+            # 获取严重程度翻译（仅禅道，多产品合并）
             if source.source_type == "zentao":
-                self.severity_labels = source.fetch_severity_labels(
-                    filters.get("product_id"))
+                self.severity_labels = {}
+                for pid in (filters.get("product_ids") or
+                            ([int(filters["product_id"])]
+                             if filters.get("product_id") else [])):
+                    labels = source.fetch_severity_labels(pid)
+                    if labels:
+                        self.severity_labels.update(labels)
 
-            bugs = source.fetch_all_bugs(
-                product_id=filters.get("product_id"),
-                project_id=filters.get("project_id"),
-                statuses=list_statuses,
-                date_from=filters.get("date_from"),
-                date_to=filters.get("date_to"),
-                assigned_to=list_assigned_to,
-            )
+            # 多产品/多项目：循环拉取后保序去重
+            if source.source_type == "teambition":
+                from src.utils import _as_str_list
+                product_ids = []
+                project_ids = _as_str_list(
+                    filters.get("project_ids") or filters.get("project_id"))
+            else:
+                product_ids = filters.get("product_ids") or (
+                    [int(filters["product_id"])]
+                    if filters.get("product_id") else [])
+                project_ids = filters.get("project_ids") or (
+                    [int(filters["project_id"])]
+                    if filters.get("project_id") else [])
+            bugs = []
+            for pid in product_ids or [None]:
+                for jid in project_ids or [None]:
+                    bugs.extend(source.fetch_all_bugs(
+                        product_id=pid,
+                        project_id=jid,
+                        statuses=list_statuses,
+                        date_from=filters.get("date_from"),
+                        date_to=filters.get("date_to"),
+                        assigned_to=list_assigned_to,
+                    ))
+            seen = set()
+            dedup = []
+            for b in bugs:
+                if b.id not in seen:
+                    seen.add(b.id)
+                    dedup.append(b)
+            bugs = dedup
             self.progress.emit(f"获取到 {len(bugs)} 条缺陷")
 
             module_filter = (filters.get("module_filter") or "").strip()
@@ -312,19 +340,37 @@ class ListBugsWorker(QThread):
                 t0 = time.time()
                 # 优先用模块API一次性解析为ID集合，避免逐条取详情
                 module_id_set = None
-                product_id = filters.get("product_id")
-                if product_id:
+                product_ids = filters.get("product_ids") or (
+                    [int(filters["product_id"])]
+                    if filters.get("product_id") else [])
+                if product_ids:
+                    api_ok = False
                     if module_filter.isdigit():
-                        # 数字ID：递归包含子模块（与禅道网页 byModule 一致）
+                        # 数字ID：递归包含子模块（与禅道网页 byModule 一致），
+                        # 多产品合并集合（模块ID全局唯一，安全）
                         resolve_desc = getattr(source, "resolve_module_descendant_ids", None)
                         if resolve_desc:
                             self.progress.emit(
                                 f"解析模块 {module_filter} 及其子模块...")
-                            module_id_set = resolve_desc(int(product_id), module_filter)
+                            module_id_set = set()
+                            for pid in product_ids:
+                                sub = resolve_desc(int(pid), module_filter)
+                                if sub is None:
+                                    continue
+                                api_ok = True
+                                module_id_set |= sub
                     else:
                         self.progress.emit(f"通过模块API解析名称 '{module_filter}'...")
-                        module_id_set = source.resolve_module_ids_by_name(
-                            int(product_id), module_filter)
+                        module_id_set = set()
+                        for pid in product_ids:
+                            sub = source.resolve_module_ids_by_name(
+                                int(pid), module_filter)
+                            if sub is None:
+                                continue
+                            api_ok = True
+                            module_id_set |= sub
+                    if not api_ok:
+                        module_id_set = None
                     # 区分"API成功(含空集合)"与"模块树不完整(回退)"
                     if module_id_set is not None:
                         self.progress.emit(

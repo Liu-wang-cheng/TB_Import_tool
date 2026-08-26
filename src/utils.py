@@ -169,27 +169,64 @@ def extract_department_prefix(assigned_to: str) -> str:
     return ""
 
 
+def _as_int_list(value) -> list:
+    """把单值/列表/逗号分隔串统一为 int 列表（空返回 []）"""
+    if value is None or value == "":
+        return []
+    if isinstance(value, (int, float)):
+        return [int(value)]
+    if isinstance(value, str):
+        return [int(x) for x in value.replace("，", ",").split(",")
+                if x.strip().isdigit()]
+    if isinstance(value, (list, tuple)):
+        out = []
+        for x in value:
+            if isinstance(x, (int, float)):
+                out.append(int(x))
+            elif isinstance(x, str) and x.strip().isdigit():
+                out.append(int(x))
+        return out
+    return []
+
+
+def _as_str_list(value) -> list:
+    """把单值/列表/逗号分隔串统一为字符串列表（空返回 []）"""
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [x.strip() for x in value.replace("，", ",").split(",")
+                if x.strip()]
+    if isinstance(value, (list, tuple)):
+        return [str(x).strip() for x in value if str(x).strip()]
+    return [str(value)]
+
+
 def normalize_zentao_filters(filters: dict) -> dict:
     """将新配置格式中的 product/project 映射为 product_id/project_id（数字ID直接转换）
 
     新 configs/zentao.yaml 中使用 `product: 11` 而非 `product_id: 11`，
     此函数在调用 fetch_all_bugs 前统一转换为旧格式。
-    """
-    # product → product_id
-    product = filters.get("product")
-    if product and "product_id" not in filters:
-        if isinstance(product, int):
-            filters["product_id"] = product
-        elif isinstance(product, str) and product.isdigit():
-            filters["product_id"] = int(product)
 
-    # project → project_id
+    多产品/多项目：product/project 支持单值或列表（如 [11, 20]），
+    统一转换为 product_ids / project_ids 列表（空列表 = 不限制）。
+    """
+    # product → product_id / product_ids
+    product = filters.get("product")
+    if product is not None and "product_ids" not in filters:
+        filters["product_ids"] = _as_int_list(product)
+        if len(filters["product_ids"]) == 1 and "product_id" not in filters:
+            filters["product_id"] = filters["product_ids"][0]
+    elif filters.get("product_id") is not None and "product_ids" not in filters:
+        filters["product_ids"] = [int(filters["product_id"])]
+
+    # project → project_id / project_ids
     project = filters.get("project")
-    if project and "project_id" not in filters:
-        if isinstance(project, int):
-            filters["project_id"] = project
-        elif isinstance(project, str) and project.isdigit():
-            filters["project_id"] = int(project)
+    if project is not None and "project_ids" not in filters:
+        filters["project_ids"] = _as_int_list(project)
+        if len(filters["project_ids"]) == 1 and "project_id" not in filters:
+            filters["project_id"] = filters["project_ids"][0]
+    elif filters.get("project_id") is not None and "project_ids" not in filters:
+        filters["project_ids"] = [int(filters["project_id"])]
 
     return filters
 

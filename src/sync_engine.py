@@ -172,19 +172,47 @@ class SyncEngine:
         assignee_cfg = self.config.get("assignee", {})
 
         # 动态获取严重程度翻译（API返回数字，需转为页面显示的中文/字母）
-        product_id = filters.get("product_id")
-        self.severity_labels = self.source.fetch_severity_labels(product_id)
+        # 多产品时循环合并各产品的翻译表
+        if getattr(self, "source_type", "zentao") == "teambition":
+            # 外部TB：project_id 是 UUID 字符串，支持单值或列表
+            from src.utils import _as_str_list
+            product_ids = []
+            project_ids = _as_str_list(
+                filters.get("project_ids") or filters.get("project_id"))
+        else:
+            product_ids = filters.get("product_ids") or (
+                [int(filters["product_id"])] if filters.get("product_id") else [])
+            project_ids = filters.get("project_ids") or (
+                [int(filters["project_id"])] if filters.get("project_id") else [])
+        self.severity_labels = {}
+        for pid in product_ids:
+            labels = self.source.fetch_severity_labels(pid)
+            if labels:
+                self.severity_labels.update(labels)
         if self.severity_labels:
             logger.info("禅道严重程度翻译: %s", self.severity_labels)
         assigned_to = resolve_assigned_to(assignee_cfg, self.source.account)
-        bugs = self.source.fetch_all_bugs(
-            product_id=filters.get("product_id"),
-            project_id=filters.get("project_id"),
-            statuses=filters.get("statuses"),
-            date_from=filters.get("date_from"),
-            date_to=filters.get("date_to"),
-            assigned_to=assigned_to,
-        )
+        # 多产品/多项目：笛卡尔积循环拉取，按 bug.id 保序去重
+        bugs = []
+        for pid in product_ids or [None]:
+            for jid in project_ids or [None]:
+                batch = self.source.fetch_all_bugs(
+                    product_id=pid,
+                    project_id=jid,
+                    statuses=filters.get("statuses"),
+                    date_from=filters.get("date_from"),
+                    date_to=filters.get("date_to"),
+                    assigned_to=assigned_to,
+                )
+                bugs.extend(batch)
+        if product_ids or project_ids:
+            seen = set()
+            dedup = []
+            for b in bugs:
+                if b.id not in seen:
+                    seen.add(b.id)
+                    dedup.append(b)
+            bugs = dedup
 
         # 模块过滤预解析：通过模块API将名称解析为ID集合，
         # 避免在 _sync_single_bug 中为不匹配的 Bug 浪费一次详情请求
@@ -193,13 +221,20 @@ class SyncEngine:
             mf = self.module_filter.strip()
             if mf.isdigit():
                 # 数字ID：按"模块+全部子模块"递归过滤（与禅道网页 byModule 一致）
+                # 多产品时循环各产品解析后代集合后合并（模块ID全局唯一，安全）
                 resolve_desc = getattr(self.source, "resolve_module_descendant_ids", None)
                 desc_set = None
-                if resolve_desc and filters.get("product_id"):
-                    try:
-                        desc_set = resolve_desc(int(filters["product_id"]), mf)
-                    except Exception as e:
-                        logger.warning("模块后代解析失败: %s", e)
+                if resolve_desc and product_ids:
+                    desc_set = set()
+                    for pid in product_ids:
+                        try:
+                            sub = resolve_desc(pid, mf)
+                            if sub:
+                                desc_set |= sub
+                        except Exception as e:
+                            logger.warning("模块后代解析失败(产品%s): %s", pid, e)
+                    if not desc_set:
+                        desc_set = None  # 所有产品均解析失败/无此模块 → 回退
                 if desc_set is not None:
                     before = len(bugs)
                     bugs = [b for b in bugs if str(b.module) in desc_set]
@@ -232,10 +267,23 @@ class SyncEngine:
                             logger.debug("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
                         else:
                             logger.info("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
-            elif filters.get("product_id"):
+            elif product_ids:
                 t0 = time.time()
-                self._module_id_set = self.source.resolve_module_ids_by_name(
-                    int(filters["product_id"]), mf)
+                # 多产品：循环各产品解析名称→ID集合后合并
+                self._module_id_set = set()
+                api_ok = False
+                for pid in product_ids:
+                    try:
+                        sub = self.source.resolve_module_ids_by_name(pid, mf)
+                    except Exception as e:
+                        logger.warning("模块名称解析失败(产品%s): %s", pid, e)
+                        sub = None
+                    if sub is None:
+                        continue
+                    api_ok = True
+                    self._module_id_set |= sub
+                if not api_ok:
+                    self._module_id_set = None
                 # 区分空集合与 None：
                 #   set (含空) = API成功 → 用此集合过滤
                 #   None       = API不可用 → 留待 _sync_single_bug 逐条回退
@@ -1249,26 +1297,56 @@ class SyncEngine:
         filters = self._get_source_filters()
         # 外部 TB 源：用项目 ID + 状态名"关闭"；禅道源：用产品 ID + "closed"
         if self.source_type == "teambition":
-            pid = filters.get("project_id") or getattr(self.source, "project_id", "")
+            from src.utils import _as_str_list
+            pids = _as_str_list(filters.get("project_ids")
+                                or filters.get("project_id")
+                                or getattr(self.source, "project_id", ""))
             closed_statuses = ["关闭"]
             server_status = "all"  # 拉已完成缺陷（isDone=True，状态"关闭"）
+            product_id_for_fetch = None
+            project_id_for_fetch = None  # 逐项目循环
         else:
-            pid = filters.get("product_id") or filters.get("product")
+            pids = filters.get("product_ids") or [
+                int(x) for x in [filters.get("product_id"), filters.get("product")]
+                if x not in (None, "") and str(x).isdigit()
+            ] or []
             closed_statuses = ["closed"]
             server_status = "all"
-        if not pid:
+        if not pids:
             logger.warning("[关闭同步] 未配置产品/项目ID，跳过")
             return
-        logger.info("[关闭同步] 查询ID=%s, status=%s", pid, closed_statuses)
-        closed_bugs = self.source.fetch_all_bugs(
-            product_id=filters.get("product_id"),
-            project_id=filters.get("project_id") or pid,
-            statuses=closed_statuses,
-            date_from=filters.get("date_from"),
-            date_to=filters.get("date_to"),
-            assigned_to=None,
-            server_status=server_status,
-        )
+        logger.info("[关闭同步] 查询ID=%s, status=%s", pids, closed_statuses)
+        closed_bugs = []
+        for pid in pids:
+            if self.source_type == "teambition":
+                batch = self.source.fetch_all_bugs(
+                    product_id=None,
+                    project_id=pid,
+                    statuses=closed_statuses,
+                    date_from=filters.get("date_from"),
+                    date_to=filters.get("date_to"),
+                    assigned_to=None,
+                    server_status=server_status,
+                )
+            else:
+                batch = self.source.fetch_all_bugs(
+                    product_id=pid,
+                    project_id=None,
+                    statuses=closed_statuses,
+                    date_from=filters.get("date_from"),
+                    date_to=filters.get("date_to"),
+                    assigned_to=None,
+                    server_status=server_status,
+                )
+            closed_bugs.extend(batch)
+        # 保序去重
+        seen = set()
+        dedup = []
+        for b in closed_bugs:
+            if b.id not in seen:
+                seen.add(b.id)
+                dedup.append(b)
+        closed_bugs = dedup
         if not closed_bugs:
             logger.info("[关闭同步] 无已关闭的 Bug")
             return
@@ -1281,10 +1359,16 @@ class SyncEngine:
                 desc_set = None
                 resolve_desc = getattr(self.source, "resolve_module_descendant_ids", None)
                 if resolve_desc and self.source_type != "teambition":
-                    try:
-                        desc_set = resolve_desc(int(pid), mf)
-                    except Exception as e:
-                        logger.warning("[关闭同步] 模块后代解析失败: %s", e)
+                    desc_set = set()
+                    for p in pids:
+                        try:
+                            sub = resolve_desc(int(p), mf)
+                            if sub:
+                                desc_set |= sub
+                        except Exception as e:
+                            logger.warning("[关闭同步] 模块后代解析失败(产品%s): %s", p, e)
+                    if not desc_set:
+                        desc_set = None
                 if desc_set is not None:
                     closed_bugs = [b for b in closed_bugs
                                    if str(b.module) in desc_set]
@@ -1293,9 +1377,19 @@ class SyncEngine:
                 logger.info("[关闭同步] 模块ID '%s' 过滤后剩余 %d 条", mf, len(closed_bugs))
             else:
                 try:
-                    pid_int = int(pid)
-                    module_ids = self.source.resolve_module_ids_by_name(pid_int, mf)
-                    if module_ids is not None:
+                    # 多产品：循环各产品解析名称→ID集合后合并
+                    module_ids = set()
+                    api_ok = False
+                    for p in pids:
+                        try:
+                            sub = self.source.resolve_module_ids_by_name(int(p), mf)
+                        except Exception:
+                            sub = None
+                        if sub is None:
+                            continue
+                        api_ok = True
+                        module_ids |= sub
+                    if api_ok:
                         closed_bugs = [b for b in closed_bugs
                                        if str(b.module) in module_ids]
                         logger.info("[关闭同步] 模块名 '%s' 命中 %d 个ID，过滤后 %d 条",

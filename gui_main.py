@@ -164,25 +164,112 @@ def _install_excepthook():
     sys.excepthook = _hook
 
 
-def _cleanup_update_temp():
-    """清理上次更新残留的临时目录和 bat 脚本"""
+def _ask_retry_update() -> bool:
+    """弹窗询问是否继续上次未完成的更新（Qt 未初始化，用 ctypes）"""
+    try:
+        import ctypes
+        res = ctypes.windll.user32.MessageBoxW(
+            0,
+            "检测到上次自动更新未完成。\n"
+            "是否立即继续更新到新版本？\n\n"
+            "（选择“否”将取消本次更新并正常启动）",
+            "继续更新",
+            0x4 | 0x20)  # MB_YESNO | MB_ICONQUESTION
+        return res == 6  # IDYES
+    except Exception:
+        return False
+
+
+def _restart_to_update() -> bool:
+    """用当前版本的新模板重新生成更新 bat 并退出（bat 等本进程退出后替换）"""
     app_dir = _get_app_dir()
-    for name in ("_update_extracted", "_update_replace.bat", "_update_download.zip",
-                 "_internal_old"):
+    extract_dir = os.path.join(app_dir, "_update_extracted")
+    try:
+        from gui.workers import _generate_updater_bat
+        bat_content = _generate_updater_bat(
+            app_dir, extract_dir, os.getpid(), extract_dir=extract_dir)
+        bat_path = os.path.join(app_dir, "_update_replace.bat")
+        with open(bat_path, "w", encoding="utf-8") as f:
+            f.write(bat_content)
+        import subprocess
+        subprocess.Popen(["cmd", "/c", bat_path],
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        logging.info("已重新生成更新脚本，正在退出以继续更新")
+        return True
+    except Exception as e:
+        logging.error("重新生成更新脚本失败: %s", e)
+        return False
+
+
+def _find_new_exe(extract_dir: str):
+    """在解压目录中定位新版本 exe（递归）"""
+    for root, _dirs, files in os.walk(extract_dir):
+        for f in files:
+            if f.endswith('.exe'):
+                return os.path.join(root, f)
+    return None
+
+
+def _repair_update_state() -> bool:
+    """更新自愈：启动时处理上次更新中断的状态。
+
+    返回 True 表示已进入"继续更新"流程（调用方应退出，不再启动 GUI）。
+
+    优先级：
+    1. _internal 缺失 + _internal_old 存在 → 自动回滚（rename 恢复）
+    2. _internal 与 _internal_old 都存在 → 新 _internal 已就位，清理 _internal_old
+    3. _update_replace.bat 残留 + _update_extracted 有完整新 exe
+       → 询问用户是否继续更新，确认后重新生成新模板 bat 并重启替换
+    4. 其余临时文件（_update_extracted / _update_download.zip）清理
+    """
+    app_dir = _get_app_dir()
+    internal = os.path.join(app_dir, "_internal")
+    internal_old = os.path.join(app_dir, "_internal_old")
+    bat_path = os.path.join(app_dir, "_update_replace.bat")
+    extract_dir = os.path.join(app_dir, "_update_extracted")
+
+    # 1. 回滚：_internal 缺失但 _internal_old 在（更新在 rename 后中断）
+    if os.path.isdir(internal_old) and not os.path.isdir(internal):
+        try:
+            os.rename(internal_old, internal)
+            logging.warning("检测到上次更新中断，已自动回滚 _internal_old → _internal")
+        except OSError as e:
+            logging.error("自动回滚 _internal 失败: %s", e)
+    # 2. 新 _internal 已就位 → 清理旧 _internal_old（杀毒锁定则留待下次）
+    elif os.path.isdir(internal_old) and os.path.isdir(internal):
+        shutil.rmtree(internal_old, ignore_errors=True)
+        logging.info("已清理旧 _internal_old")
+
+    # 3. 失败重试：bat 残留且解压目录有完整新 exe 时询问用户；
+    #    无可用新 exe（下载损坏）或用户拒绝时删除残留 bat，走正常启动
+    if os.path.exists(bat_path):
+        if _find_new_exe(extract_dir) and _ask_retry_update():
+            if _restart_to_update():
+                return True
+        else:
+            if not _find_new_exe(extract_dir):
+                logging.warning("更新残留的解压目录无可用 exe，清理后正常启动")
+            else:
+                logging.info("用户取消继续更新，正常启动")
+        try:
+            os.remove(bat_path)
+        except OSError:
+            pass
+
+    # 4. 清理其余临时文件（_internal_old 已由上面逻辑处理）
+    for name in ("_update_extracted", "_update_download.zip"):
         path = os.path.join(app_dir, name)
         try:
             if os.path.isdir(path):
-                # _internal_old 可能因为杀毒锁定残留，启动时（杀毒已扫完）重试删除
                 shutil.rmtree(path, ignore_errors=True)
                 if not os.path.exists(path):
                     logging.info("已清理更新残留目录: %s", name)
-                else:
-                    logging.warning("清理更新残留目录失败（可能被锁定）: %s", name)
             elif os.path.isfile(path):
                 os.remove(path)
                 logging.info("已清理更新残留文件: %s", name)
         except OSError as e:
             logging.warning("清理 %s 失败: %s", name, e)
+    return False
 
 
 def main():
@@ -198,8 +285,9 @@ def main():
         _ensure_external_configs()
         _ensure_external_qss()
         _ensure_external_data()
-        # 清理上次更新残留的临时目录
-        _cleanup_update_temp()
+        # 更新自愈：回滚/继续更新/清理残留
+        if _repair_update_state():
+            return
 
     app = QApplication(sys.argv)
     app.setApplicationName("智能缺陷管理平台")

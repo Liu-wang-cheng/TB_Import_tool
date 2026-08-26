@@ -46,25 +46,54 @@ def setup_logging(config: dict, verbose: bool = False):
 def list_bugs(source, filters: dict, severity_map: dict = None,
               severity_labels: dict = None):
     assigned_to = resolve_assigned_to(filters, zentao_account=source.account)
-    bugs = source.fetch_all_bugs(
-        product_id=filters.get("product_id"),
-        project_id=filters.get("project_id"),
-        statuses=filters.get("statuses"),
-        date_from=filters.get("date_from"),
-        date_to=filters.get("date_to"),
-        assigned_to=assigned_to,
-    )
+    # 多产品/多项目：循环拉取后保序去重
+    product_ids = filters.get("product_ids") or (
+        [int(filters["product_id"])] if filters.get("product_id") else [])
+    project_ids = filters.get("project_ids") or (
+        [int(filters["project_id"])] if filters.get("project_id") else [])
+    bugs = []
+    for pid in product_ids or [None]:
+        for jid in project_ids or [None]:
+            bugs.extend(source.fetch_all_bugs(
+                product_id=pid,
+                project_id=jid,
+                statuses=filters.get("statuses"),
+                date_from=filters.get("date_from"),
+                date_to=filters.get("date_to"),
+                assigned_to=assigned_to,
+            ))
+    seen = set()
+    dedup = []
+    for b in bugs:
+        if b.id not in seen:
+            seen.add(b.id)
+            dedup.append(b)
+    bugs = dedup
     module_filter = (filters.get("module_filter") or "").strip()
     module_id_set = None
-    if module_filter and filters.get("product_id"):
-        pid = int(filters["product_id"])
+    if module_filter and product_ids:
+        api_ok = False
         if module_filter.isdigit():
-            # 数字ID：递归包含子模块（与禅道网页 byModule 一致）
+            # 数字ID：递归包含子模块（与禅道网页 byModule 一致），多产品合并集合
             resolve_desc = getattr(source, "resolve_module_descendant_ids", None)
             if resolve_desc:
-                module_id_set = resolve_desc(pid, module_filter)
+                module_id_set = set()
+                for pid in product_ids:
+                    sub = resolve_desc(pid, module_filter)
+                    if sub is None:
+                        continue
+                    api_ok = True
+                    module_id_set |= sub
         else:
-            module_id_set = source.resolve_module_ids_by_name(pid, module_filter)
+            module_id_set = set()
+            for pid in product_ids:
+                sub = source.resolve_module_ids_by_name(pid, module_filter)
+                if sub is None:
+                    continue
+                api_ok = True
+                module_id_set |= sub
+        if not api_ok:
+            module_id_set = None
     bugs = apply_module_filter(
         bugs, module_filter,
         fetch_detail_fn=source.fetch_bug_detail,
