@@ -17,6 +17,10 @@ def _generate_updater_bat(current_dir: str, new_dir: str, pid: int,
 
     只替换程序文件（exe + _internal/），不碰用户数据（configs/、data/、logs/）。
     用户数据通过 _ensure_external_*() 函数在启动时按需补充。
+
+    注意：bat 不嵌入任何绝对/中文路径（UTF-8 写入的文件在 GBK 代码页系统
+    会被 cmd 读乱码，导致 rename/robocopy 路径失效），全部用 %~dp0 和
+    动态遍历解析。
     """
     exe_name = None
     for f in os.listdir(current_dir):
@@ -30,6 +34,7 @@ def _generate_updater_bat(current_dir: str, new_dir: str, pid: int,
     return f"""@echo off
 chcp 65001 >nul 2>&1
 title 正在更新 智能缺陷管理平台
+cd /d "%~dp0"
 
 echo ============================================
 echo   正在更新，请勿关闭此窗口
@@ -54,14 +59,31 @@ echo [OK] 原进程已退出
 timeout /t 2 /nobreak >nul
 echo.
 
+REM 动态定位新版本 exe 与其所在目录（_update_extracted 内，名称不写死，
+REM 避免中文/绝对路径在非 UTF-8 代码页系统上被 cmd 读乱码）
+set "NEW_EXE="
+for /r "_update_extracted" %%f in (*.exe) do if not defined NEW_EXE set "NEW_EXE=%%f"
+if not defined NEW_EXE (
+    echo [ERROR] 未找到新版本程序文件，更新取消
+    pause
+    goto :cleanup
+)
+for %%f in ("%NEW_EXE%") do set "NEW_DIR=%%~dpf"
+for %%f in ("%~dp0*.exe") do set "EXE_NAME=%%~nxf"
+if not defined EXE_NAME (
+    echo [ERROR] 未找到当前程序文件，更新取消
+    pause
+    goto :cleanup
+)
+
 REM 清理可能的上次残留（如果上次更新中断留下的 _internal_old）
-if exist "{current_dir}\\_internal_old" (
-    rmdir /s /q "{current_dir}\\_internal_old" 2>nul
+if exist "_internal_old" (
+    rmdir /s /q "_internal_old" 2>nul
 )
 
 REM rename 策略：rename 是原子操作，即使文件被锁也能成功
 echo 正在切换程序文件...
-rename "{current_dir}\\_internal" "_internal_old"
+rename "_internal" "_internal_old"
 if %errorlevel% neq 0 (
     echo [ERROR] 无法重命名 _internal 目录
     echo 可能原因：权限不足 / _internal 不存在 / 杀毒锁定
@@ -75,17 +97,17 @@ if %errorlevel% neq 0 (
 echo [OK] 旧 _internal 已重命名
 
 REM robocopy 到空目录（无锁，必定成功）
-robocopy "{new_dir}\\_internal" "{current_dir}\\_internal" /e /r:3 /w:1 /njh /njs /ndl /nc /ns /np >nul
+robocopy "%NEW_DIR%_internal" "_internal" /e /r:3 /w:1 /njh /njs /ndl /nc /ns /np >nul
 if %errorlevel% geq 8 (
     echo [ERROR] _internal 复制失败，回滚
-    rename "{current_dir}\\_internal_old" "_internal"
+    rename "_internal_old" "_internal"
     pause
     goto :cleanup
 )
 echo [OK] 新 _internal 已就位
 
 REM 更新 exe（重命名 + 复制）
-copy /y "{new_dir}\\{exe_name}" "{current_dir}\\{exe_name}" >nul
+copy /y "%NEW_DIR%%EXE_NAME%" "%EXE_NAME%" >nul
 if %errorlevel% neq 0 (
     echo [ERROR] exe 复制失败（新 _internal 已就位，可手动覆盖 exe）
     pause
@@ -95,7 +117,7 @@ echo [OK] exe 已更新
 echo.
 
 REM 验证版本号
-findstr /r "^[0-9]" "{current_dir}\\_internal\\VERSION" >nul 2>&1
+findstr /r "^[0-9]" "_internal\\VERSION" >nul 2>&1
 if %errorlevel% equ 0 (
     echo [OK] 更新完成
 ) else (
@@ -105,15 +127,15 @@ echo.
 
 REM 启动新版本
 echo 正在启动新版本...
-start "" "{current_dir}\\{exe_name}"
+start "" "%EXE_NAME%"
 
 REM 等待新版本启动，然后清理旧 _internal_old（多次重试，杀毒扫描可能锁定）
 timeout /t 3 /nobreak >nul
 set OLD_RETRY=0
 :old_cleanup_loop
-if not exist "{current_dir}\\_internal_old" goto :cleanup
-rmdir /s /q "{current_dir}\\_internal_old" 2>nul
-if exist "{current_dir}\\_internal_old" (
+if not exist "_internal_old" goto :cleanup
+rmdir /s /q "_internal_old" 2>nul
+if exist "_internal_old" (
     set /a OLD_RETRY+=1
     if %OLD_RETRY% lss 5 (
         timeout /t 3 /nobreak >nul
@@ -123,7 +145,8 @@ if exist "{current_dir}\\_internal_old" (
 )
 
 :cleanup
-if exist "{cleanup_dir}" rmdir /s /q "{cleanup_dir}"
+if exist "_update_extracted" rmdir /s /q "_update_extracted"
+if exist "_update_download.zip" del /f /q "_update_download.zip"
 (goto) 2>nul & del /f /q "%~f0"
 """
 
