@@ -231,6 +231,50 @@ def normalize_zentao_filters(filters: dict) -> dict:
     return filters
 
 
+def resolve_module_filter_ids(source, product_ids: list,
+                              module_filter: str):
+    """把模块过滤（支持逗号分隔多值）解析为模块 ID 集合。
+
+    - 数字值：按"模块+全部子模块"递归（resolve_module_descendant_ids）
+    - 名称值：按名称解析（resolve_module_ids_by_name）
+    多产品时循环各产品解析后合并（模块ID全局唯一，安全）。
+
+    Returns:
+        (combined_set, api_ok)
+        - combined_set: 合并后的模块 ID 集合（可能为空集）
+        - api_ok: True 表示至少一个值解析成功；False 表示树不可用
+    """
+    combined: set = set()
+    api_ok = False
+    resolve_desc = getattr(source, "resolve_module_descendant_ids", None)
+    for mf in (module_filter or "").replace("，", ",").split(","):
+        mf = mf.strip()
+        if not mf:
+            continue
+        if mf.isdigit():
+            if resolve_desc:
+                for pid in product_ids:
+                    try:
+                        sub = resolve_desc(pid, mf)
+                    except Exception:
+                        sub = None
+                    if sub is None:
+                        continue
+                    api_ok = True
+                    combined |= sub
+        else:
+            for pid in product_ids:
+                try:
+                    sub = source.resolve_module_ids_by_name(pid, mf)
+                except Exception:
+                    sub = None
+                if sub is None:
+                    continue
+                api_ok = True
+                combined |= sub
+    return combined, api_ok
+
+
 def parse_zentao_url(url: str) -> dict:
     """从禅道 Bug 页面 URL 中解析产品ID、项目ID、模块ID、分支ID
 

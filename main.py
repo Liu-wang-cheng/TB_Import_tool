@@ -72,28 +72,18 @@ def list_bugs(source, filters: dict, severity_map: dict = None,
     module_filter = (filters.get("module_filter") or "").strip()
     module_id_set = None
     if module_filter and product_ids:
-        api_ok = False
-        if module_filter.isdigit():
-            # 数字ID：递归包含子模块（与禅道网页 byModule 一致），多产品合并集合
-            resolve_desc = getattr(source, "resolve_module_descendant_ids", None)
-            if resolve_desc:
-                module_id_set = set()
-                for pid in product_ids:
-                    sub = resolve_desc(pid, module_filter)
-                    if sub is None:
-                        continue
-                    api_ok = True
-                    module_id_set |= sub
+        # 支持逗号分隔多值（如 "123,136"）：每个值解析后代/名称集合后合并
+        from src.utils import resolve_module_filter_ids
+        combined, api_ok = resolve_module_filter_ids(
+            source, product_ids, module_filter)
+        if api_ok:
+            module_id_set = combined
         else:
-            module_id_set = set()
-            for pid in product_ids:
-                sub = source.resolve_module_ids_by_name(pid, module_filter)
-                if sub is None:
-                    continue
-                api_ok = True
-                module_id_set |= sub
-        if not api_ok:
-            module_id_set = None
+            # 树不可用：数字值精确匹配兜底
+            exact = {mf.strip() for mf in module_filter.split(",")
+                     if mf.strip().isdigit()}
+            if exact:
+                module_id_set = exact
     bugs = apply_module_filter(
         bugs, module_filter,
         fetch_detail_fn=source.fetch_bug_detail,

@@ -344,33 +344,19 @@ class ListBugsWorker(QThread):
                     [int(filters["product_id"])]
                     if filters.get("product_id") else [])
                 if product_ids:
-                    api_ok = False
-                    if module_filter.isdigit():
-                        # 数字ID：递归包含子模块（与禅道网页 byModule 一致），
-                        # 多产品合并集合（模块ID全局唯一，安全）
-                        resolve_desc = getattr(source, "resolve_module_descendant_ids", None)
-                        if resolve_desc:
-                            self.progress.emit(
-                                f"解析模块 {module_filter} 及其子模块...")
-                            module_id_set = set()
-                            for pid in product_ids:
-                                sub = resolve_desc(int(pid), module_filter)
-                                if sub is None:
-                                    continue
-                                api_ok = True
-                                module_id_set |= sub
+                    # 支持逗号分隔多值（如 "123,136"）：每个值解析集合后合并
+                    from src.utils import resolve_module_filter_ids
+                    self.progress.emit(
+                        f"解析模块 '{module_filter}' 及子模块...")
+                    combined, api_ok = resolve_module_filter_ids(
+                        source, product_ids, module_filter)
+                    if api_ok:
+                        module_id_set = combined
                     else:
-                        self.progress.emit(f"通过模块API解析名称 '{module_filter}'...")
-                        module_id_set = set()
-                        for pid in product_ids:
-                            sub = source.resolve_module_ids_by_name(
-                                int(pid), module_filter)
-                            if sub is None:
-                                continue
-                            api_ok = True
-                            module_id_set |= sub
-                    if not api_ok:
-                        module_id_set = None
+                        # 树不可用：数字值精确匹配兜底
+                        exact = {mf.strip() for mf in module_filter.split(",")
+                                 if mf.strip().isdigit()}
+                        module_id_set = exact if exact else None
                     # 区分"API成功(含空集合)"与"模块树不完整(回退)"
                     if module_id_set is not None:
                         self.progress.emit(

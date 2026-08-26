@@ -215,89 +215,62 @@ class SyncEngine:
             bugs = dedup
 
         # 模块过滤预解析：通过模块API将名称解析为ID集合，
-        # 避免在 _sync_single_bug 中为不匹配的 Bug 浪费一次详情请求
+        # 避免在 _sync_single_bug 中为不匹配的 Bug 浪费一次详情请求。
+        # 支持逗号分隔多值（如 "123,136"），多产品时合并各产品集合。
         self._module_id_set: Optional[set] = None
         if self.module_filter and bugs:
-            mf = self.module_filter.strip()
-            if mf.isdigit():
-                # 数字ID：按"模块+全部子模块"递归过滤（与禅道网页 byModule 一致）
-                # 多产品时循环各产品解析后代集合后合并（模块ID全局唯一，安全）
-                resolve_desc = getattr(self.source, "resolve_module_descendant_ids", None)
-                desc_set = None
-                if resolve_desc and product_ids:
-                    desc_set = set()
-                    for pid in product_ids:
-                        try:
-                            sub = resolve_desc(pid, mf)
-                            if sub:
-                                desc_set |= sub
-                        except Exception as e:
-                            logger.warning("模块后代解析失败(产品%s): %s", pid, e)
-                    if not desc_set:
-                        desc_set = None  # 所有产品均解析失败/无此模块 → 回退
-                if desc_set is not None:
+            from src.utils import resolve_module_filter_ids
+            mf_list = [x.strip() for x in
+                       self.module_filter.replace("，", ",").split(",")
+                       if x.strip()]
+            if mf_list:
+                combined, api_ok = resolve_module_filter_ids(
+                    self.source, product_ids, self.module_filter)
+                if api_ok:
+                    self._module_id_set = combined
                     before = len(bugs)
-                    bugs = [b for b in bugs if str(b.module) in desc_set]
-                    # 标记已预解析，_sync_single_bug 的单条模块检查据此跳过
-                    # （否则其精确匹配回退会把子模块 Bug 误判为不匹配）
-                    self._module_id_set = desc_set
+                    bugs = [b for b in bugs if str(b.module) in combined]
                     if self.sync_closed_status:
-                        logger.debug("模块ID '%s'(含%d个子模块) 过滤 %d→%d 条",
-                                     mf, len(desc_set) - 1, before, len(bugs))
+                        logger.debug("模块 '%s' 命中 %d 个ID，预过滤 %d→%d 条",
+                                     self.module_filter, len(combined),
+                                     before, len(bugs))
                     else:
-                        logger.info("模块ID '%s'(含%d个子模块) 过滤 %d→%d 条",
-                                    mf, len(desc_set) - 1, before, len(bugs))
-                else:
-                    # 树不可用：先按 module ID 快路径过滤；零结果时兜底名称子串匹配
-                    id_filtered = [b for b in bugs if str(b.module) == mf]
-                    if id_filtered:
-                        bugs = id_filtered
-                        if self.sync_closed_status:
-                            logger.debug("模块ID '%s' 预过滤后剩余 %d 条", mf, len(bugs))
-                        else:
+                        logger.info("模块 '%s' 命中 %d 个ID，预过滤 %d→%d 条",
+                                    self.module_filter, len(combined),
+                                    before, len(bugs))
+                elif len(mf_list) == 1:
+                    # 树不可用（单值）：数字走精确匹配 + 名称子串兜底；名称留待逐条回退
+                    mf = mf_list[0]
+                    if mf.isdigit():
+                        id_filtered = [b for b in bugs if str(b.module) == mf]
+                        if id_filtered:
+                            bugs = id_filtered
                             logger.info("模块ID '%s' 预过滤后剩余 %d 条", mf, len(bugs))
-                    else:
-                        # 数字当名称子串匹配：调用 utils 的并发详情拉取路径
-                        bugs = apply_module_filter(
-                            bugs, mf,
-                            fetch_detail_fn=self.source.fetch_bug_detail,
-                            treat_digit_as_name=True,
-                        )
-                        if self.sync_closed_status:
-                            logger.debug("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
                         else:
+                            bugs = apply_module_filter(
+                                bugs, mf,
+                                fetch_detail_fn=self.source.fetch_bug_detail,
+                                treat_digit_as_name=True,
+                            )
                             logger.info("模块ID '%s' 名称兜底过滤后剩余 %d 条", mf, len(bugs))
-            elif product_ids:
-                t0 = time.time()
-                # 多产品：循环各产品解析名称→ID集合后合并
-                self._module_id_set = set()
-                api_ok = False
-                for pid in product_ids:
-                    try:
-                        sub = self.source.resolve_module_ids_by_name(pid, mf)
-                    except Exception as e:
-                        logger.warning("模块名称解析失败(产品%s): %s", pid, e)
-                        sub = None
-                    if sub is None:
-                        continue
-                    api_ok = True
-                    self._module_id_set |= sub
-                if not api_ok:
-                    self._module_id_set = None
-                # 区分空集合与 None：
-                #   set (含空) = API成功 → 用此集合过滤
-                #   None       = API不可用 → 留待 _sync_single_bug 逐条回退
-                if self._module_id_set is not None:
-                    before = len(bugs)
-                    bugs = [b for b in bugs if str(b.module) in self._module_id_set]
-                    logger.info(
-                        "模块名称 '%s' 命中 %d 个ID，预过滤 %d→%d 条 (耗时 %.2fs)",
-                        mf, len(self._module_id_set), before, len(bugs),
-                        time.time() - t0)
+                    else:
+                        logger.warning(
+                            "模块API不可用，回退到 _sync_single_bug 中逐条 fetch_detail "
+                            "比对 moduleName（每条约 0.6s 延迟）")
                 else:
-                    logger.warning(
-                        "模块API不可用，回退到 _sync_single_bug 中逐条 fetch_detail "
-                        "比对 moduleName（每条约 0.6s 延迟）")
+                    # 多值且树不可用：数字值精确匹配，名称值忽略（保守）
+                    exact = {mf for mf in mf_list if mf.isdigit()}
+                    if exact:
+                        self._module_id_set = exact
+                        before = len(bugs)
+                        bugs = [b for b in bugs if str(b.module) in exact]
+                        logger.warning(
+                            "模块树不可用，多值 '%s' 按数字精确匹配 %d→%d 条",
+                            self.module_filter, before, len(bugs))
+                    else:
+                        logger.warning(
+                            "模块树不可用且多值为名称，跳过模块过滤: %s",
+                            self.module_filter)
 
         stats.total = len(bugs)
         if not self.sync_closed_status:
@@ -1351,51 +1324,32 @@ class SyncEngine:
             logger.info("[关闭同步] 无已关闭的 Bug")
             return
 
-        # 应用模块过滤（与主同步一致）
+        # 应用模块过滤（与主同步一致，支持逗号分隔多值）
         if self.module_filter:
-            mf = self.module_filter.strip()
-            if mf.isdigit():
-                # 数字ID：递归包含子模块（与主同步/网页 byModule 一致）
-                desc_set = None
-                resolve_desc = getattr(self.source, "resolve_module_descendant_ids", None)
-                if resolve_desc and self.source_type != "teambition":
-                    desc_set = set()
-                    for p in pids:
-                        try:
-                            sub = resolve_desc(int(p), mf)
-                            if sub:
-                                desc_set |= sub
-                        except Exception as e:
-                            logger.warning("[关闭同步] 模块后代解析失败(产品%s): %s", p, e)
-                    if not desc_set:
-                        desc_set = None
-                if desc_set is not None:
-                    closed_bugs = [b for b in closed_bugs
-                                   if str(b.module) in desc_set]
+            from src.utils import resolve_module_filter_ids
+            mf_list = [x.strip() for x in
+                       self.module_filter.replace("，", ",").split(",")
+                       if x.strip()]
+            if mf_list:
+                # 外部TB无模块概念，跳过解析（不匹配任何模块）
+                if self.source_type != "teambition":
+                    combined, api_ok = resolve_module_filter_ids(
+                        self.source, [int(p) for p in pids], self.module_filter)
                 else:
-                    closed_bugs = [b for b in closed_bugs if str(b.module) == mf]
-                logger.info("[关闭同步] 模块ID '%s' 过滤后剩余 %d 条", mf, len(closed_bugs))
-            else:
-                try:
-                    # 多产品：循环各产品解析名称→ID集合后合并
-                    module_ids = set()
-                    api_ok = False
-                    for p in pids:
-                        try:
-                            sub = self.source.resolve_module_ids_by_name(int(p), mf)
-                        except Exception:
-                            sub = None
-                        if sub is None:
-                            continue
-                        api_ok = True
-                        module_ids |= sub
-                    if api_ok:
+                    combined, api_ok = set(), False
+                if api_ok:
+                    closed_bugs = [b for b in closed_bugs
+                                   if str(b.module) in combined]
+                    logger.info("[关闭同步] 模块 '%s' 命中 %d 个ID，过滤后 %d 条",
+                                self.module_filter, len(combined), len(closed_bugs))
+                else:
+                    # 树不可用：数字值精确匹配兜底
+                    exact = {mf for mf in mf_list if mf.isdigit()}
+                    if exact:
                         closed_bugs = [b for b in closed_bugs
-                                       if str(b.module) in module_ids]
-                        logger.info("[关闭同步] 模块名 '%s' 命中 %d 个ID，过滤后 %d 条",
-                                    mf, len(module_ids), len(closed_bugs))
-                except Exception as e:
-                    logger.warning("[关闭同步] 模块过滤失败: %s", e)
+                                       if str(b.module) in exact]
+                        logger.info("[关闭同步] 模块ID '%s' 精确匹配后 %d 条",
+                                    ",".join(sorted(exact)), len(closed_bugs))
             if not closed_bugs:
                 logger.info("[关闭同步] 模块过滤后无 Bug")
                 return

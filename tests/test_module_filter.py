@@ -448,6 +448,39 @@ class TestMultiProductMerge:
         assert [b.id for b in dedup] == [1, 2, 3]
 
 
+class TestResolveModuleFilterIds:
+    """多值模块过滤解析（逗号分隔）"""
+
+    def _source(self, desc=None, by_name=None):
+        src = Mock()
+        src.resolve_module_descendant_ids = Mock(side_effect=desc or (lambda p, m: None))
+        src.resolve_module_ids_by_name = Mock(side_effect=by_name or (lambda p, m: None))
+        return src
+
+    def test_multi_digit_merge_descendants(self):
+        from src.utils import resolve_module_filter_ids
+        src = self._source(desc=lambda p, m: {f"{m}", "136"} if p == 11 else None)
+        combined, api_ok = resolve_module_filter_ids(src, [11, 20], "123,158")
+        assert api_ok is True
+        assert combined == {"123", "136", "158"}
+
+    def test_mixed_digit_and_name(self):
+        from src.utils import resolve_module_filter_ids
+        src = self._source(
+            desc=lambda p, m: {m, "137"} if m == "123" else None,
+            by_name=lambda p, n: {"90", "91"} if n == "HS302" else None)
+        combined, api_ok = resolve_module_filter_ids(src, [11], "123,HS302")
+        assert api_ok is True
+        assert combined == {"123", "137", "90", "91"}
+
+    def test_all_fail_returns_not_ok(self):
+        from src.utils import resolve_module_filter_ids
+        src = self._source(desc=lambda p, m: None)
+        combined, api_ok = resolve_module_filter_ids(src, [11], "999")
+        assert api_ok is False
+        assert combined == set()
+
+
 class TestDingTalkZeroBugs:
     """缺陷数量为 0 时不推送钉钉"""
 
