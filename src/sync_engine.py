@@ -23,6 +23,12 @@ from src.utils import apply_module_filter, resolve_assigned_to
 logger = logging.getLogger(__name__)
 
 
+def _is_uuid(s) -> bool:
+    """判断是否为 TB 任务 UUID（24 位 hex 字符串）"""
+    return (isinstance(s, str) and len(s) == 24
+            and all(c in "0123456789abcdef" for c in s.lower()))
+
+
 class SyncEngine:
     def __init__(self, config: dict, source: SourceClient,
                  teambition: TeambitionClient, dingtalk_bot=None):
@@ -890,13 +896,20 @@ class SyncEngine:
                 involve_member_ids=self._participant_ids or None,
             )
 
-            # 双向标注：回写源平台（禅道写标题，外部 TB 先标题后评论）
+            # 双向标注：回写源平台（禅道写标题，外部 TB 先标题后评论）。
+            # 编号获取失败时 task_identifier 会是任务 UUID（24位hex）——
+            # 此时跳过标题回写，避免把无意义的 UUID 写进源平台标题
             display_id = task_identifier or task_id
-            new_title = self._build_zentao_title(full_bug.title, display_id)
-            try:
-                self.source.update_bug_title(full_bug.id, new_title)
-            except Exception as e:
-                logger.warning("回写失败: Bug#%d - %s", full_bug.id, e)
+            if _is_uuid(display_id):
+                logger.warning(
+                    "Bug#%d → TB %s 编号获取失败，跳过标题回写（后续同步可补）",
+                    full_bug.id, display_id)
+            else:
+                new_title = self._build_zentao_title(full_bug.title, display_id)
+                try:
+                    self.source.update_bug_title(full_bug.id, new_title)
+                except Exception as e:
+                    logger.warning("回写失败: Bug#%d - %s", full_bug.id, e)
 
             # 同步评论 + 附件（评论媒体走附件统一通道，按 file_id 去重）
             try:

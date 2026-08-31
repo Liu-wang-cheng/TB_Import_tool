@@ -62,7 +62,9 @@ def create_source_client(config: dict):
         # 优先从 url 解析 project_id
         if url and not project_id:
             project_id = client.extract_project_id(url)
-        return TeambitionSourceAdapter(client, project_id=project_id)
+        return TeambitionSourceAdapter(
+            client, project_id=project_id,
+            field_ids=tb_src_cfg.get("field_ids", {}))
 
     elif platform == "jira":
         raise NotImplementedError(

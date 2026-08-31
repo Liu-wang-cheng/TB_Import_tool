@@ -33,7 +33,7 @@ def make_task(**overrides):
     return task
 
 
-def make_adapter(status_map=None):
+def make_adapter(status_map=None, field_ids=None):
     client = MagicMock()
     client.account = ""
     client.project_id = ""
@@ -47,7 +47,8 @@ def make_adapter(status_map=None):
             "status_reopen": "重新打开",
             "status_closed": "关闭",
         }).get(sid, ""))
-    adapter = TeambitionSourceAdapter(client, project_id="69c0b68bf754000531ced0ce")
+    adapter = TeambitionSourceAdapter(
+        client, project_id="69c0b68bf754000531ced0ce", field_ids=field_ids)
     return adapter
 
 
@@ -111,6 +112,52 @@ class TestTaskToBug:
         adapter = make_adapter()
         task = make_task(customfields=[
             {"type": "date", "value": [{"title": "2026.8.21——15:50"}]},
+        ])
+        bug = adapter._task_to_bug(task)
+        assert bug.openedDate == "2026-08-21 15:50"
+
+    def test_sn_with_mixed_case_extracted(self):
+        """SN 值含小写（如 Philips263100137）通过 field_ids 精确映射提取"""
+        adapter = make_adapter(field_ids={
+            "sn_code": "6306e205c09533eb452f004c",
+            "found_time": "6306e2057e5ecb33ee2221a2",
+        })
+        task = make_task(customfields=[
+            {"_customfieldId": "6306e205c09533eb452f004c",
+             "type": "text", "value": [{"title": "Philips263100137"}]},
+            {"_customfieldId": "6306e2057e5ecb33ee2221a2",
+             "type": "text", "value": [{"title": "8/26 15：25"}]},
+        ])
+        bug = adapter._task_to_bug(task)
+        assert bug.snCode == "Philips263100137"
+        assert bug.openedDate == "2026-08-26 15:25"
+
+    def test_field_ids_priority_over_value_guess(self):
+        """field_ids 精确映射优先于值特征猜测（如 version 值不被猜成 SN）"""
+        adapter = make_adapter(field_ids={"sn_code": "cf-sn", "version": "cf-ver"})
+        task = make_task(customfields=[
+            {"_customfieldId": "cf-sn", "type": "text",
+             "value": [{"title": "Philips263100137"}]},
+            {"_customfieldId": "cf-ver", "type": "text",
+             "value": [{"title": "1.0.39"}]},
+        ])
+        bug = adapter._task_to_bug(task)
+        assert bug.snCode == "Philips263100137"
+        assert bug.openedBuild == "1.0.39"
+
+    def test_found_time_md_format_normalized(self):
+        """M/D 时间格式（8/26 15：25）用任务创建时间补全年份"""
+        adapter = make_adapter()
+        task = make_task(created="2026-08-26T03:00:00.000Z", customfields=[
+            {"type": "text", "value": [{"title": "8/26 15：25-15：40"}]},
+        ])
+        bug = adapter._task_to_bug(task)
+        assert bug.openedDate == "2026-08-26 15:25"
+
+    def test_found_time_dotted_normalized(self):
+        adapter = make_adapter()
+        task = make_task(customfields=[
+            {"type": "text", "value": [{"title": "2026.8.21——15:50"}]},
         ])
         bug = adapter._task_to_bug(task)
         assert bug.openedDate == "2026-08-21 15:50"

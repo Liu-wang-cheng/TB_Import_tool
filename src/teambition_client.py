@@ -215,15 +215,28 @@ class TeambitionClient:
         result = data.get("result", data)
         task_id = result.get("taskId") or result.get("id", "")
 
-        # 创建后查询 uniqueId 并拼接平台编号（如 VLNS-62819）
+        # 获取编号（如 VLNS-62819）：优先取创建响应的 uniqueId；
+        # 缺失时重试查询（编号/索引可能延迟生成，立即查询会拿到空
+        # 导致回写标题时误用任务 UUID）
         task_display_id = ""
-        if task_id:
-            try:
-                task = self.get_task(task_id)
-                if task and task.taskIdentifier:
-                    task_display_id = self.build_task_display_id(task.taskIdentifier)
-            except Exception as e:
-                logger.warning("获取任务编号失败: %s", e)
+        unique_id = result.get("uniqueId")
+        if unique_id:
+            task_display_id = self.build_task_display_id(unique_id)
+        elif task_id:
+            for attempt in range(3):
+                try:
+                    task = self.get_task(task_id)
+                    if task and task.taskIdentifier:
+                        task_display_id = self.build_task_display_id(
+                            task.taskIdentifier)
+                        break
+                except Exception as e:
+                    logger.warning("获取任务编号失败: %s", e)
+                time.sleep(1 + attempt)
+            if not task_display_id:
+                logger.warning(
+                    "任务 %s 编号获取失败（多次重试），回写将使用任务ID",
+                    task_id)
 
         logger.info("创建 Teambition 任务: %s (ID: %s, 编号: %s)",
                      content[:50], task_id, task_display_id or "未知")

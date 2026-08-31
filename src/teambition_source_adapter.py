@@ -23,9 +23,13 @@ class TeambitionSourceAdapter:
 
     source_type = "teambition"
 
-    def __init__(self, client: TeambitionSourceClient, project_id: str = ""):
+    def __init__(self, client: TeambitionSourceClient, project_id: str = "",
+                 field_ids: dict = None):
         self._client = client
         self.project_id = project_id or client.project_id
+        # 外部TB项目自定义字段 id → 语义 精确映射（如 {"sn_code": "6306e...4c"}）。
+        # 外部TB与内部TB同项目时字段 id 一致，可直接导入 SN/产生时间等
+        self._field_ids = field_ids or {}
         self._bug_scenariofield_id = ""
         self._unique_id_prefix = ""  # 项目任务编号前缀（如 "323A"）
         # uniqueId(int) → task 原始 dict，供 fetch_bug_detail 回查
@@ -99,9 +103,11 @@ class TeambitionSourceAdapter:
             openedByAccount=creator_id,
             # 缺陷产生时间：优先外部TB自定义字段的时间字段，其次 startDate，最后创建时间。
             # 归一化为 YYYY-MM-DD HH:MM（点分日期如 "2026.8.21——15:50" 直接比较会
-            # 因 '.' > '-' 导致 _filter_bugs 的日期筛选系统性错误）
+            # 因 '.' > '-' 导致 _filter_bugs 的日期筛选系统性错误；
+            # M/D 格式如 "8/26 15：25" 用任务创建时间补全年份）
             openedDate=self._normalize_datetime(
-                cfs.get("found_time") or task.get("startDate") or task.get("created", "")),
+                cfs.get("found_time") or task.get("startDate") or task.get("created", ""),
+                reference=task.get("created") or task.get("startDate")),
             project=self.project_id,
             projectName=task.get("content", "")[:50],
             snCode=cfs.get("sn_code", ""),
@@ -111,8 +117,11 @@ class TeambitionSourceAdapter:
         )
 
     @staticmethod
-    def _normalize_datetime(value) -> str:
-        """把外部TB时间字符串归一化为 YYYY-MM-DD HH:MM（失败原样返回）。"""
+    def _normalize_datetime(value, reference: str = "") -> str:
+        """把外部TB时间字符串归一化为 YYYY-MM-DD HH:MM（失败原样返回）。
+
+        reference: 参考时间字符串（如任务创建时间），用于 M/D 格式补全年份。
+        """
         if not value or not isinstance(value, str):
             return value or ""
         try:
@@ -120,10 +129,12 @@ class TeambitionSourceAdapter:
             from datetime import datetime
             ref = None
             v = value.strip()
-            try:
-                ref = datetime.fromisoformat(v)
-            except (ValueError, TypeError):
-                pass
+            for cand in (v, (reference or "").strip()):
+                try:
+                    ref = datetime.fromisoformat(cand)
+                    break
+                except (ValueError, TypeError):
+                    continue
             result = extract_datetime(v, ref)
             return result if result else value
         except Exception:
@@ -132,15 +143,34 @@ class TeambitionSourceAdapter:
     def _extract_customfields(self, task: dict) -> dict:
         """从 task.customfields 提取 severity/category/frequency/sn_code/version
 
-        字段名未知，按值特征猜测：
+        优先按 _customfieldId 精确映射（field_ids 配置，外部TB与内部TB
+        同项目时字段 id 一致，可"直接导入"）；未配置/未命中时按值特征猜测：
         - severity：值含 致命/严重/一般/建议/S/A/B/C
         - category：commongroup 类型的值（如"固件缺陷"）
         - frequency：值含 概率 或 %（如"中(≤30%)"、"必现(=100%)"）
         - version：值形如 X.Y.Z（如 "1.0.12"、"V1.0.38"）
-        - sn_code：值形如 HQ... 或 长字母数字
+        - sn_code：值形如 HQ... 或 长字母数字（严格；混合大小写 SN
+          如 Philips... 需通过 field_ids 精确映射）
         """
         result = {"severity": "", "category": "", "frequency": "",
                   "sn_code": "", "version": "", "found_time": ""}
+        # 按 _customfieldId 精确映射（如 {"sn_code": "6306e205c09533eb452f004c"}）
+        field_ids = getattr(self, "_field_ids", {}) or {}
+        id_to_key = {str(v): k for k, v in field_ids.items() if v}
+        for cf in task.get("customfields", []):
+            cf_id = str(cf.get("_customfieldId") or "")
+            key = id_to_key.get(cf_id)
+            if not key:
+                continue
+            value = cf.get("value", [])
+            title = ""
+            if isinstance(value, list) and value:
+                first = value[0]
+                title = first.get("title", "") if isinstance(first, dict) else str(first)
+            elif isinstance(value, str):
+                title = value
+            if title and key in result and not result[key]:
+                result[key] = title
         for cf in task.get("customfields", []):
             value = cf.get("value", [])
             title = ""
@@ -164,14 +194,16 @@ class TeambitionSourceAdapter:
             # 复现概率：值含"概率"或"%"（如"中(≤30%)"、"高概率"）
             if ("概率" in title or "%" in title) and not result["frequency"]:
                 result["frequency"] = title
-            # SN 编码：值形如 HQ... 或 长字母数字
+            # SN 编码：值形如 HQ... 或 长字母数字（严格，防误判；
+            # 混合大小写如 Philips... 由 field_ids 精确映射处理）
             if re.match(r'^[A-Z]{2,}[0-9A-Z]{6,}$', title) and not result["sn_code"]:
                 result["sn_code"] = title
             # 版本：值形如 X.Y.Z 或 vX.Y.Z（去掉 V 前缀）
             if re.match(r'^[vV]?\d+\.\d+(\.\d+)?$', title) and not result["version"]:
                 result["version"] = re.sub(r'^[vV]', '', title)
-            # 缺陷产生时间：值形如 2026.8.21——15:50 或 2026-08-21 15:50
-            if re.search(r'\d{4}[./-]\d{1,2}[./-]\d{1,2}', title) \
+            # 缺陷产生时间：值形如 2026.8.21——15:50 / 2026-08-21 15:50
+            # 或 M/D 格式 8/26 15：25（无年份，_normalize_datetime 用参考日期补全）
+            if re.search(r'\d{1,2}[/.-]\d{1,2}[^0-9]*\d{1,2}[：:]\d{1,2}', title) \
                     and not result["found_time"]:
                 result["found_time"] = title
         return result
