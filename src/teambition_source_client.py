@@ -50,6 +50,7 @@ class TeambitionSourceClient:
         self._user_cache: Dict[str, str] = {}
         self._sfconfig_cache: Dict[str, str] = {}  # scenariofieldconfigId → name
         self._cf_name_cache: Dict[str, str] = {}  # customfieldId → 字段名称
+        self._media_driver = None  # 备注媒体签名抓取的 Edge 浏览器（惰性）
 
     # ── 认证 ──────────────────────────────────────────
 
@@ -228,6 +229,70 @@ class TeambitionSourceClient:
         name = data.get("name", "") if isinstance(data, dict) else ""
         self._cf_name_cache[cf_id] = name
         return name
+
+    # ── 备注媒体签名 URL（Selenium 抓取前端渲染结果）─────────────
+
+    def _get_media_driver(self):
+        """惰性创建 Edge 无头浏览器并注入 Cookie（复用登录的同一套驱动环境）"""
+        if self._media_driver is None:
+            from selenium import webdriver
+            from selenium.webdriver.edge.options import Options
+            import time as _t
+            options = Options()
+            options.add_argument("--headless=new")
+            options.add_argument("--window-size=1920,1080")
+            self._media_driver = webdriver.Edge(options=options)
+            self._media_driver.get("https://www.teambition.com")
+            _t.sleep(2)
+            for k, v in self._cookies.items():
+                try:
+                    self._media_driver.add_cookie(
+                        {"name": k, "value": v, "domain": ".teambition.com"})
+                except Exception:
+                    pass
+        return self._media_driver
+
+    def close_media_driver(self):
+        """关闭备注媒体抓取浏览器（同步结束时调用）"""
+        if self._media_driver is not None:
+            try:
+                self._media_driver.quit()
+            except Exception:
+                pass
+            self._media_driver = None
+
+    def fetch_signed_media_urls(self, task_id: str,
+                                wait_seconds: int = 10) -> dict:
+        """打开任务页，提取备注媒体渲染后的签名 URL。
+
+        返回 {fileKey路径: 签名URL}：
+        - 视频/文件：/api/awos/download/{fileKey}?tb-file-token=JWT
+        - 图片：teambition-file.oss.../rich-text-*/{fileKey}?OSSAccessKeyId=...
+        """
+        import time as _t
+        driver = self._get_media_driver()
+        driver.get(f"https://www.teambition.com/task/{task_id}")
+        _t.sleep(wait_seconds)
+        html = driver.page_source
+        result = {}
+        # 视频 source src（awos/download + tb-file-token）
+        for m in re.finditer(
+                r'<source[^>]*src="([^"]*awos/download/[^"]+)"', html):
+            url = m.group(1).replace("&amp;", "&")
+            key = url.split("/api/awos/download/")[1].split("?")[0]
+            result[key] = url
+        # 图片 img src（OSS 签名直链）
+        for m in re.finditer(
+                r'<img[^>]*src="([^"]*teambition-file\.oss[^"]+)"', html):
+            url = m.group(1).replace("&amp;", "&")
+            if "aliyuncs.com/" in url:
+                key = url.split("aliyuncs.com/")[1].split("?")[0]
+                result[key] = url
+        if result:
+            logger.info("任务 %s 备注媒体签名 %d 个", task_id, len(result))
+        else:
+            logger.warning("任务 %s 未抓到备注媒体签名 URL", task_id)
+        return result
 
     def fetch_task_comments(self, task_id: str) -> List[dict]:
         """拉取任务评论（activity.comment 和 activity.comment.attachments）

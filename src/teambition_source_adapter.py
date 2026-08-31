@@ -318,7 +318,7 @@ class TeambitionSourceAdapter:
         return name.strip()
 
     def fetch_bug_detail(self, bug_id: int) -> ZentaoBug:
-        """返回完整详情（从缓存 task 重新映射 + 收集评论附件）"""
+        """返回完整详情（从缓存 task 重新映射 + 收集评论附件 + 备注媒体）"""
         task = self._task_cache.get(bug_id)
         if task is None:
             # 缓存未命中，返回最小 bug（id 保真）
@@ -327,7 +327,78 @@ class TeambitionSourceAdapter:
         bug = self._task_to_bug(task)
         # 收集评论附件到 files（附件在评论里，需单独拉 activities）
         bug.files = self._collect_comment_attachments(task)
+        # 备注内联媒体（图片/视频）→ 下载上传内部TB附件
+        bug.files += self._collect_note_media(task)
         return bug
+
+    # ── 备注内联媒体（图片/视频）──────────────────────
+
+    NOTE_MEDIA_PATTERNS = [
+        # OSS 直链（需签名）：视频 rich-text-file / 图片 rich-text-attachment。
+        # 排除 ) ] 等 markdown 链接残留字符（note 里 URL 后可能带 ")"）
+        (r'https://teambition-file\.oss-cn-zhangjiakou\.aliyuncs\.com/'
+         r'(rich-text-(?:file|attachment)/[^\s"\'<>)\]]+)', "sign"),
+        # tcs 缩略图（公开，markdown 图片）
+        (r'https://tcs\.teambition\.net/thumbnail/[^\s"\'<>)]+', "tcs"),
+    ]
+
+    def _collect_note_media(self, task: dict) -> list:
+        """收集任务备注里的内联图片/视频，注册到 file_registry。
+
+        返回 [{id:int, title, size}]；需要签名的媒体通过 Selenium
+        抓取渲染后的签名 URL 下载（原图优先，tcs 公开直下作兜底）。
+        """
+        note = task.get("note") or ""
+        if not note:
+            return []
+        refs = []
+        for pat, kind in self.NOTE_MEDIA_PATTERNS:
+            for m in re.finditer(pat, note, re.IGNORECASE):
+                raw = m.group(1) if kind == "sign" else m.group(0)
+                name = raw.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+                if name:
+                    refs.append({"kind": kind, "key": raw, "name": name})
+        if not refs:
+            return []
+        # 去重（按 key 保序）
+        seen = set()
+        uniq = []
+        for r in refs:
+            if r["key"] not in seen:
+                seen.add(r["key"])
+                uniq.append(r)
+
+        # 需要签名的媒体 → Selenium 抓签名 URL（原图优先）
+        signed = {}
+        if any(r["kind"] == "sign" for r in uniq):
+            try:
+                signed = self._client.fetch_signed_media_urls(
+                    task.get("_id", ""))
+            except Exception as e:
+                logger.warning("抓取备注媒体签名失败: %s", e)
+
+        files = []
+        for r in uniq:
+            self._file_counter += 1
+            idx = self._file_counter
+            if r["kind"] == "tcs":
+                url = r["key"]  # tcs 公开直下
+            else:
+                url = signed.get(r["key"], "")
+            self._file_registry[idx] = {
+                "task_id": task.get("_id", ""),
+                "note_media": True,
+                "url": url,
+                "file": {"id": idx, "name": r["name"],
+                         "mimeType": "", "size": 0},
+            }
+            files.append({"id": idx, "title": r["name"], "size": 0})
+        if files:
+            ok = sum(1 for i in files
+                     if self._file_registry[i["id"]].get("url"))
+            logger.info("备注媒体 %d 个（可下载 %d，任务 %s）",
+                        len(files), ok, task.get("_id", ""))
+        return files
 
     def check_bug_has_vlns(self, bug_id: int) -> bool:
         return len(self.extract_vlns_numbers(bug_id)) > 0
@@ -393,6 +464,19 @@ class TeambitionSourceAdapter:
         name = filename or f.get("name", "")
         mime = f.get("mimeType", "application/octet-stream")
 
+        # 备注内联媒体：直接用签名 URL / tcs 公开 URL 下载
+        if entry.get("note_media"):
+            url = entry.get("url", "")
+            if not url:
+                logger.warning("备注媒体 %s 无可用下载URL（签名获取失败）", name)
+                return AttachmentFile(filename=name, content_type=mime,
+                                      data=b"", size=0)
+            data = self._client.download_file(url, name) or b""
+            if not data:
+                logger.warning("备注媒体下载失败: %s", name)
+            return AttachmentFile(filename=name, content_type=mime,
+                                  data=data, size=len(data))
+
         # 通过文件详情接口拿签名下载 URL（需要 task_id + activity_id + file_id）
         data = self._client.download_comment_attachment(
             f.get("id", ""),
@@ -429,6 +513,11 @@ class TeambitionSourceAdapter:
         return None
 
     def close(self) -> None:
+        # 关闭备注媒体抓取浏览器（同步结束释放）
+        try:
+            self._client.close_media_driver()
+        except Exception:
+            pass
         self._client.close()
 
     def fetch_severity_labels(self, product_id: int = None) -> Dict[str, str]:

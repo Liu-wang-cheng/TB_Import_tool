@@ -2087,6 +2087,26 @@ class SyncEngine:
         parts = []
         steps = bug.steps.strip()
         if steps:
+            # 外部TB：备注内联媒体（img/video）先替换为文本占位符显示文件名，
+            # 实际文件已由 _collect_note_media 收集上传内部TB附件
+            if getattr(self, "source_type", "zentao") == "teambition" \
+                    and ("<img" in steps.lower() or "<video" in steps.lower()):
+                try:
+                    soup = BeautifulSoup(steps, "html.parser")
+                    for img in soup.find_all("img"):
+                        src = img.get("src", "")
+                        name = src.rstrip("/").rsplit("/", 1)[-1].split("?")[0] if src else ""
+                        img.replace_with(f"[图片: {name}]" if name else "[图片]")
+                    for v in soup.find_all("video"):
+                        src = v.get("src", "")
+                        if not src:
+                            src_tag = v.find("source")
+                            src = src_tag.get("src", "") if src_tag else ""
+                        name = src.rstrip("/").rsplit("/", 1)[-1].split("?")[0] if src else ""
+                        v.replace_with(f"[视频: {name}]" if name else "[视频]")
+                    steps = str(soup)
+                except Exception:
+                    pass
             # 清理禅道 HTML 保留表格结构，TB 渲染更清晰
             # 传入 file_id→真实文件名 映射，让图片占位符显示真实名而非 image_{id}
             file_id_to_name = {

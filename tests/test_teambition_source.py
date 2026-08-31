@@ -204,6 +204,60 @@ class TestTaskToBug:
         assert bug.severity == "严重"
 
 
+class TestNoteMedia:
+    """备注内联媒体（图片/视频）收集与下载"""
+
+    def _make_task_with_note(self):
+        return make_task(note=(
+            "复现步骤\n"
+            '<img src="https://teambition-file.oss-cn-zhangjiakou.aliyuncs.com/'
+            'rich-text-attachment/2026/08/21/abc/1779160613264.png" alt="" />\n'
+            '<video controls=""><source src="https://teambition-file.oss-cn-'
+            'zhangjiakou.aliyuncs.com/rich-text-file/2026/08/21/abc/'
+            '1779160621862.mp4" /></video>\n'
+            '![image.png](https://tcs.teambition.net/thumbnail/abc/w/816/h/1021)'
+        ))
+
+    def test_collect_note_media_registers_files(self):
+        adapter = make_adapter()
+        adapter._client.fetch_signed_media_urls = MagicMock(return_value={
+            "rich-text-attachment/2026/08/21/abc/1779160613264.png": "https://oss-signed/1779160613264.png",
+            "rich-text-file/2026/08/21/abc/1779160621862.mp4": "https://www.teambition.com/api/awos/download/rich-text-file/2026/08/21/abc/1779160621862.mp4?tb-file-token=xx",
+        })
+        task = self._make_task_with_note()
+        files = adapter._collect_note_media(task)
+        # 图片 + 视频 + tcs = 3 个
+        assert len(files) == 3
+        titles = [f["title"] for f in files]
+        assert "1779160613264.png" in titles
+        assert "1779160621862.mp4" in titles
+        assert "1021" in titles[2]  # tcs 文件名
+
+    def test_note_media_download_uses_signed_url(self):
+        adapter = make_adapter()
+        adapter._client.fetch_signed_media_urls = MagicMock(return_value={
+            "rich-text-attachment/2026/08/21/abc/1779160613264.png": "https://oss-signed/1779160613264.png",
+        })
+        adapter._client.download_file = MagicMock(return_value=b"\x89PNG-data")
+        task = self._make_task_with_note()
+        files = adapter._collect_note_media(task)
+        att = adapter.download_attachment(files[0]["id"])
+        adapter._client.download_file.assert_called_once()
+        assert att.data == b"\x89PNG-data"
+        assert att.filename == "1779160613264.png"
+
+    def test_note_media_without_signature_skips(self):
+        """签名获取失败 → 注册但下载时返回空"""
+        adapter = make_adapter()
+        adapter._client.fetch_signed_media_urls = MagicMock(return_value={})
+        task = self._make_task_with_note()
+        files = adapter._collect_note_media(task)
+        # 签名媒体注册（url 空），tcs 有 url
+        assert len(files) == 3
+        att = adapter.download_attachment(files[0]["id"])
+        assert att.data == b""
+
+
 class TestFilterBugs:
     """_filter_bugs 客户端筛选"""
 
