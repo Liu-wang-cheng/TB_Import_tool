@@ -153,7 +153,8 @@ class TeambitionSourceAdapter:
           如 Philips... 需通过 field_ids 精确映射）
         """
         result = {"severity": "", "category": "", "frequency": "",
-                  "sn_code": "", "version": "", "found_time": ""}
+                  "sn_code": "", "version": "", "found_time": "",
+                  "belong_project": ""}
         # 按 _customfieldId 精确映射（如 {"sn_code": "6306e205c09533eb452f004c"}）
         field_ids = getattr(self, "_field_ids", {}) or {}
         id_to_key = {str(v): k for k, v in field_ids.items() if v}
