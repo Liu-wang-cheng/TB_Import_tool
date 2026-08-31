@@ -1,7 +1,7 @@
 {
   "version": "2.8.2",
-  "sha256": "",
-  "download_url": "",
+  "sha256": "08ed36e9ef78d34bdadaf424944116b3727db170a8a28801c3cc7ed06291d29c",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.2/SmartDefectPlatform.zip",
   "release_date": "2026-08-31",
   "release_notes": "v2.8.2 修复：外部TB备注图片在富文本JSON中（note字段为占位符文本）时收集不到——增加页面渲染媒体兜底，INFY-37等任务的图片现在能正常下载导入",
   "min_version": "1.0"
