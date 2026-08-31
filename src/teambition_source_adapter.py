@@ -35,12 +35,11 @@ class TeambitionSourceAdapter:
     source_type = "teambition"
 
     def __init__(self, client: TeambitionSourceClient, project_id: str = "",
-                 field_ids: dict = None, field_names: dict = None):
+                 field_names: dict = None):
         self._client = client
         self.project_id = project_id or client.project_id
-        # 精确映射：field_ids 按 _customfieldId、field_names 按字段名称
-        # （默认名称表 CUSTOMFIELD_NAME_TO_KEY，可用配置覆盖）
-        self._field_ids = field_ids or {}
+        # 按字段名称精确映射（默认名称表 CUSTOMFIELD_NAME_TO_KEY，
+        # 用户可用 field_names 配置覆盖名称→语义 对应关系）
         self._field_names = field_names or {}
         self._bug_scenariofield_id = ""
         self._unique_id_prefix = ""  # 项目任务编号前缀（如 "323A"）
@@ -167,21 +166,17 @@ class TeambitionSourceAdapter:
         result = {"severity": "", "category": "", "frequency": "",
                   "sn_code": "", "version": "", "found_time": "",
                   "belong_project": ""}
-        # 精确映射优先级：field_ids（_customfieldId）> field_names（字段名称）
-        field_ids = getattr(self, "_field_ids", {}) or {}
-        id_to_key = {str(v): k for k, v in field_ids.items() if v}
+        # 按字段名称精确匹配（查名称接口，失败静默跳过走值猜测）
         name_to_key = dict(CUSTOMFIELD_NAME_TO_KEY)
         name_to_key.update(getattr(self, "_field_names", {}) or {})
         for cf in task.get("customfields", []):
             cf_id = str(cf.get("_customfieldId") or "")
-            key = id_to_key.get(cf_id)
-            if not key:
-                # 按字段名称匹配（查名称接口，失败静默跳过走值猜测）
-                try:
-                    cf_name = self._client.fetch_customfield_name(cf_id)
-                    key = name_to_key.get(cf_name or "")
-                except Exception:
-                    key = None
+            key = None
+            try:
+                cf_name = self._client.fetch_customfield_name(cf_id)
+                key = name_to_key.get(cf_name or "")
+            except Exception:
+                key = None
             if not key:
                 continue
             value = cf.get("value", [])

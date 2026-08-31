@@ -64,7 +64,6 @@ def create_source_client(config: dict):
             project_id = client.extract_project_id(url)
         return TeambitionSourceAdapter(
             client, project_id=project_id,
-            field_ids=tb_src_cfg.get("field_ids", {}),
             field_names=tb_src_cfg.get("field_names", {}))
 
     elif platform == "jira":

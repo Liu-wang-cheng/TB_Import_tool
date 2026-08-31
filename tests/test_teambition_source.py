@@ -33,7 +33,7 @@ def make_task(**overrides):
     return task
 
 
-def make_adapter(status_map=None, field_ids=None):
+def make_adapter(status_map=None, field_names=None):
     client = MagicMock()
     client.account = ""
     client.project_id = ""
@@ -48,7 +48,7 @@ def make_adapter(status_map=None, field_ids=None):
             "status_closed": "关闭",
         }).get(sid, ""))
     adapter = TeambitionSourceAdapter(
-        client, project_id="69c0b68bf754000531ced0ce", field_ids=field_ids)
+        client, project_id="69c0b68bf754000531ced0ce", field_names=field_names)
     return adapter
 
 
@@ -117,15 +117,17 @@ class TestTaskToBug:
         assert bug.openedDate == "2026-08-21 15:50"
 
     def test_sn_with_mixed_case_extracted(self):
-        """SN 值含小写（如 Philips263100137）通过 field_ids 精确映射提取"""
-        adapter = make_adapter(field_ids={
-            "sn_code": "6306e205c09533eb452f004c",
-            "found_time": "6306e2057e5ecb33ee2221a2",
-        })
+        """SN 值含小写（如 Philips263100137）按名称匹配提取"""
+        adapter = make_adapter()
+        adapter._client.fetch_customfield_name = MagicMock(
+            side_effect=lambda cid: {
+                "cf-sn": "SN编码",
+                "cf-time": "缺陷产生时间",
+            }.get(cid, ""))
         task = make_task(customfields=[
-            {"_customfieldId": "6306e205c09533eb452f004c",
+            {"_customfieldId": "cf-sn",
              "type": "text", "value": [{"title": "Philips263100137"}]},
-            {"_customfieldId": "6306e2057e5ecb33ee2221a2",
+            {"_customfieldId": "cf-time",
              "type": "text", "value": [{"title": "8/26 15：25"}]},
         ])
         bug = adapter._task_to_bug(task)
@@ -158,9 +160,11 @@ class TestTaskToBug:
         assert bug.severity == "B"
         assert bug.openedBuild == "1.0.39"
 
-    def test_field_ids_priority_over_value_guess(self):
-        """field_ids 精确映射优先于值特征猜测（如 version 值不被猜成 SN）"""
-        adapter = make_adapter(field_ids={"sn_code": "cf-sn", "version": "cf-ver"})
+    def test_field_names_override_priority_over_value_guess(self):
+        """名称匹配优先于值特征猜测（如 version 值不被猜成 SN）"""
+        adapter = make_adapter(field_names={"SN": "sn_code", "版本": "version"})
+        adapter._client.fetch_customfield_name = MagicMock(
+            side_effect=lambda cid: {"cf-sn": "SN", "cf-ver": "版本"}.get(cid, ""))
         task = make_task(customfields=[
             {"_customfieldId": "cf-sn", "type": "text",
              "value": [{"title": "Philips263100137"}]},
