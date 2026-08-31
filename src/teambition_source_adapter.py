@@ -347,6 +347,11 @@ class TeambitionSourceAdapter:
 
         返回 [{id:int, title, size}]；需要签名的媒体通过 Selenium
         抓取渲染后的签名 URL 下载（原图优先，tcs 公开直下作兜底）。
+
+        注意：部分任务的 note 字段是纯文本（如 "[图片]" 占位符），
+        真实媒体在富文本 JSON 里（前端渲染时加载）。因此只要 note
+        含图片/视频标记（[图片]/[视频]/img/video/媒体URL），就调
+        Selenium 抓页面渲染的全部媒体作兜底。
         """
         note = task.get("note") or ""
         if not note:
@@ -358,8 +363,6 @@ class TeambitionSourceAdapter:
                 name = raw.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
                 if name:
                     refs.append({"kind": kind, "key": raw, "name": name})
-        if not refs:
-            return []
         # 去重（按 key 保序）
         seen = set()
         uniq = []
@@ -368,14 +371,23 @@ class TeambitionSourceAdapter:
                 seen.add(r["key"])
                 uniq.append(r)
 
-        # 需要签名的媒体 → Selenium 抓签名 URL（原图优先）
+        # note 含图片/视频标记 → 抓页面渲染的全部媒体（含富文本 JSON 里的）
+        has_media_hint = any(k in note for k in
+                             ("[图片]", "[视频]", "<img", "<video",
+                              "rich-text", "tcs.teambition"))
         signed = {}
-        if any(r["kind"] == "sign" for r in uniq):
+        if has_media_hint or any(r["kind"] == "sign" for r in uniq):
             try:
                 signed = self._client.fetch_signed_media_urls(
                     task.get("_id", ""))
             except Exception as e:
                 logger.warning("抓取备注媒体签名失败: %s", e)
+            # 页面渲染的媒体未出现在 note 文本引用中 → 兜底注册
+            note_keys = {r["key"] for r in uniq}
+            for key, url in signed.items():
+                if key not in note_keys:
+                    uniq.append({"kind": "sign", "key": key,
+                                 "name": key.split("/")[-1], "url": url})
 
         files = []
         for r in uniq:
@@ -384,7 +396,7 @@ class TeambitionSourceAdapter:
             if r["kind"] == "tcs":
                 url = r["key"]  # tcs 公开直下
             else:
-                url = signed.get(r["key"], "")
+                url = r.get("url") or signed.get(r["key"], "")
             self._file_registry[idx] = {
                 "task_id": task.get("_id", ""),
                 "note_media": True,
