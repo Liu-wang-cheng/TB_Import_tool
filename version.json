@@ -1,8 +1,8 @@
 {
-  "version": "2.8.0",
-  "sha256": "3ddda22235ae1fc888273b906acfba3ba27e567d19b785905054d4adfb39f9ca",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.0/SmartDefectPlatform.zip",
-  "release_date": "2026-08-26",
-  "release_notes": "v2.8.0 修复：更新成功后误弹“继续更新”提示——自愈检测增加版本对比，解压目录版本与当前一致时静默清理；仅当解压版本更高时才询问",
+  "version": "2.8.1",
+  "sha256": "",
+  "download_url": "",
+  "release_date": "2026-08-31",
+  "release_notes": "v2.8.1 更新：周期性自动检查更新（默认每8小时）；修复回写标题误用任务UUID；外部TB自定义字段按名称精确匹配（SN编码/缺陷产生时间等直接导入）；外部TB M/D时间格式归一化",
   "min_version": "1.0"
 }
