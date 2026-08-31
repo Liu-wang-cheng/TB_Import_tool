@@ -78,6 +78,9 @@ class MainWindow(QMainWindow):
         self._last_platform = None
         self._schedule_timer = None
         self._scheduled_last_run_date = ""
+        # 周期性更新检查：启动后 2 秒检查一次，之后按 check_interval_hours 周期复查
+        self._last_update_check_ts = 0.0
+        self._update_check_timer = None
 
         self._build_ui()
         self._load_style()
@@ -86,6 +89,7 @@ class MainWindow(QMainWindow):
         # 启动后延迟检查更新（非阻塞）
         from gui.qt_compat import QTimer
         QTimer.singleShot(2000, self._check_for_updates)
+        self._start_periodic_update_check()
 
     def closeEvent(self, event):
         """窗口关闭时清理后台线程
@@ -1836,6 +1840,38 @@ class MainWindow(QMainWindow):
 
     # ── 自动更新 ──────────────────────────────────────
 
+    def _start_periodic_update_check(self):
+        """周期性自动检查更新：每分钟 tick，按 check_interval_hours 判断是否复查
+
+        update.yaml 的 check_interval_hours：0 或空 = 仅启动时检查一次（默认 8h）
+        """
+        try:
+            interval = self.config.get("update", {}).get("check_interval_hours", 8)
+        except Exception:
+            interval = 24
+        if not interval or interval <= 0:
+            return
+        from gui.qt_compat import QTimer
+        self._last_update_check_ts = 0.0  # 启动后 2 秒的检查视为第一次
+        self._update_check_timer = QTimer(self)
+        self._update_check_timer.timeout.connect(self._check_periodic_update)
+        self._update_check_timer.start(60000)
+
+    def _check_periodic_update(self):
+        """定时 tick：距上次检查超过间隔才发起（worker 忙时 60s 后重试）"""
+        try:
+            interval = self.config.get("update", {}).get("check_interval_hours", 8)
+        except Exception:
+            interval = 24
+        if not interval or interval <= 0:
+            return
+        import time
+        if time.time() - self._last_update_check_ts < interval * 3600:
+            return
+        # 不在此更新 ts：_check_for_updates 发起成功后会更新，
+        # 若被 guard 拦截（任务/下载中）则 60s 后重试
+        self._check_for_updates(manual=False)
+
     def _check_for_updates(self, manual=False):
         """后台检查更新（非阻塞）"""
         if self._worker and self._worker.isRunning():
@@ -1865,6 +1901,8 @@ class MainWindow(QMainWindow):
         self._manual_check_pending = manual
         if manual:
             self._set_busy(True)
+        import time
+        self._last_update_check_ts = time.time()
         self._update_check_worker = UpdateCheckWorker(self.config, parent=self)
         self._update_check_worker.progress.connect(self._on_update_check_progress)
         self._update_check_worker.finished.connect(self._on_update_check_result)
