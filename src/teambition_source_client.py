@@ -49,6 +49,7 @@ class TeambitionSourceClient:
         self._http = requests.Session()
         self._user_cache: Dict[str, str] = {}
         self._sfconfig_cache: Dict[str, str] = {}  # scenariofieldconfigId → name
+        self._cf_name_cache: Dict[str, str] = {}  # customfieldId → 字段名称
 
     # ── 认证 ──────────────────────────────────────────
 
@@ -215,6 +216,17 @@ class TeambitionSourceClient:
         data = self._get(f"/users/{user_id}")
         name = data.get("name", "") if isinstance(data, dict) else ""
         self._user_cache[user_id] = name
+        return name
+
+    def fetch_customfield_name(self, cf_id: str) -> str:
+        """按自定义字段 _customfieldId 查字段名称（带缓存）"""
+        if not cf_id:
+            return ""
+        if cf_id in self._cf_name_cache:
+            return self._cf_name_cache[cf_id]
+        data = self._get(f"/customfields/{cf_id}")
+        name = data.get("name", "") if isinstance(data, dict) else ""
+        self._cf_name_cache[cf_id] = name
         return name
 
     def fetch_task_comments(self, task_id: str) -> List[dict]:

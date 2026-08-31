@@ -17,6 +17,17 @@ from src.teambition_source_client import TeambitionSourceClient
 
 logger = logging.getLogger(__name__)
 
+# 外部TB自定义字段名称 → 语义（按名称精确匹配，可直接导入）
+CUSTOMFIELD_NAME_TO_KEY = {
+    "严重程度": "severity",
+    "复现概率": "frequency",
+    "缺陷分类": "category",
+    "所属版本": "version",
+    "缺陷产生时间": "found_time",
+    "SN编码": "sn_code",
+    "所属项目": "belong_project",
+}
+
 
 class TeambitionSourceAdapter:
     """外部 Teambition → SourceClient 适配器"""
@@ -24,12 +35,13 @@ class TeambitionSourceAdapter:
     source_type = "teambition"
 
     def __init__(self, client: TeambitionSourceClient, project_id: str = "",
-                 field_ids: dict = None):
+                 field_ids: dict = None, field_names: dict = None):
         self._client = client
         self.project_id = project_id or client.project_id
-        # 外部TB项目自定义字段 id → 语义 精确映射（如 {"sn_code": "6306e...4c"}）。
-        # 外部TB与内部TB同项目时字段 id 一致，可直接导入 SN/产生时间等
+        # 精确映射：field_ids 按 _customfieldId、field_names 按字段名称
+        # （默认名称表 CUSTOMFIELD_NAME_TO_KEY，可用配置覆盖）
         self._field_ids = field_ids or {}
+        self._field_names = field_names or {}
         self._bug_scenariofield_id = ""
         self._unique_id_prefix = ""  # 项目任务编号前缀（如 "323A"）
         # uniqueId(int) → task 原始 dict，供 fetch_bug_detail 回查
@@ -155,12 +167,21 @@ class TeambitionSourceAdapter:
         result = {"severity": "", "category": "", "frequency": "",
                   "sn_code": "", "version": "", "found_time": "",
                   "belong_project": ""}
-        # 按 _customfieldId 精确映射（如 {"sn_code": "6306e205c09533eb452f004c"}）
+        # 精确映射优先级：field_ids（_customfieldId）> field_names（字段名称）
         field_ids = getattr(self, "_field_ids", {}) or {}
         id_to_key = {str(v): k for k, v in field_ids.items() if v}
+        name_to_key = dict(CUSTOMFIELD_NAME_TO_KEY)
+        name_to_key.update(getattr(self, "_field_names", {}) or {})
         for cf in task.get("customfields", []):
             cf_id = str(cf.get("_customfieldId") or "")
             key = id_to_key.get(cf_id)
+            if not key:
+                # 按字段名称匹配（查名称接口，失败静默跳过走值猜测）
+                try:
+                    cf_name = self._client.fetch_customfield_name(cf_id)
+                    key = name_to_key.get(cf_name or "")
+                except Exception:
+                    key = None
             if not key:
                 continue
             value = cf.get("value", [])

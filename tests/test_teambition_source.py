@@ -132,6 +132,32 @@ class TestTaskToBug:
         assert bug.snCode == "Philips263100137"
         assert bug.openedDate == "2026-08-26 15:25"
 
+    def test_field_name_matching(self):
+        """按字段名称匹配（无需 field_ids 配置）——外部TB自定义字段按名称精确导入"""
+        adapter = make_adapter()
+        adapter._client.fetch_customfield_name = MagicMock(
+            side_effect=lambda cid: {
+                "cf-sn": "SN编码",
+                "cf-time": "缺陷产生时间",
+                "cf-sev": "严重程度",
+                "cf-ver": "所属版本",
+            }.get(cid, ""))
+        task = make_task(customfields=[
+            {"_customfieldId": "cf-sn", "type": "text",
+             "value": [{"title": "Philips263100137"}]},
+            {"_customfieldId": "cf-time", "type": "text",
+             "value": [{"title": "8/26 15：25"}]},
+            {"_customfieldId": "cf-sev", "type": "dropDown",
+             "value": [{"title": "B"}]},
+            {"_customfieldId": "cf-ver", "type": "text",
+             "value": [{"title": "1.0.39"}]},
+        ])
+        bug = adapter._task_to_bug(task)
+        assert bug.snCode == "Philips263100137"
+        assert bug.openedDate == "2026-08-26 15:25"
+        assert bug.severity == "B"
+        assert bug.openedBuild == "1.0.39"
+
     def test_field_ids_priority_over_value_guess(self):
         """field_ids 精确映射优先于值特征猜测（如 version 值不被猜成 SN）"""
         adapter = make_adapter(field_ids={"sn_code": "cf-sn", "version": "cf-ver"})
