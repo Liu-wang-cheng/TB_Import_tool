@@ -1,7 +1,7 @@
 {
   "version": "2.8.1",
-  "sha256": "",
-  "download_url": "",
+  "sha256": "49ec84f6c22ee47e8788de8ae55e4a0456d9626c4b44bbfa1d9e0eeaada5dbbf",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.1/SmartDefectPlatform.zip",
   "release_date": "2026-08-31",
   "release_notes": "v2.8.1 更新：周期性自动检查更新（默认每8小时）；修复回写标题误用任务UUID；外部TB自定义字段按名称精确匹配（SN编码/缺陷产生时间等直接导入）；外部TB M/D时间格式归一化",
   "min_version": "1.0"
