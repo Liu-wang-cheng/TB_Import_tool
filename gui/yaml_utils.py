@@ -144,14 +144,23 @@ def _update_child_key(lines: list, key: str, value, parent_line: int,
 
 def _strip_trailing_list_items(lines: list, key_line: int, indent: str):
     """Remove old list items when a list-valued key is changed to scalar/null."""
-    item_prefix = indent + "  - "
+    _strip_trailing_block_lines(lines, key_line, indent)
+
+
+def _strip_trailing_block_lines(lines: list, key_line: int, indent: str):
+    """清除 key 行后所有更深缩进的旧块子行（列表项 "- x" 或块映射 "k: v"）。
+
+    用于标量/内联 JSON 替换时清除旧的多行块（如 scheduled_sync 旧块映射），
+    否则残留的子行会与内联值拼成非法 YAML。空行与注释保留。
+    """
+    child_indent = indent + "  "
     to_delete = []
     for j in range(key_line + 1, len(lines)):
-        stripped = lines[j].rstrip()
-        if stripped.startswith(item_prefix):
+        stripped = lines[j]
+        if not stripped.strip() or stripped.lstrip().startswith("#"):
+            continue  # 空行/注释保留
+        if stripped.startswith(child_indent):
             to_delete.append(j)
-        elif not stripped or stripped.startswith("#"):
-            continue
         else:
             break
     for j in reversed(to_delete):
@@ -189,6 +198,11 @@ def _format_value(value) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
+    # dict/list：用 JSON 序列化（YAML 兼容 JSON，PyYAML 可解析回原类型）。
+    # 不能 str(dict)（Python 字面量非法 YAML，读回变成字符串导致配置失效）
+    if isinstance(value, (dict, list)):
+        import json
+        return json.dumps(value, ensure_ascii=False)
     # 字符串：含特殊字符或日期格式时加引号
     s = str(value)
     if not s or s in ("null", "true", "false", "yes", "no"):

@@ -1685,7 +1685,17 @@ class MainWindow(QMainWindow):
         sync_cfg = self.config.get("sync", {})
         scheduled = sync_cfg.get("scheduled_sync", {})
         if not isinstance(scheduled, dict):
-            scheduled = {}
+            # 兼容旧版误存为 Python 字面量字符串的配置
+            if isinstance(scheduled, str):
+                try:
+                    import ast
+                    parsed = ast.literal_eval(scheduled)
+                    if isinstance(parsed, dict):
+                        scheduled = parsed
+                except Exception:
+                    pass
+            if not isinstance(scheduled, dict):
+                scheduled = {}
         enabled = scheduled.get("enabled", False)
         time_str = scheduled.get("time", "09:00")
         t = QTime.fromString(time_str, "HH:mm")

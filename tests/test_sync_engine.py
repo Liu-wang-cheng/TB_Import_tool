@@ -926,7 +926,7 @@ class TestScheduledSync:
         assert mw._start_worker.call_count == 0
 
     def test_yaml_roundtrip(self):
-        """配置 A 到 YAML 到 配置 B 一致"""
+        """配置 A 到 YAML 到 配置 B 一致（dict 用 JSON 序列化，YAML 可解析回）"""
         import tempfile, os
         import yaml as _y
         tmp = tempfile.mktemp(suffix=".yaml")
@@ -938,9 +938,11 @@ class TestScheduledSync:
             update_yaml_values(tmp, {"scheduled_sync": {"enabled": True, "time": "14:30", "notify": False}})
             with open(tmp, "r", encoding="utf-8") as f:
                 content = f.read()
-            assert "enabled" in content and "True" in content
             assert "14:30" in content
-            assert "notify" in content and "False" in content
+            # 读回必须是 dict（而非 Python 字面量字符串）
+            data = _y.safe_load(content)
+            assert data["scheduled_sync"] == {
+                "enabled": True, "time": "14:30", "notify": False}
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)

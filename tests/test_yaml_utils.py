@@ -96,6 +96,29 @@ class TestQuoteEscapeAndCommentKeep:
         assert data["assigned_to_known"] == ["x"]
 
 
+class TestDictValue:
+    """dict 值写入 YAML 必须可解析回 dict（不能用 Python 字面量字符串）"""
+
+    def test_dict_value_roundtrip(self, tmp_yaml):
+        tmp_yaml.write("sync:\n  scheduled_sync: null\n")
+        tmp_yaml.flush()
+        scheduled = {"enabled": True, "time": "10:30", "notify": True,
+                     "mode": "weekly", "days": [1, 3, 5]}
+        update_yaml_values(tmp_yaml.name, {"sync.scheduled_sync": scheduled})
+        data = yaml.safe_load(open(tmp_yaml.name))
+        v = data["sync"]["scheduled_sync"]
+        assert isinstance(v, dict), "必须是 dict 而非字符串"
+        assert v == scheduled
+
+    def test_dict_value_not_python_literal_string(self, tmp_yaml):
+        """回归：旧实现把 dict str() 成 "{'enabled':...}" 写入，读回是字符串"""
+        tmp_yaml.write("scheduled_sync: null\n")
+        tmp_yaml.flush()
+        update_yaml_values(tmp_yaml.name, {"scheduled_sync": {"enabled": False}})
+        data = yaml.safe_load(open(tmp_yaml.name))
+        assert isinstance(data["scheduled_sync"], dict)
+
+
 class TestDateFormat:
     """日期字符串加引号保护（防止 PyYAML 误解析为 datetime.date）"""
 
