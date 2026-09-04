@@ -881,7 +881,10 @@ class MainWindow(QMainWindow):
                 zt_cfg["account"] = self.edit_zentao_account.text().strip()
                 zt_cfg["password"] = self.edit_zentao_password.text().strip()
                 filters = zt_cfg.setdefault("filters", {})
-                filters["product"] = self.filter_product.text().strip() or None
+                # 清洗 []'"} 污染字符，与 _apply_filters_to_config 一致
+                filters["product"] = re.sub(
+                    r"[\[\]'\"]", "",
+                    self.filter_product.text()).strip() or None
                 filters["module_filter"] = self.filter_module.text().strip() or None
             elif old_platform == "teambition":
                 tb_src_cfg = self.config.setdefault("teambition_source", {})
@@ -898,11 +901,12 @@ class MainWindow(QMainWindow):
             self.edit_zentao_base_url.setText(zt_cfg.get("base_url", ""))
             self.edit_zentao_account.setText(zt_cfg.get("account", ""))
             self.edit_zentao_password.setText(zt_cfg.get("password", ""))
-            # 产品ID：单值或列表统一显示为逗号串
+            # 产品ID：单值或列表统一显示为逗号串（清洗历史污染的 []'"} 字符）
             _prod = filters.get("product", "") or ""
             if isinstance(_prod, (list, tuple)):
                 _prod = ",".join(str(x) for x in _prod)
-            self.filter_product.setText(str(_prod))
+            _prod = re.sub(r"[\[\]'\"]", "", str(_prod))
+            self.filter_product.setText(_prod.strip())
             self.filter_module.setText(str(filters.get("module_filter", "") or ""))
             self.filter_url.setText("")
 
@@ -1057,8 +1061,10 @@ class MainWindow(QMainWindow):
             zt_cfg["base_url"] = self.edit_zentao_base_url.text().strip()
             filters = zt_cfg.setdefault("filters", {})
 
-            # 产品ID：支持逗号分隔多个 → 存列表（单值兼容）
-            product = self.filter_product.text().strip()
+            # 产品ID：支持逗号分隔多个 → 存列表（单值兼容）。
+            # 清洗历史污染的 []'"} 字符（如 "[11]" → "11"），防止污染循环
+            product = re.sub(r"[\[\]'\"]", "",
+                             self.filter_product.text()).strip()
             if product:
                 products = [x.strip() for x in product.replace("，", ",").split(",")
                             if x.strip()]
@@ -1467,7 +1473,8 @@ class MainWindow(QMainWindow):
                 filled.append(f"禅道地址={parsed['base_url']}")
 
         def _merge_ids(existing: str, new_val) -> str:
-            """同服务器下把新ID合并进现有逗号列表（去重保序）"""
+            """同服务器下把新ID合并进现有逗号列表（去重保序，清洗污染字符）"""
+            existing = re.sub(r"[\[\]'\"]", "", existing or "")
             items = [x.strip() for x in existing.replace("，", ",").split(",")
                      if x.strip()]
             new_str = str(new_val).strip()
