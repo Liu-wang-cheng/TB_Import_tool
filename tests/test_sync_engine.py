@@ -884,8 +884,10 @@ class TestScheduledSync:
         mw.chk_scheduled = MagicMock()
         mw.time_schedule = MagicMock()
         mw.chk_scheduled_notify = MagicMock()
+        mw.chk_time2 = MagicMock()
+        mw.time_schedule2 = MagicMock()
         mw._worker = None
-        mw._scheduled_last_run_date = ""
+        mw._scheduled_last_run_keys = set()
         mw.config = {}
         mw._project_root = "/tmp"
         mw._log = MagicMock()
@@ -893,14 +895,18 @@ class TestScheduledSync:
         mw.log_text = MagicMock()
         mw._apply_filters_to_config = MagicMock()
         mw._start_worker = MagicMock(return_value=True)
+        # _run_scheduled_sync 必须显式 mock：否则 mw(MagicMock) 实例属性
+        # 会拦截类方法调用，导致触发型断言失真
+        mw._run_scheduled_sync = MagicMock()
         return mw
 
     def test_disabled_does_not_trigger(self):
         """未启用时不触发"""
         from gui.main_window import MainWindow
+        from PyQt6.QtCore import QTime
         mw = self._make_main_window()
         mw.chk_scheduled.isChecked.return_value = False
-        MainWindow._check_scheduled_sync(mw)
+        MainWindow._check_scheduled_sync(mw, QTime(9, 0))
         assert mw._start_worker.call_count == 0
 
     def test_not_time_yet_does_not_trigger(self):
@@ -910,20 +916,82 @@ class TestScheduledSync:
         mw = self._make_main_window()
         mw.chk_scheduled.isChecked.return_value = True
         mw.time_schedule.time.return_value = QTime(3, 0)
-        MainWindow._check_scheduled_sync(mw)
+        MainWindow._check_scheduled_sync(mw, QTime(9, 0))
         assert mw._start_worker.call_count == 0
 
     def test_same_day_prevents_dup(self):
-        """同一天不重复触发"""
+        """同一天同一时间点不重复触发（按 日期:时间 键去重）"""
+        from gui.main_window import MainWindow
+        from PyQt6.QtCore import QTime, QDate
+        mw = self._make_main_window()
+        mw.chk_scheduled.isChecked.return_value = True
+        now = QTime(9, 30)
+        mw.time_schedule.time.return_value = now
+        today = QDate.currentDate().toString("yyyy-MM-dd")
+        mw._scheduled_last_run_keys = {f"{today}:09:30"}
+        MainWindow._check_scheduled_sync(mw, now)
+        assert mw._start_worker.call_count == 0
+
+    def test_first_time_triggers(self):
+        """第一时间匹配 → 触发一次"""
         from gui.main_window import MainWindow
         from PyQt6.QtCore import QTime
         mw = self._make_main_window()
         mw.chk_scheduled.isChecked.return_value = True
-        now = QTime.currentTime()
-        mw.time_schedule.time.return_value = now
-        mw._scheduled_last_run_date = QTime.currentTime().toString("yyyy-MM-dd")  # use today
-        MainWindow._check_scheduled_sync(mw)
+        mw.time_schedule.time.return_value = QTime(9, 30)
+        mw.chk_time2.isChecked.return_value = False
+        MainWindow._check_scheduled_sync(mw, QTime(9, 30))
+        assert mw._run_scheduled_sync.call_count == 1
+
+    def test_second_time_triggers(self):
+        """第二时间点启用时，第一时间不匹配、第二时间匹配 → 触发"""
+        from gui.main_window import MainWindow
+        from PyQt6.QtCore import QTime
+        mw = self._make_main_window()
+        mw.chk_scheduled.isChecked.return_value = True
+        mw.time_schedule.time.return_value = QTime(9, 0)  # 第一时间不匹配
+        mw.chk_time2.isChecked.return_value = True
+        mw.time_schedule2.time.return_value = QTime(18, 30)  # 第二时间匹配
+        MainWindow._check_scheduled_sync(mw, QTime(18, 30))
+        assert mw._run_scheduled_sync.call_count == 1
+
+    def test_second_time_disabled_only_first_counts(self):
+        """第二时间点未启用时，只有第一时间参与判断"""
+        from gui.main_window import MainWindow
+        from PyQt6.QtCore import QTime
+        mw = self._make_main_window()
+        mw.chk_scheduled.isChecked.return_value = True
+        mw.time_schedule.time.return_value = QTime(9, 0)  # 不匹配
+        mw.chk_time2.isChecked.return_value = False  # 未启用
+        mw.time_schedule2.time.return_value = QTime(18, 30)  # 若误判会触发
+        MainWindow._check_scheduled_sync(mw, QTime(18, 30))
         assert mw._start_worker.call_count == 0
+
+    def test_second_time_key_prevents_dup(self):
+        """第二时间点触发后同 key 不重复触发"""
+        from gui.main_window import MainWindow
+        from PyQt6.QtCore import QTime, QDate
+        mw = self._make_main_window()
+        mw.chk_scheduled.isChecked.return_value = True
+        mw.time_schedule.time.return_value = QTime(9, 0)
+        mw.chk_time2.isChecked.return_value = True
+        mw.time_schedule2.time.return_value = QTime(18, 30)
+        today = QDate.currentDate().toString("yyyy-MM-dd")
+        mw._scheduled_last_run_keys = {f"{today}:18:30"}
+        MainWindow._check_scheduled_sync(mw, QTime(18, 30))
+        assert mw._start_worker.call_count == 0
+
+    def test_both_times_match_triggers_once(self):
+        """两时间点配置相同且匹配 → 只触发一次（同 key 去重）"""
+        from gui.main_window import MainWindow
+        from PyQt6.QtCore import QTime
+        mw = self._make_main_window()
+        mw.chk_scheduled.isChecked.return_value = True
+        mw.time_schedule.time.return_value = QTime(12, 0)
+        mw.chk_time2.isChecked.return_value = True
+        mw.time_schedule2.time.return_value = QTime(12, 0)
+        MainWindow._check_scheduled_sync(mw, QTime(12, 0))
+        assert mw._run_scheduled_sync.call_count == 1
 
     def test_yaml_roundtrip(self):
         """配置 A 到 YAML 到 配置 B 一致（dict 用 JSON 序列化，YAML 可解析回）"""
@@ -943,6 +1011,29 @@ class TestScheduledSync:
             data = _y.safe_load(content)
             assert data["scheduled_sync"] == {
                 "enabled": True, "time": "14:30", "notify": False}
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+    def test_yaml_roundtrip_with_time2(self):
+        """双时间点配置往返：time2_enabled/time2 正确保存与读回"""
+        import tempfile, os
+        import yaml as _y
+        tmp = tempfile.mktemp(suffix=".yaml")
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("# test config\nscheduled_sync: null\n")
+        try:
+            from gui.yaml_utils import update_yaml_values
+            scheduled = {"enabled": True, "time": "09:00",
+                         "time2_enabled": True, "time2": "18:30",
+                         "notify": True, "mode": "daily", "days": [1, 2]}
+            update_yaml_values(tmp, {"scheduled_sync": scheduled})
+            data = _y.safe_load(open(tmp, encoding="utf-8"))
+            v = data["scheduled_sync"]
+            assert isinstance(v, dict)
+            assert v["time2_enabled"] is True
+            assert v["time2"] == "18:30"
+            assert v["time"] == "09:00"
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)

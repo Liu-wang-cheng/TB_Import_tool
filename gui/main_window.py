@@ -77,7 +77,8 @@ class MainWindow(QMainWindow):
         # 必须在 _build_ui 之前初始化，_on_platform_changed 会读取此值
         self._last_platform = None
         self._schedule_timer = None
-        self._scheduled_last_run_date = ""
+        # 已触发的定时同步去重键集合（"yyyy-MM-dd:HH:mm"，每时间点当天一次）
+        self._scheduled_last_run_keys = set()
         # 周期性更新检查：启动后 2 秒检查一次，之后按 check_interval_hours 周期复查
         self._last_update_check_ts = 0.0
         self._update_check_timer = None
@@ -490,9 +491,24 @@ class MainWindow(QMainWindow):
         self.chk_scheduled_notify.setEnabled(False)
         self.chk_scheduled_notify.stateChanged.connect(lambda: self._save_scheduled_config())
 
+        # 第二时间点：勾选后当天在该时间再触发一次（最多两个时间点）
+        self.chk_time2 = QCheckBox("第二时间")
+        self.chk_time2.setToolTip("勾选后每天/每周同步日会在两个时间点各同步一次")
+        self.chk_time2.setEnabled(False)
+        self.chk_time2.stateChanged.connect(self._on_time2_changed)
+
+        self.time_schedule2 = QTimeEdit()
+        self.time_schedule2.setDisplayFormat("HH:mm")
+        self.time_schedule2.setToolTip("第二个同步时间点")
+        self.time_schedule2.setTime(QTime(18, 0))  # 默认时间点
+        self.time_schedule2.setEnabled(False)
+        self.time_schedule2.timeChanged.connect(self._save_scheduled_config)
+
         schedule_row.addWidget(self.chk_scheduled)
         schedule_row.addWidget(self.time_schedule)
         schedule_row.addWidget(self.chk_scheduled_notify)
+        schedule_row.addWidget(self.chk_time2)
+        schedule_row.addWidget(self.time_schedule2)
         schedule_row.addStretch()
         layout.addLayout(schedule_row)
 
@@ -1701,12 +1717,21 @@ class MainWindow(QMainWindow):
         t = QTime.fromString(time_str, "HH:mm")
         if not t.isValid():
             t = QTime(9, 0)
+        time2_enabled = bool(scheduled.get("time2_enabled", False))
+        time2_str = scheduled.get("time2", "18:00")
+        t2 = QTime.fromString(time2_str, "HH:mm")
+        if not t2.isValid():
+            t2 = QTime(18, 0)
         self.chk_scheduled.setChecked(enabled)
         self.time_schedule.setTime(t)
         self.time_schedule.setEnabled(enabled)
         self.chk_scheduled_notify.setEnabled(enabled)
         if scheduled.get("notify", True):
             self.chk_scheduled_notify.setChecked(True)
+        self.chk_time2.setChecked(time2_enabled)
+        self.chk_time2.setEnabled(enabled)
+        self.time_schedule2.setTime(t2)
+        self.time_schedule2.setEnabled(enabled and time2_enabled)
         # 同步周期：每天 / 每周
         mode = scheduled.get("mode", "daily")
         self.cmb_schedule_mode.setCurrentIndex(0 if mode == "daily" else 1)
@@ -1723,7 +1748,15 @@ class MainWindow(QMainWindow):
         enabled = self.chk_scheduled.isChecked()
         self.time_schedule.setEnabled(enabled)
         self.chk_scheduled_notify.setEnabled(enabled)
+        self.chk_time2.setEnabled(enabled)
+        self.time_schedule2.setEnabled(enabled and self.chk_time2.isChecked())
         self._update_weekday_enabled()
+        self._save_scheduled_config()
+
+    def _on_time2_changed(self):
+        """第二时间点开关变化：联动其时间选择器 + 持久化"""
+        self.time_schedule2.setEnabled(
+            self.chk_scheduled.isChecked() and self.chk_time2.isChecked())
         self._save_scheduled_config()
 
     def _update_weekday_enabled(self):
@@ -1745,6 +1778,8 @@ class MainWindow(QMainWindow):
         scheduled = {
             "enabled": self.chk_scheduled.isChecked(),
             "time": self.time_schedule.time().toString("HH:mm"),
+            "time2_enabled": self.chk_time2.isChecked(),
+            "time2": self.time_schedule2.time().toString("HH:mm"),
             "notify": self.chk_scheduled_notify.isChecked(),
             "mode": mode,
             "days": days,
@@ -1759,8 +1794,13 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning("保存定时同步配置失败: %s", e)
 
-    def _check_scheduled_sync(self):
-        """每分钟检查一次：是否到设定日期和时间触发定时同步"""
+    def _check_scheduled_sync(self, now: QTime = None):
+        """每分钟检查一次：是否到设定日期和时间触发定时同步
+
+        支持一天最多两个时间点（time / time2_enabled+time2），
+        每个时间点当天只触发一次（按 日期:时间 去重）。
+        now: 可注入当前时间（测试用），默认取系统时间。
+        """
         if not self.chk_scheduled.isChecked():
             return
         # 每周模式：检查今天是否在设定的同步日里（1=周一 ... 7=周日）
@@ -1770,14 +1810,19 @@ class MainWindow(QMainWindow):
                             if chk.isChecked()]
             if today_dow not in checked_days:
                 return
-        target_time = self.time_schedule.time()
-        now = QTime.currentTime()
-        if now.hour() == target_time.hour() and now.minute() == target_time.minute():
-            today = QDate.currentDate().toString("yyyy-MM-dd")
-            if self._scheduled_last_run_date == today:
-                return
-            self._scheduled_last_run_date = today
-            self._run_scheduled_sync()
+        if now is None:
+            now = QTime.currentTime()
+        targets = [self.time_schedule.time()]
+        if self.chk_time2.isChecked():
+            targets.append(self.time_schedule2.time())
+        today = QDate.currentDate().toString("yyyy-MM-dd")
+        for target in targets:
+            if now.hour() == target.hour() and now.minute() == target.minute():
+                key = f"{today}:{target.toString('HH:mm')}"
+                if key in self._scheduled_last_run_keys:
+                    continue
+                self._scheduled_last_run_keys.add(key)
+                self._run_scheduled_sync()
 
     def _run_scheduled_sync(self):
         """执行定时同步（不弹确认框，静默触发）"""
