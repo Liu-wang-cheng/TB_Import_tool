@@ -1,8 +1,8 @@
 {
-  "version": "2.8.3",
-  "sha256": "849126cca3a0b05e40132c708e34111f7b02920427d9774220343c8051c06033",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.3/SmartDefectPlatform.zip",
+  "version": "2.8.4",
+  "sha256": "",
+  "download_url": "",
   "release_date": "2026-09-04",
-  "release_notes": "v2.8.3 更新：定时同步支持一天最多两个时间点（第二时间点可勾选启用）；修复定时同步配置保存后重启不生效；AI分类审核失败时下次同步自动重试审核流程",
+  "release_notes": "v2.8.4 修复：全面代码审查——多产品/多项目拉取缓存清空导致垃圾任务与附件错乱、单产品失败终止整体同步、外部TB项目ID不回写、配置对话框列表值污染、0字节附件上传守卫等22项问题",
   "min_version": "1.0"
 }
