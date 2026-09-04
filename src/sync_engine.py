@@ -466,6 +466,52 @@ class SyncEngine:
         except Exception as e:
             logger.warning("检测自定义字段失败: %s", e)
 
+    # ── AI 审核重试标记 ────────────────────────────────
+
+    def _review_retry_flag_path(self) -> str:
+        """AI 审核失败重试标记文件路径"""
+        from src.utils import get_app_data_dir
+        return os.path.join(get_app_data_dir(), "ai_review_retry.flag")
+
+    def _run_review(self, review_fn, progress_callback=None,
+                    msg: str = "AI 审核训练数据..."):
+        """执行 AI 审核并按结果维护重试标记。
+
+        审核存在失败批次 → 写标记（下次同步重试）；
+        审核完整 → 清除历史标记。
+        """
+        if progress_callback:
+            progress_callback(0, 0, msg)
+        review_fn()
+        flag_path = self._review_retry_flag_path()
+        if getattr(self.classifier, "last_review_had_failure", False):
+            try:
+                open(flag_path, "w").close()
+                logger.warning("AI 审核存在失败批次，已标记下次同步重试审核")
+            except OSError as e:
+                logger.warning("写入 AI 审核重试标记失败: %s", e)
+        elif os.path.exists(flag_path):
+            try:
+                os.remove(flag_path)
+                logger.info("AI 审核完整，已清除历史重试标记")
+            except OSError:
+                pass
+
+    def _retry_pending_review(self, progress_callback=None) -> bool:
+        """检测到上次审核失败标记时，先重跑一次 AI 审核流程。
+
+        重试成功 → 清除标记；重试仍失败 → 保留标记（下次同步再试）。
+        返回是否执行了重试。
+        """
+        if not os.path.exists(self._review_retry_flag_path()):
+            return False
+        logger.info("检测到上次 AI 审核失败标记，本次同步先重试审核流程...")
+        self._run_review(
+            lambda: self.classifier.review_training_data(),
+            progress_callback,
+            msg="AI 审核重试（上次存在失败批次）...")
+        return True
+
     def _train_similarity_classifier(self, progress_callback=None):
         """扫描 TB 已分类缺陷任务，训练 TF-IDF 相似度分类器。
 
@@ -498,6 +544,8 @@ class SyncEngine:
 
         if loaded:
             sim = self.classifier._sim_classifier
+            # 上次同步审核存在失败批次 → 本次先重试审核流程
+            self._retry_pending_review(progress_callback)
             if not similarity_enabled:
                 logger.info("TF-IDF 模型已从缓存加载（%d 条样本），"
                              "关闭自动学习，直接用于分类", sim.sample_count)
@@ -529,10 +577,11 @@ class SyncEngine:
                 logger.info("TF-IDF 增量学习完成，模型已更新（共 %d 条样本）",
                              new_count)
                 # AI 审核新增训练数据（只审核新增部分）
-                if progress_callback:
-                    progress_callback(0, 0, "AI 审核新增训练数据...")
-                self.classifier.review_training_data(
-                    target_indices=range(old_count, new_count))
+                self._run_review(
+                    lambda: self.classifier.review_training_data(
+                        target_indices=range(old_count, new_count)),
+                    progress_callback,
+                    msg="AI 审核新增训练数据...")
             else:
                 logger.info("增量学习: 未获取到新样本，保持现有模型")
             return
@@ -563,9 +612,10 @@ class SyncEngine:
             self.classifier.train_similarity(samples, save=True)
             logger.info("TF-IDF 模型训练并保存完成，分类器就绪")
             # AI 审核训练数据
-            if progress_callback:
-                progress_callback(0, 0, "AI 审核训练数据...")
-            self.classifier.review_training_data()
+            self._run_review(
+                lambda: self.classifier.review_training_data(),
+                progress_callback,
+                msg="AI 审核训练数据...")
         else:
             logger.info("TB 缺陷任务中未找到带分类的样本，"
                          "TF-IDF 不可用，将使用 LLM 和规则兜底分类")

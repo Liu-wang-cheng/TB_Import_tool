@@ -1,4 +1,6 @@
 """测试 src/sync_engine.py — HTML转换、CPAX检测、去重逻辑"""
+import os
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -873,6 +875,83 @@ class TestCleanHtmlImageNames:
         html = '<img src="https://example.com/x.png" alt="外链图">'
         result = SyncEngine._clean_html_for_tb(html)
         assert "[图片: 外链图]" in result
+
+
+class TestAIReviewRetry:
+    """AI 审核失败 → 写重试标记，下次同步重跑审核流程"""
+
+    def _make_engine(self, tmp_path, monkeypatch):
+        from unittest.mock import MagicMock
+        from src.sync_engine import SyncEngine
+        engine = SyncEngine.__new__(SyncEngine)
+        engine.classifier = MagicMock()
+        # 重试标记文件指到临时目录
+        flag = str(tmp_path / "ai_review_retry.flag")
+        monkeypatch.setattr(engine, "_review_retry_flag_path", lambda: flag)
+        return engine, flag
+
+    def test_failed_review_writes_flag(self, tmp_path, monkeypatch):
+        """审核存在失败批次（last_review_had_failure=True）→ 写标记"""
+        engine, flag = self._make_engine(tmp_path, monkeypatch)
+        def review():
+            engine.classifier.last_review_had_failure = True
+        engine.classifier.review_training_data = review
+        engine._run_review(engine.classifier.review_training_data)
+        assert os.path.exists(flag)
+
+    def test_success_review_clears_flag(self, tmp_path, monkeypatch):
+        """审核完整 → 清除历史标记"""
+        engine, flag = self._make_engine(tmp_path, monkeypatch)
+        open(flag, "w").close()  # 预置旧标记
+        def review():
+            engine.classifier.last_review_had_failure = False
+        engine.classifier.review_training_data = review
+        engine._run_review(engine.classifier.review_training_data)
+        assert not os.path.exists(flag)
+
+    def test_retry_pending_runs_review_and_clears(self, tmp_path, monkeypatch):
+        """有标记 → 重试审核，成功后清除标记"""
+        engine, flag = self._make_engine(tmp_path, monkeypatch)
+        open(flag, "w").close()
+        calls = []
+        def review():
+            calls.append(1)
+            engine.classifier.last_review_had_failure = False  # 重试成功
+        engine.classifier.review_training_data = review
+        executed = engine._retry_pending_review()
+        assert executed is True
+        assert len(calls) == 1
+        assert not os.path.exists(flag)
+
+    def test_retry_keeps_flag_on_failure(self, tmp_path, monkeypatch):
+        """重试仍失败 → 标记保留，下次同步再试"""
+        engine, flag = self._make_engine(tmp_path, monkeypatch)
+        open(flag, "w").close()
+        def review():
+            engine.classifier.last_review_had_failure = True
+        engine.classifier.review_training_data = review
+        executed = engine._retry_pending_review()
+        assert executed is True
+        assert os.path.exists(flag)
+
+    def test_no_flag_no_retry(self, tmp_path, monkeypatch):
+        """无标记 → 不重试"""
+        engine, flag = self._make_engine(tmp_path, monkeypatch)
+        engine.classifier.review_training_data = MagicMock()
+        assert engine._retry_pending_review() is False
+        engine.classifier.review_training_data.assert_not_called()
+
+    def test_classifier_resets_failure_flag(self):
+        """review_training_data 进入时重置失败标记（不受上次状态影响）"""
+        from src.classifier import BugClassifier
+        c = BugClassifier.__new__(BugClassifier)
+        c._sim_classifier = MagicMock()
+        c._sim_classifier.trained = False  # 提前 return 路径
+        c._llm_enabled = True
+        c._api_key = "k"
+        c.last_review_had_failure = True  # 遗留 True
+        c.review_training_data()
+        assert c.last_review_had_failure is False
 
 
 class TestScheduledSync:

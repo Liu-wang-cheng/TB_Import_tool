@@ -436,6 +436,9 @@ class BugClassifier:
         self._timeout: int = llm_cfg.get("timeout", 30)
         self._max_retries: int = llm_cfg.get("max_retries", 1)
         self._batch_size: int = llm_cfg.get("batch_size", 10)
+        # 最近一次 AI 审核是否存在失败批次（供 sync_engine 决定是否
+        # 在下次同步时重试审核流程）
+        self.last_review_had_failure: bool = False
 
         provider = llm_cfg.get("provider", "")
         if provider == "deepseek" and not self._base_url:
@@ -514,6 +517,7 @@ class BugClassifier:
         返回被剔除的样本数量。
         """
         sim = self._sim_classifier
+        self.last_review_had_failure = False
         if not sim.trained or not self._llm_enabled or not self._api_key:
             return 0
 
@@ -559,6 +563,7 @@ class BugClassifier:
         categories_text = self._build_categories_prompt(
             self._valid_categories or list(self._category_desc.keys()))
         removed_indices = set()
+        failed_batches = 0
         batch_size = getattr(self, '_batch_size', 10)
         total_batches = (len(review_items) + batch_size - 1) // batch_size
 
@@ -584,6 +589,7 @@ class BugClassifier:
             content = self._call_llm_api(prompt, max_tokens=4000)
             if not content:
                 logger.warning("AI 审核请求失败，跳过本批")
+                failed_batches += 1
                 continue
 
             for line in content.strip().splitlines():
@@ -615,6 +621,13 @@ class BugClassifier:
                                      "(%s) → LLM建议: %s",
                                      batch[idx - 1][1][:30], orig_cat,
                                      suggested[:30])
+
+        if failed_batches:
+            # 有批次审核失败 → 标记本次审核不完整，sync_engine 据此
+            # 写重试标记，下次同步时重新运行审核流程
+            self.last_review_had_failure = True
+            logger.warning("AI 审核存在 %d/%d 个批次失败，本次审核不完整",
+                           failed_batches, total_batches)
 
         if not removed_indices:
             logger.info("AI 审核完成: 抽检 %d 条，全部合理", len(review_items))
