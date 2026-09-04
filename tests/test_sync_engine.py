@@ -965,6 +965,10 @@ class TestScheduledSync:
         mw.chk_scheduled_notify = MagicMock()
         mw.chk_time2 = MagicMock()
         mw.time_schedule2 = MagicMock()
+        # 默认第二时间点未启用且时间固定（避免 MagicMock 混入比较运算）
+        mw.chk_time2.isChecked.return_value = False
+        from PyQt6.QtCore import QTime as _QTime
+        mw.time_schedule2.time.return_value = _QTime(18, 0)
         mw._worker = None
         mw._scheduled_last_run_keys = set()
         mw.config = {}

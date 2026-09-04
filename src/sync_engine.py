@@ -192,25 +192,43 @@ class SyncEngine:
                 [int(filters["project_id"])] if filters.get("project_id") else [])
         self.severity_labels = {}
         for pid in product_ids:
-            labels = self.source.fetch_severity_labels(pid)
+            try:
+                labels = self.source.fetch_severity_labels(pid)
+            except Exception as e:
+                logger.warning("获取产品 %s 严重程度翻译失败: %s", pid, e)
+                continue
             if labels:
-                self.severity_labels.update(labels)
+                # 首产品优先：key 冲突时保留先加载的翻译（各产品翻译表
+                # 通常一致；无 per-bug 产品上下文，无法按产品分流）
+                for k, v in labels.items():
+                    self.severity_labels.setdefault(k, v)
         if self.severity_labels:
             logger.info("禅道严重程度翻译: %s", self.severity_labels)
         assigned_to = resolve_assigned_to(assignee_cfg, self.source.account)
-        # 多产品/多项目：笛卡尔积循环拉取，按 bug.id 保序去重
+        # 多产品/多项目：笛卡尔积循环拉取，按 bug.id 保序去重。
+        # 单个组合失败不中断整体（记录后继续，保证已拉取数据正常同步）
         bugs = []
+        failed_combos = []
         for pid in product_ids or [None]:
             for jid in project_ids or [None]:
-                batch = self.source.fetch_all_bugs(
-                    product_id=pid,
-                    project_id=jid,
-                    statuses=filters.get("statuses"),
-                    date_from=filters.get("date_from"),
-                    date_to=filters.get("date_to"),
-                    assigned_to=assigned_to,
-                )
+                combo = (pid, jid)
+                try:
+                    batch = self.source.fetch_all_bugs(
+                        product_id=pid,
+                        project_id=jid,
+                        statuses=filters.get("statuses"),
+                        date_from=filters.get("date_from"),
+                        date_to=filters.get("date_to"),
+                        assigned_to=assigned_to,
+                    )
+                except Exception as e:
+                    logger.error("拉取失败 (产品=%s, 项目=%s): %s", pid, jid, e)
+                    failed_combos.append(combo)
+                    continue
                 bugs.extend(batch)
+        if failed_combos:
+            logger.warning("共 %d 个产品/项目组合拉取失败，其余继续同步",
+                           len(failed_combos))
         if product_ids or project_ids:
             seen = set()
             dedup = []
@@ -482,7 +500,18 @@ class SyncEngine:
         """
         if progress_callback:
             progress_callback(0, 0, msg)
-        review_fn()
+        try:
+            review_fn()
+        except Exception as e:
+            # 审核流程异常（如 LLM 重训失败）视为失败：写标记不冒泡，
+            # 避免终止整个同步；下次同步重试
+            logger.error("AI 审核流程异常: %s", e)
+            try:
+                open(self._review_retry_flag_path(), "w").close()
+                logger.warning("AI 审核异常，已标记下次同步重试")
+            except OSError:
+                pass
+            return
         flag_path = self._review_retry_flag_path()
         if getattr(self.classifier, "last_review_had_failure", False):
             try:
@@ -619,6 +648,8 @@ class SyncEngine:
         else:
             logger.info("TB 缺陷任务中未找到带分类的样本，"
                          "TF-IDF 不可用，将使用 LLM 和规则兜底分类")
+            # 模型不可用也要消费重试标记，避免 ai_review_retry.flag 永久残留
+            self._retry_pending_review(progress_callback)
 
     def _get_sn_patterns_path(self, project_id: str) -> str:
         """返回指定项目的 SN patterns 持久化文件路径。"""
@@ -898,8 +929,13 @@ class SyncEngine:
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
                                   existing.taskId, "已存在")
 
-            # 获取完整详情
-            full_bug = self.source.fetch_bug_detail(bug.id)
+            # 获取完整详情（试运行跳过备注媒体收集，省 Selenium 开销）
+            try:
+                full_bug = self.source.fetch_bug_detail(
+                    bug.id, include_media=not dry_run)
+            except TypeError:
+                # 旧签名兼容（如禅道 adapter 未实现 include_media）
+                full_bug = self.source.fetch_bug_detail(bug.id)
 
             # module_filter 检查：批量API不返回moduleName。
             # 若 run() 已用模块API预过滤（_module_id_set 是 set），此处可跳过。
@@ -1331,7 +1367,8 @@ class SyncEngine:
 
         # 独立查询已关闭的Bug，不传 assigned_to（忽略指派人筛选）
         filters = self._get_source_filters()
-        # 外部 TB 源：用项目 ID + 状态名"关闭"；禅道源：用产品 ID + "closed"
+        # 外部 TB 源：用项目 ID + 状态名"关闭"；禅道源：用产品 ID + "closed"，
+        # 未配置产品时回退项目维度（fetch_bugs 支持项目路径）
         if self.source_type == "teambition":
             from src.utils import _as_str_list
             pids = _as_str_list(filters.get("project_ids")
@@ -1339,13 +1376,20 @@ class SyncEngine:
                                 or getattr(self.source, "project_id", ""))
             closed_statuses = ["关闭"]
             server_status = "all"  # 拉已完成缺陷（isDone=True，状态"关闭"）
-            product_id_for_fetch = None
-            project_id_for_fetch = None  # 逐项目循环
+            by_project = True
         else:
             pids = filters.get("product_ids") or [
                 int(x) for x in [filters.get("product_id"), filters.get("product")]
                 if x not in (None, "") and str(x).isdigit()
             ] or []
+            if not pids:
+                # 仅配置项目ID（无产品）→ 按项目维度查询已关闭缺陷
+                from src.utils import _as_int_list
+                pids = _as_int_list(filters.get("project_ids")
+                                    or filters.get("project_id"))
+                by_project = bool(pids)
+            else:
+                by_project = False
             closed_statuses = ["closed"]
             server_status = "all"
         if not pids:
@@ -1354,26 +1398,30 @@ class SyncEngine:
         logger.info("[关闭同步] 查询ID=%s, status=%s", pids, closed_statuses)
         closed_bugs = []
         for pid in pids:
-            if self.source_type == "teambition":
-                batch = self.source.fetch_all_bugs(
-                    product_id=None,
-                    project_id=pid,
-                    statuses=closed_statuses,
-                    date_from=filters.get("date_from"),
-                    date_to=filters.get("date_to"),
-                    assigned_to=None,
-                    server_status=server_status,
-                )
-            else:
-                batch = self.source.fetch_all_bugs(
-                    product_id=pid,
-                    project_id=None,
-                    statuses=closed_statuses,
-                    date_from=filters.get("date_from"),
-                    date_to=filters.get("date_to"),
-                    assigned_to=None,
-                    server_status=server_status,
-                )
+            try:
+                if self.source_type == "teambition" or by_project:
+                    batch = self.source.fetch_all_bugs(
+                        product_id=None,
+                        project_id=pid,
+                        statuses=closed_statuses,
+                        date_from=filters.get("date_from"),
+                        date_to=filters.get("date_to"),
+                        assigned_to=None,
+                        server_status=server_status,
+                    )
+                else:
+                    batch = self.source.fetch_all_bugs(
+                        product_id=pid,
+                        project_id=None,
+                        statuses=closed_statuses,
+                        date_from=filters.get("date_from"),
+                        date_to=filters.get("date_to"),
+                        assigned_to=None,
+                        server_status=server_status,
+                    )
+            except Exception as e:
+                logger.error("[关闭同步] 拉取失败 (ID=%s): %s", pid, e)
+                continue
             closed_bugs.extend(batch)
         # 保序去重
         seen = set()
@@ -2573,6 +2621,11 @@ class SyncEngine:
 
             def _do_upload(fid=file_id, fn=filename):
                 att = self.source.download_attachment(int(fid), fn)
+                # 0 字节下载结果视为失败（签名失效/源文件丢失），
+                # 否则空文件会照常上传 OSS 并写入日志附件
+                if not att or not att.data:
+                    logger.warning("附件 %s 下载为空（file_id=%s），跳过上传", fn, fid)
+                    return False
                 result = self.teambition.upload_attachment(task_id, att)
                 if result:
                     uploaded[fid] = (result[0], fn, result[1])
@@ -2590,6 +2643,10 @@ class SyncEngine:
 
             def _do_inline(fid=file_id):
                 att = self.source.download_image(int(fid))
+                # 0 字节视为下载失败（同 Step 1 守卫）
+                if not att or not att.data:
+                    logger.warning("内联图片 file#%s 下载为空，跳过上传", fid)
+                    return False
                 # 下载后用真实文件名检查是否已上传（download_image 已返回真实名）
                 if att.filename in existing_filenames:
                     return "skip"
@@ -2619,6 +2676,10 @@ class SyncEngine:
                 else:
                     # download_image 命名为 image_{fid}.{ext}，与重现步骤内联一致
                     att = self.source.download_image(int(fid))
+                # 0 字节视为下载失败（同 Step 1 守卫）
+                if not att or not att.data:
+                    logger.warning("评论附件 file#%s 下载为空，跳过上传", fid)
+                    return False
                 # 跨次同步去重：实际文件名可能在 existing_filenames 中
                 if att.filename in existing_filenames:
                     return "skip"

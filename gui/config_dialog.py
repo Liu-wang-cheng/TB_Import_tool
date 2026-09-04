@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 
 import yaml
 from gui.qt_compat import Qt
@@ -432,7 +433,11 @@ class ConfigDialog(QDialog):
         self.zt_password.setText(zt.get("password", ""))
         filters = zt.get("filters", {})
         product = filters.get("product", "")
-        self.zt_product.setText(str(product) if product else "")
+        # 列表值转逗号串（与主窗口格式一致），并清洗历史污染的 []'"} 字符
+        if isinstance(product, (list, tuple)):
+            product = ",".join(str(x) for x in product)
+        product = re.sub(r"[\[\]'\"]", "", str(product)).strip() if product else ""
+        self.zt_product.setText(product)
         self.zt_module_filter.setText(str(filters.get("module_filter", "") or ""))
         # 指派人：从公用 assignee.yaml 读（外部 TB 和禅道共用）
         assignee = self._load_yaml("assignee.yaml")
@@ -541,8 +546,16 @@ class ConfigDialog(QDialog):
             yaml.safe_dump({"platform": platform}, f, allow_unicode=True)
 
         # 2. zentao.yaml —— 禅道专属配置
-        product = self.zt_product.text().strip()
-        product_val = int(product) if product.isdigit() else (product or None)
+        # 清洗 []'"} 污染字符；支持逗号分隔多值 → 存列表（与主窗口一致）
+        product = re.sub(r"[\[\]'\"]", "", self.zt_product.text()).strip()
+        if product:
+            items = [x.strip() for x in product.replace("，", ",").split(",")
+                     if x.strip()]
+            product_val = (
+                [int(x) for x in items if x.isdigit()]
+                if all(x.isdigit() for x in items) else items)
+        else:
+            product_val = None
 
         zt_path = os.path.join(self.config_dir, "zentao.yaml")
         update_yaml_values(zt_path, {
@@ -716,3 +729,10 @@ class ConfigDialog(QDialog):
         else:
             self.collab_status.setText(f"同步失败: {message}")
             self.collab_status.setStyleSheet("color:#dc2626; font-size:12px;")
+
+    def done(self, result):
+        """对话框关闭前等待协同同步线程结束，避免 QThread 运行中被销毁崩溃"""
+        worker = getattr(self, "_collab_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.wait(3000)
+        super().done(result)

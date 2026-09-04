@@ -48,6 +48,9 @@ class TeambitionSourceAdapter:
         # 全局文件索引(int) → {"task_id": str, "file": dict}
         self._file_registry: Dict[int, dict] = {}
         self._file_counter = 0
+        # 已注册文件判重（task_id:文件id → int 索引），防 fetch_bug_detail
+        # 多次调用重复注册同一文件
+        self._file_seen: Dict[str, int] = {}
 
     @property
     def account(self) -> str:
@@ -233,15 +236,24 @@ class TeambitionSourceAdapter:
         """
         return []
 
+    def _register_file(self, task_id: str, att: dict) -> int:
+        """注册文件到 file_registry（按 task_id+文件id 判重），返回 int 索引"""
+        key = f"{task_id}:{att.get('id', '')}"
+        if key in self._file_seen:
+            return self._file_seen[key]
+        self._file_counter += 1
+        idx = self._file_counter
+        self._file_seen[key] = idx
+        self._file_registry[idx] = {"task_id": task_id, "file": att}
+        return idx
+
     def _collect_comment_attachments(self, task: dict) -> list:
         """拉取任务的评论附件，注册到 file_registry，返回 [{id:int, title, size}]"""
         files = []
         comments = self._client.fetch_task_comments(task.get("_id", ""))
         for c in comments:
             for att in c.get("attachments", []):
-                self._file_counter += 1
-                idx = self._file_counter
-                self._file_registry[idx] = {"task_id": task.get("_id", ""), "file": att}
+                idx = self._register_file(task.get("_id", ""), att)
                 files.append({
                     "id": idx,
                     "title": att.get("name", ""),
@@ -268,11 +280,10 @@ class TeambitionSourceAdapter:
         is_done = True if server_status == "all" else None
         tasks = self._client.fetch_tasks(pid, sfc_id, is_done=is_done)
 
-        # 清空缓存，重建
-        self._task_cache = {}
-        self._file_registry = {}
-        self._file_counter = 0
-
+        # 缓存累积不清空：多项目循环拉取时早批 bug 的 fetch_bug_detail
+        # 依赖此前批次的 _task_cache，清空会导致缓存未命中 → 创建
+        # "任务 {id}" 垃圾任务、评论去重失效；file_counter 不重置，
+        # 避免 int 文件索引被新批复用导致附件下载到错误内容
         bugs = []
         for task in tasks:
             bug = self._task_to_bug(task)
@@ -317,8 +328,12 @@ class TeambitionSourceAdapter:
             return name.split("-", 1)[1].strip()
         return name.strip()
 
-    def fetch_bug_detail(self, bug_id: int) -> ZentaoBug:
-        """返回完整详情（从缓存 task 重新映射 + 收集评论附件 + 备注媒体）"""
+    def fetch_bug_detail(self, bug_id: int, include_media: bool = True) -> ZentaoBug:
+        """返回完整详情（从缓存 task 重新映射 + 收集评论附件 + 备注媒体）
+
+        include_media=False 时跳过备注媒体收集（试运行无需上传，
+        省去每个含媒体任务约 10 秒的 Selenium 页面渲染）。
+        """
         task = self._task_cache.get(bug_id)
         if task is None:
             # 缓存未命中，返回最小 bug（id 保真）
@@ -328,7 +343,8 @@ class TeambitionSourceAdapter:
         # 收集评论附件到 files（附件在评论里，需单独拉 activities）
         bug.files = self._collect_comment_attachments(task)
         # 备注内联媒体（图片/视频）→ 下载上传内部TB附件
-        bug.files += self._collect_note_media(task)
+        if include_media:
+            bug.files += self._collect_note_media(task)
         return bug
 
     # ── 备注内联媒体（图片/视频）──────────────────────
@@ -391,19 +407,15 @@ class TeambitionSourceAdapter:
 
         files = []
         for r in uniq:
-            self._file_counter += 1
-            idx = self._file_counter
             if r["kind"] == "tcs":
                 url = r["key"]  # tcs 公开直下
             else:
                 url = r.get("url") or signed.get(r["key"], "")
-            self._file_registry[idx] = {
-                "task_id": task.get("_id", ""),
-                "note_media": True,
-                "url": url,
-                "file": {"id": idx, "name": r["name"],
-                         "mimeType": "", "size": 0},
-            }
+            idx = self._register_file(task.get("_id", ""), {
+                "id": f"note:{r['key']}", "name": r["name"],
+                "mimeType": "", "size": 0})
+            self._file_registry[idx]["note_media"] = True
+            self._file_registry[idx]["url"] = url
             files.append({"id": idx, "title": r["name"], "size": 0})
         if files:
             ok = sum(1 for i in files

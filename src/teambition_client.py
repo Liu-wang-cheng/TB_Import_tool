@@ -2,6 +2,7 @@
 
 import logging
 import mimetypes
+import re
 import time
 import urllib.parse
 from typing import Dict, List, Optional
@@ -267,7 +268,9 @@ class TeambitionClient:
 
         用 TQL uniqueId 字段精确查询（uniqueId = 数字）。
         """
-        num = identifier.replace("VLNS-", "").replace("CPAX-", "")
+        # 剥所有前缀：VLNS-/CPAX- 及项目专属编号前缀（如 "323A-24" → 24）。
+        # TQL uniqueId 只接受数字，带前缀必失败
+        num = re.sub(r'^[^0-9]*', '', str(identifier))
 
         # 用 TQL uniqueId 精确查询（快且准确，无需遍历）
         try:

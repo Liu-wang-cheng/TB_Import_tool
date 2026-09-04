@@ -220,13 +220,19 @@ class TeambitionSourceClient:
         return name
 
     def fetch_customfield_name(self, cf_id: str) -> str:
-        """按自定义字段 _customfieldId 查字段名称（带缓存）"""
+        """按自定义字段 _customfieldId 查字段名称（带缓存）。
+
+        仅成功结果缓存；瞬时 API 失败不缓存，避免当批所有名称匹配
+        静默降级为值猜测。
+        """
         if not cf_id:
             return ""
         if cf_id in self._cf_name_cache:
             return self._cf_name_cache[cf_id]
         data = self._get(f"/customfields/{cf_id}")
-        name = data.get("name", "") if isinstance(data, dict) else ""
+        if not isinstance(data, dict):
+            return ""
+        name = data.get("name", "")
         self._cf_name_cache[cf_id] = name
         return name
 

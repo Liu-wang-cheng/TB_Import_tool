@@ -759,9 +759,13 @@ class MainWindow(QMainWindow):
         from gui.qt_compat import QTimer
         QTimer.singleShot(5000, self._do_collab_auto_pull)
 
-        # 定时推送：每小时检查一次
+        # 定时推送：每小时检查一次。
+        # 重入保护：配置对话框保存后 _load_config 会再次调用本函数，
+        # 旧定时器先停止再新建，避免定时器叠加导致重复 push
         self._collab_sync_interval_hours = cl_cfg.get("sync_interval_hours", 168)
-        self._collab_sync_timer = QTimer()
+        if getattr(self, "_collab_sync_timer", None) is not None:
+            self._collab_sync_timer.stop()
+        self._collab_sync_timer = QTimer(self)
         self._collab_sync_timer.timeout.connect(self._do_collab_periodic_sync)
         self._collab_sync_timer.start(3600 * 1000)  # 每小时检查
 
@@ -885,7 +889,9 @@ class MainWindow(QMainWindow):
                 filters["product"] = re.sub(
                     r"[\[\]'\"]", "",
                     self.filter_product.text()).strip() or None
-                filters["module_filter"] = self.filter_module.text().strip() or None
+                filters["module_filter"] = re.sub(
+                    r"[\[\]'\"]", "",
+                    self.filter_module.text()).strip() or None
             elif old_platform == "teambition":
                 tb_src_cfg = self.config.setdefault("teambition_source", {})
                 tb_src_cfg["url"] = self.filter_url.text().strip()
@@ -949,11 +955,12 @@ class MainWindow(QMainWindow):
                 str(tb_src_cfg.get("password", "") or ""))
             self.filter_product.setText("")
             # 项目 ID：从 teambition_source.project_id 读（网址解析后保存），
-            # 列表统一显示为逗号串
+            # 列表统一显示为逗号串，清洗污染字符
             _pid = tb_src_cfg.get("project_id", "") or ""
             if isinstance(_pid, (list, tuple)):
                 _pid = ",".join(str(x) for x in _pid)
-            self.filter_module.setText(str(_pid))
+            _pid = re.sub(r"[\[\]'\"]", "", str(_pid))
+            self.filter_module.setText(_pid.strip())
             self.filter_url.setText(str(tb_src_cfg.get("url", "") or ""))
             # 指派人：从公用 assignee.yaml 加载（外部 TB 和禅道共用）
             self._load_assignee_list(self.config.get("assignee", {}))
@@ -1078,7 +1085,9 @@ class MainWindow(QMainWindow):
                 filters.pop("product_id", None)
                 filters.pop("product_ids", None)
 
-            module = self.filter_module.text().strip()
+            # 模块ID：清洗 []'"} 污染字符（与产品ID一致）
+            module = re.sub(r"[\[\]'\"]", "",
+                            self.filter_module.text()).strip()
             filters["module_filter"] = module if module else ""
 
             status_text = self.filter_status.currentText().strip()
@@ -1114,11 +1123,23 @@ class MainWindow(QMainWindow):
             zt_cfg["account"] = self.edit_zentao_account.text().strip()
             zt_cfg["password"] = self.edit_zentao_password.text().strip()
         else:
-            # 保存外部 TB 凭证（url + 账号密码）+ 状态筛选
+            # 保存外部 TB 凭证（url + 账号密码 + 项目ID）+ 状态筛选。
+            # 项目ID（filter_module，逗号分隔多值）必须回写，否则手动编辑
+            # 在同步/保存时全部丢失；清洗 []'"} 污染字符
             tb_src_cfg = self.config.setdefault("teambition_source", {})
             tb_src_cfg["url"] = self.filter_url.text().strip()
             tb_src_cfg["account"] = self.edit_zentao_account.text().strip()
             tb_src_cfg["password"] = self.edit_zentao_password.text().strip()
+            _proj_text = re.sub(r"[\[\]'\"]", "",
+                                self.filter_module.text()).strip()
+            if _proj_text:
+                _projects = [x.strip() for x in
+                             _proj_text.replace("，", ",").split(",")
+                             if x.strip()]
+                tb_src_cfg["project_id"] = _projects if len(_projects) > 1 \
+                    else _projects[0]
+            else:
+                tb_src_cfg["project_id"] = None
             tb_src_filters = tb_src_cfg.setdefault("filters", {})
             status_text = self.filter_status.currentText().strip()
             sync_cfg = self.config.setdefault("sync", {})
@@ -1488,14 +1509,19 @@ class MainWindow(QMainWindow):
                 merged = _merge_ids(self.filter_product.text(), parsed["product_id"])
                 self.filter_product.setText(merged)
                 filled.append(f"产品ID={merged}")
-            # 项目ID：写入配置（无GUI输入框，URL 自动解析即可）
+            # 项目ID：写入配置（无GUI输入框，URL 自动解析即可）。
+            # 现有值可能是 int/str/列表，先归一为字符串列表再合并
             if parsed["project_id"]:
-                cur_projects = [str(x) for x in
-                                (zt_filters.get("project") or [])
-                                if x not in (None, "")]
-                if isinstance(zt_filters.get("project"), str):
+                _cur = zt_filters.get("project")
+                if _cur is None:
+                    cur_projects = []
+                elif isinstance(_cur, (list, tuple)):
+                    cur_projects = [str(x).strip() for x in _cur
+                                    if x not in (None, "")]
+                else:
                     cur_projects = [x.strip() for x in
-                                    zt_filters["project"].split(",") if x.strip()]
+                                    str(_cur).replace("，", ",").split(",")
+                                    if x.strip()]
                 if str(parsed["project_id"]) not in cur_projects:
                     cur_projects.append(str(parsed["project_id"]))
                 zt_filters["project"] = cur_projects or None
@@ -1592,6 +1618,9 @@ class MainWindow(QMainWindow):
             # 复用浏览页缓存（不主动发请求）；如果缓存空，则同步浏览一次
             if not client._cloud_browse_cache and client._cloud_session_auth:
                 product_id = zt_cfg.get("filters", {}).get("product")
+                # 多值时取第一个预热（缓存按产品索引，其余产品拉取时自建）
+                if isinstance(product_id, (list, tuple)):
+                    product_id = product_id[0] if product_id else None
                 if product_id:
                     try:
                         client._cloud_get_browse(int(product_id),
@@ -1729,26 +1758,38 @@ class MainWindow(QMainWindow):
         t2 = QTime.fromString(time2_str, "HH:mm")
         if not t2.isValid():
             t2 = QTime(18, 0)
-        self.chk_scheduled.setChecked(enabled)
-        self.time_schedule.setTime(t)
-        self.time_schedule.setEnabled(enabled)
-        self.chk_scheduled_notify.setEnabled(enabled)
-        if scheduled.get("notify", True):
-            self.chk_scheduled_notify.setChecked(True)
-        self.chk_time2.setChecked(time2_enabled)
-        self.chk_time2.setEnabled(enabled)
-        self.time_schedule2.setTime(t2)
-        self.time_schedule2.setEnabled(enabled and time2_enabled)
-        # 同步周期：每天 / 每周
-        mode = scheduled.get("mode", "daily")
-        self.cmb_schedule_mode.setCurrentIndex(0 if mode == "daily" else 1)
-        # 每周同步日（1=周一 ... 7=周日），默认工作日
-        days = scheduled.get("days", [])
-        if not days:
-            days = [1, 2, 3, 4, 5]
-        for i, chk in enumerate(self.chk_weekdays, start=1):
-            chk.setChecked(i in days)
-        self._update_weekday_enabled()
+        # 屏蔽信号：逐项 set 会触发 _save_scheduled_config 用中间态
+        # （time 未 set、days 未加载）多次写盘
+        widgets = ([self.chk_scheduled, self.time_schedule,
+                    self.chk_scheduled_notify, self.chk_time2,
+                    self.time_schedule2, self.cmb_schedule_mode]
+                   + list(self.chk_weekdays))
+        for w in widgets:
+            w.blockSignals(True)
+        try:
+            self.chk_scheduled.setChecked(enabled)
+            self.time_schedule.setTime(t)
+            self.time_schedule.setEnabled(enabled)
+            self.chk_scheduled_notify.setEnabled(enabled)
+            if scheduled.get("notify", True):
+                self.chk_scheduled_notify.setChecked(True)
+            self.chk_time2.setChecked(time2_enabled)
+            self.chk_time2.setEnabled(enabled)
+            self.time_schedule2.setTime(t2)
+            self.time_schedule2.setEnabled(enabled and time2_enabled)
+            # 同步周期：每天 / 每周
+            mode = scheduled.get("mode", "daily")
+            self.cmb_schedule_mode.setCurrentIndex(0 if mode == "daily" else 1)
+            # 每周同步日（1=周一 ... 7=周日），默认工作日
+            days = scheduled.get("days", [])
+            if not days:
+                days = [1, 2, 3, 4, 5]
+            for i, chk in enumerate(self.chk_weekdays, start=1):
+                chk.setChecked(i in days)
+            self._update_weekday_enabled()
+        finally:
+            for w in widgets:
+                w.blockSignals(False)
 
     def _on_scheduled_switch_changed(self):
         """开关状态变化：联动时间选择器 + 每周同步日 + 持久化"""
@@ -1823,8 +1864,12 @@ class MainWindow(QMainWindow):
         if self.chk_time2.isChecked():
             targets.append(self.time_schedule2.time())
         today = QDate.currentDate().toString("yyyy-MM-dd")
+        now_min = now.hour() * 60 + now.minute()
         for target in targets:
-            if now.hour() == target.hour() and now.minute() == target.minute():
+            # 容忍 1 分钟窗口：休眠恢复/事件循环卡顿跨过目标分钟也能补触发
+            # （去重键保证每个时间点当天只触发一次）
+            target_min = target.hour() * 60 + target.minute()
+            if 0 <= now_min - target_min <= 1:
                 key = f"{today}:{target.toString('HH:mm')}"
                 if key in self._scheduled_last_run_keys:
                     continue
@@ -1946,8 +1991,9 @@ class MainWindow(QMainWindow):
             return
         if self._update_check_worker and self._update_check_worker.isRunning():
             if manual:
-                self._manual_check_pending = True
-                self.status_label.setText("正在检查更新，请稍候...")
+                # 正在跑的检查无论结果如何都会弹窗提示，无需补发
+                QMessageBox.information(self, "提示",
+                                        "正在检查更新，请稍候查看结果")
             return
         update_cfg = self.config.get("update", {})
         if not update_cfg.get("enabled", True):
@@ -1986,20 +2032,22 @@ class MainWindow(QMainWindow):
     def _on_update_check_result(self, result):
         """更新检查完成"""
         self._update_check_worker = None
+        # 仅手动检查占用过 busy；自动检查不得清除（用户可能正在同步）
+        was_manual = self._manual_check_pending
+        self._manual_check_pending = False
         msg = result.get("message", "")
         if not result.get("has_update"):
-            if self._manual_check_pending:
-                self._manual_check_pending = False
+            if was_manual:
                 self._set_busy(False)
                 QMessageBox.information(self, "检查更新", msg or "未发现新版本")
             elif "已是最新" in msg:
                 self.status_label.setText(msg)
             return
-        self._manual_check_pending = False
 
         info = result.get("info")
         if not info:
-            self._set_busy(False)
+            if was_manual:
+                self._set_busy(False)
             return
 
         # 检查最低版本
@@ -2018,7 +2066,8 @@ class MainWindow(QMainWindow):
             # 兜底：取首段（可能没有 vX.Y.Z 前缀）
             latest_notes = notes_raw.split("\n\n", 1)[0].strip()
         if info.min_version and compare_versions(current, info.min_version) > 0:
-            self._set_busy(False)
+            if was_manual:
+                self._set_busy(False)
             QMessageBox.warning(
                 self, "版本过旧",
                 f"当前版本 v{current} 低于最低可更新版本 v{info.min_version}，\n"
@@ -2040,7 +2089,7 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             self._start_download_update(info, result.get("best_mirror"),
                                          result.get("sorted_mirrors", []))
-        else:
+        elif was_manual:
             self._set_busy(False)
 
     def _start_download_update(self, version_info, best_mirror, sorted_mirrors):

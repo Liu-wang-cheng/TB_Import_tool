@@ -156,7 +156,9 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
     # 将 <br> 归一化为空格，避免模板格式中日期时间被 <br> 分隔导致匹配失败
     clean = re.sub(r'<br\s*/?>', ' ', clean)
     # 中文时间 "10 时 55 分" / "10时55分" / "3 点 20 分" → 冒号格式 "10:55"
-    clean = re.sub(r'(\d{1,2})\s*[时点]\s*(\d{1,2})\s*分?', r'\1:\2', clean)
+    # （分钟补零，TIME_PATTERNS 要求两位分钟；"10时5分" → "10:05"）
+    clean = re.sub(r'(\d{1,2})\s*[时点]\s*(\d{1,2})\s*分?',
+                   lambda m: f"{m.group(1)}:{int(m.group(2)):02d}", clean)
 
     # 0. 优先匹配模板格式 "时间：6/3 20:40" 或 "时间: 6/3 20：47"
     ref_year = reference_date.year if reference_date else None
@@ -222,7 +224,7 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
                     hour, minute = h, m
                     has_time = True
                     # 记录时间位置（转换为全局坐标）
-                    time_start = dm.start() - 30 + tm.start()
+                    time_start = max(0, dm.start() - 30) + tm.start()
                     time_end = dm.start() - 30 + tm.end()
                     used_time_ranges.append((time_start, time_end))
                     break
@@ -260,7 +262,7 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
                 if 0 <= h <= 23 and 0 <= m <= 59:
                     hour, minute = h, m
                     has_time = True
-                    time_start = dm.start() - 30 + tm.start()
+                    time_start = max(0, dm.start() - 30) + tm.start()
                     time_end = dm.start() - 30 + tm.end()
                     used_time_ranges.append((time_start, time_end))
                     break
@@ -299,7 +301,7 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
             if 0 <= h <= 23 and 0 <= m <= 59:
                 hour, minute = h, m
                 has_time = True
-                time_start = dm.start() - 30 + tm.start()
+                time_start = max(0, dm.start() - 30) + tm.start()
                 time_end = dm.start() - 30 + tm.end()
                 used_time_ranges.append((time_start, time_end))
                 break

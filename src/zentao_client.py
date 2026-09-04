@@ -788,7 +788,11 @@ class ZentaoClient:
                                           date_from, date_to, assigned_to,
                                           page, limit)
 
-        if product_id:
+        # product+project 同传时优先项目维度：项目接口的 bug 属于该项目，
+        # 再客户端按产品过滤，避免产品接口静默忽略项目造成假过滤
+        if project_id and product_id:
+            path = f"/api.php/v1/projects/{project_id}/bugs"
+        elif product_id:
             path = f"/api.php/v1/products/{product_id}/bugs"
         else:
             path = f"/api.php/v1/projects/{project_id}/bugs"
@@ -809,6 +813,10 @@ class ZentaoClient:
                 if not hasattr(self, "_last_bug_status_cache"):
                     self._last_bug_status_cache = set()
                 self._last_bug_status_cache.add(bug.status)
+            # 项目路径下按产品过滤（product+project 组合）
+            if product_id and project_id \
+                    and str(bug.product) not in (str(product_id), ""):
+                continue
             if not self._passes_filters(bug, statuses, date_from, date_to, assigned_to):
                 continue
             bugs.append(bug)
