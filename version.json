@@ -1,7 +1,7 @@
 {
   "version": "2.8.5",
-  "sha256": "",
-  "download_url": "",
+  "sha256": "e271f0d1436d18cfb975d36dcbc160a4487f3b42ecd6d34ad45e207f48d8f2a4",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.5/SmartDefectPlatform.zip",
   "release_date": "2026-09-09",
   "release_notes": "v2.8.5 修复：日志附件字段更新偶发失败（TB返回200但body为Forbidden错误被静默吞掉）——增加错误校验与重试，附件上传成功但未关联到日志附件字段的问题不再出现",
   "min_version": "1.0"
