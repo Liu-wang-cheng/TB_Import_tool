@@ -2708,18 +2708,33 @@ class SyncEngine:
             for entry in uploaded.values():
                 values.append({"id": entry[0], "title": entry[1]})
             if values:
-                try:
-                    self.teambition._request(
+                def _do_update():
+                    data = self.teambition._request(
                         "POST",
                         f"/v3/task/{task_id}/customfield/{attachment_cf_id}/update",
                         json={"value": values},
                     )
+                    # TB 偶发返回 HTTP 200 但 body 是错误
+                    # （{"error":"Forbidden","message":"...context canceled"}），
+                    # _request 只按状态码判成功，需在此校验
+                    if isinstance(data, dict) and data.get("error"):
+                        raise RuntimeError(
+                            f"日志附件字段更新被拒: {data.get('error')} "
+                            f"{data.get('message', '')}")
+                    return True
+                try:
+                    ok = self._retry(f"日志附件字段更新 {task_id[:8]}", _do_update)
+                except Exception as e:
+                    ok = False
+                    logger.warning("更新日志附件字段失败: %s", e)
+                if ok:
                     new_count = len(uploaded)
                     total = len(values)
                     logger.info("日志附件字段已更新: %d 个文件 (新增 %d, 跳过 %d, 总计 %d)",
                                 total, new_count, skipped, total)
-                except Exception as e:
-                    logger.warning("更新日志附件字段失败: %s", e)
+                else:
+                    logger.warning("更新日志附件字段失败（重试后仍失败）: 任务 %s",
+                                   task_id)
         return uploaded
 
     def _get_existing_attachment_values(self, task_id: str, cf_id: str) -> list:
