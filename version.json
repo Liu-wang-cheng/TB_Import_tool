@@ -1,7 +1,7 @@
 {
   "version": "2.8.8",
-  "sha256": "3a5029cb627e0218962188e312bc645db102a4d8f9608486a409c6bd484146e8",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.7/SmartDefectPlatform.zip",
+  "sha256": "a1bcde133d074f89afe7a5e24cff512103b7db5a253a6151eafc28d6bbe2a970",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.8/SmartDefectPlatform.zip",
   "release_date": "2026-09-11",
   "release_notes": "v2.8.8 全面审查两轮修复（50+项）：关闭同步失败不再误报成功、查找任务增加三重校验；知识库配置层级与检索索引修复；外部TB多项目编号隔离与接线修复；严重程度字母S透传；协同学习定时推送与合并冲突修复；AI审核预算熔断与解析判定；DRC报告/钉钉/发布脚本修复；打包安全加固（.bak泄露修复+发布前校验）",
   "min_version": "1.0"
