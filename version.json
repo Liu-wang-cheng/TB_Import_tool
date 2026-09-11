@@ -1,7 +1,7 @@
 {
   "version": "2.8.6",
-  "sha256": "",
-  "download_url": "",
+  "sha256": "05839ea5478017233ef0bb31a3e2163a3b172faf337e5ad2f17ac8ec5e333381",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.6/SmartDefectPlatform.zip",
   "release_date": "2026-09-11",
   "release_notes": "v2.8.6 修复：AI审核批失败自适应拆半重试（大批量prompt服务端易失败导致审核持续不完整）；分类器准备阶段异常不再中断同步",
   "min_version": "1.0"
