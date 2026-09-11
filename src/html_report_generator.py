@@ -456,10 +456,12 @@ def generate_html_report(
             conf_str = f"{pm.confidence:.0%}" if hasattr(pm, "confidence") else "—"
             name = _esc(pm.pattern_name if hasattr(pm, "pattern_name") else str(pm))
             rows.append(f"""<li><span>{name}</span><span class="badge badge-warning">置信度 {conf_str}</span></li>""")
+        # 先拼接再内插：f-string 表达式内含反斜杠仅 Python≥3.12 支持
+        _rows_html = "\n".join(rows)
         pattern_section = f"""<div class="card">
     <h2>故障模式匹配</h2>
     <ul class="patterns">
-      {"\n".join(rows)}
+      {_rows_html}
     </ul>
   </div>"""
 

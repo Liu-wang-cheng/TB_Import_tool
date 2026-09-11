@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, List, Optional
 
@@ -239,14 +240,33 @@ def resolve_module_filter_ids(source, product_ids: list,
     - 名称值：按名称解析（resolve_module_ids_by_name）
     多产品时循环各产品解析后合并（模块ID全局唯一，安全）。
 
+    解析失败（None）时自动重试一次，仍失败的产品记入 failed_pids，
+    供调用方感知"部分产品解析失败"，避免其缺陷被整批静默过滤。
+
     Returns:
-        (combined_set, api_ok)
+        (combined_set, api_ok, failed_pids)
         - combined_set: 合并后的模块 ID 集合（可能为空集）
         - api_ok: True 表示至少一个值解析成功；False 表示树不可用
+        - failed_pids: 解析失败（重试后仍 None）的产品 ID 集合
     """
     combined: set = set()
     api_ok = False
+    failed_pids: set = set()
     resolve_desc = getattr(source, "resolve_module_descendant_ids", None)
+
+    def _try_resolve(fn, pid, value):
+        """解析一次；None 时重试一次（网络瞬时失败常见）"""
+        for i in range(2):
+            try:
+                sub = fn(pid, value)
+            except Exception:
+                sub = None
+            if sub is not None:
+                return sub
+            if i == 0:
+                time.sleep(0.5)
+        return None
+
     for mf in (module_filter or "").replace("，", ",").split(","):
         mf = mf.strip()
         if not mf:
@@ -254,25 +274,25 @@ def resolve_module_filter_ids(source, product_ids: list,
         if mf.isdigit():
             if resolve_desc:
                 for pid in product_ids:
-                    try:
-                        sub = resolve_desc(pid, mf)
-                    except Exception:
-                        sub = None
+                    sub = _try_resolve(resolve_desc, pid, mf)
                     if sub is None:
+                        failed_pids.add(pid)
                         continue
                     api_ok = True
                     combined |= sub
         else:
             for pid in product_ids:
-                try:
-                    sub = source.resolve_module_ids_by_name(pid, mf)
-                except Exception:
-                    sub = None
+                # 用 lambda 包一层：属性访问也进 _try_resolve 的 try，
+                # 适配器缺该方法时降级为解析失败而非裸 AttributeError
+                sub = _try_resolve(
+                    lambda p, v: source.resolve_module_ids_by_name(p, v),
+                    pid, mf)
                 if sub is None:
+                    failed_pids.add(pid)
                     continue
                 api_ok = True
                 combined |= sub
-    return combined, api_ok
+    return combined, api_ok, failed_pids
 
 
 def parse_zentao_url(url: str) -> dict:

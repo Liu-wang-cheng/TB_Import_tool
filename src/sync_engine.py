@@ -180,11 +180,14 @@ class SyncEngine:
         # 动态获取严重程度翻译（API返回数字，需转为页面显示的中文/字母）
         # 多产品时循环合并各产品的翻译表
         if getattr(self, "source_type", "zentao") == "teambition":
-            # 外部TB：project_id 是 UUID 字符串，支持单值或列表
+            # 外部TB：project_id 是 UUID 字符串，支持单值或列表。
+            # 实际存放在 teambition_source 顶层（GUI/URL 解析写入），
+            # filters 仅作兼容读取
             from src.utils import _as_str_list
             product_ids = []
             project_ids = _as_str_list(
-                filters.get("project_ids") or filters.get("project_id"))
+                filters.get("project_ids") or filters.get("project_id")
+                or self.config.get("teambition_source", {}).get("project_id"))
         else:
             product_ids = filters.get("product_ids") or (
                 [int(filters["product_id"])] if filters.get("product_id") else [])
@@ -225,6 +228,9 @@ class SyncEngine:
                     logger.error("拉取失败 (产品=%s, 项目=%s): %s", pid, jid, e)
                     failed_combos.append(combo)
                     continue
+                for b in batch:
+                    # 标记来源产品，供模块过滤在"部分产品解析失败"时保留其缺陷
+                    b._src_pid = pid
                 bugs.extend(batch)
         if failed_combos:
             logger.warning("共 %d 个产品/项目组合拉取失败，其余继续同步",
@@ -248,12 +254,25 @@ class SyncEngine:
                        self.module_filter.replace("，", ",").split(",")
                        if x.strip()]
             if mf_list:
-                combined, api_ok = resolve_module_filter_ids(
+                combined, api_ok, failed_pids = resolve_module_filter_ids(
                     self.source, product_ids, self.module_filter)
                 if api_ok:
                     self._module_id_set = combined
                     before = len(bugs)
-                    bugs = [b for b in bugs if str(b.module) in combined]
+                    if failed_pids:
+                        # 部分产品模块树解析失败：保留其缺陷并逐条比对，
+                        # 避免整批静默丢弃（逐条在 _sync_single_bug 内执行）
+                        logger.warning(
+                            "产品 %s 模块解析失败，其缺陷将保留并逐条比对模块名",
+                            ",".join(str(p) for p in sorted(failed_pids)))
+                        bugs = [b for b in bugs
+                                if str(b.module) in combined
+                                or getattr(b, "_src_pid", None) in failed_pids]
+                        for b in bugs:
+                            if getattr(b, "_src_pid", None) in failed_pids:
+                                b._module_unverified = True
+                    else:
+                        bugs = [b for b in bugs if str(b.module) in combined]
                     if self.sync_closed_status:
                         logger.debug("模块 '%s' 命中 %d 个ID，预过滤 %d→%d 条",
                                      self.module_filter, len(combined),
@@ -479,6 +498,7 @@ class SyncEngine:
                 key = cf_name_map.get(fname)
                 if key and not self.cf_ids.get(key):
                     self.cf_ids[key] = fid
+                if key:
                     detected_names.add(fname)
             # 警告：配置期望但未检测到的字段（防止 TB 改名后静默失败）
             missing = set(cf_name_map.keys()) - detected_names
@@ -984,11 +1004,19 @@ class SyncEngine:
                 full_bug = self.source.fetch_bug_detail(bug.id)
 
             # module_filter 检查：批量API不返回moduleName。
-            # 若 run() 已用模块API预过滤（_module_id_set 是 set），此处可跳过。
-            # 仅当 _module_id_set is None（API不可用）时回退到 moduleName 子串匹配。
-            if self.module_filter and getattr(self, "_module_id_set", None) is None:
-                id_match = self.module_filter.isdigit() and str(full_bug.module) == self.module_filter
-                name_match = self.module_filter in full_bug.moduleName
+            # 若 run() 已用模块API预过滤（_module_id_set 是 set），此处可跳过；
+            # _module_id_set 为 None（API不可用）或该 bug 来源产品解析失败
+            # （_module_unverified）时回退逐条比对（支持逗号分隔多值）
+            if self.module_filter and (
+                    getattr(self, "_module_id_set", None) is None
+                    or getattr(bug, "_module_unverified", False)):
+                parts = [p.strip() for p in
+                         self.module_filter.replace("，", ",").split(",")
+                         if p.strip()]
+                id_match = any(p.isdigit() and str(full_bug.module) == p
+                               for p in parts)
+                name_match = any(p in (full_bug.moduleName or "")
+                                 for p in parts)
                 if not id_match and not name_match:
                     logger.info("[跳过-模块过滤] Bug#%d 模块 '%s'(ID=%s) 不匹配 '%s'",
                                 bug.id, full_bug.moduleName, full_bug.module,
@@ -1369,16 +1397,20 @@ class SyncEngine:
         return False
 
     def _close_task_by_id(self, bug, task_id: str, dry_run: bool,
-                          taskflow_id: str = "") -> SyncResult:
-        """关闭 TB 任务（禅道已关闭 + TB 待回归 → TB 关闭）"""
+                          taskflow_id: str = "") -> bool:
+        """关闭 TB 任务（禅道已关闭 + TB 待回归 → TB 关闭）。
+
+        返回是否真正关闭成功；失败时不写"已关闭"评论、调用方不计入成功数。
+        """
         if dry_run:
             logger.info("[关闭同步] 试运行: Bug#%d → TB %s (待回归→关闭)",
                         bug.id, task_id)
-            return SyncResult(bug.id, SyncAction.REACTIVATED, task_id,
-                              "试运行: 同步关闭")
+            return True
+        closed = False
         try:
             self.teambition.update_task_status(task_id, self._close_target_id)
             logger.info("[关闭同步] Bug#%d → TB 任务 %s 已关闭", bug.id, task_id)
+            closed = True
         except Exception as e:
             err_msg = str(e)
             if "Sfc not match" in err_msg or "10060" in err_msg:
@@ -1388,12 +1420,17 @@ class SyncEngine:
                         self.teambition.update_task_status(task_id, fallback_id)
                         logger.info("[关闭同步] Bug#%d → TB %s (按任务工作流)",
                                     bug.id, task_id)
+                        closed = True
                     except Exception as e2:
                         logger.warning("Sfc关闭重试失败: %s", e2)
                 else:
                     logger.warning("任务 %s 工作流无关闭状态", task_id[:16])
             else:
                 logger.warning("关闭 TB 任务 %s 失败: %s", task_id, e)
+        if not closed:
+            logger.error("[关闭同步] Bug#%d TB 任务 %s 未能关闭，跳过评论与计数",
+                         bug.id, str(task_id)[:16])
+            return False
         try:
             self.teambition.add_task_comment(
                 task_id,
@@ -1401,8 +1438,7 @@ class SyncEngine:
             )
         except Exception as e:
             logger.warning("添加关闭评论失败: %s", e)
-        return SyncResult(bug.id, SyncAction.REACTIVATED, task_id,
-                          f"同步关闭成功 → {task_id}")
+        return True
 
     def _run_close_sync_phase(self, stats: SyncStats, dry_run: bool,
                                progress_callback=None):
@@ -1419,6 +1455,7 @@ class SyncEngine:
             from src.utils import _as_str_list
             pids = _as_str_list(filters.get("project_ids")
                                 or filters.get("project_id")
+                                or self.config.get("teambition_source", {}).get("project_id")
                                 or getattr(self.source, "project_id", ""))
             closed_statuses = ["关闭"]
             server_status = "all"  # 拉已完成缺陷（isDone=True，状态"关闭"）
@@ -1490,10 +1527,14 @@ class SyncEngine:
             if mf_list:
                 # 外部TB无模块概念，跳过解析（不匹配任何模块）
                 if self.source_type != "teambition":
-                    combined, api_ok = resolve_module_filter_ids(
+                    combined, api_ok, failed_pids = resolve_module_filter_ids(
                         self.source, [int(p) for p in pids], self.module_filter)
                 else:
-                    combined, api_ok = set(), False
+                    combined, api_ok, failed_pids = set(), False, set()
+                if failed_pids:
+                    logger.warning("[关闭同步] 产品 %s 模块解析失败，"
+                                   "其已关闭缺陷可能被过滤漏关",
+                                   ",".join(str(p) for p in sorted(failed_pids)))
                 if api_ok:
                     closed_bugs = [b for b in closed_bugs
                                    if str(b.module) in combined]
@@ -1528,6 +1569,7 @@ class SyncEngine:
         close_total = len(closed_bugs)
         close_skipped_no_match = 0
         close_skipped_not_regression = 0  # 找到TB任务但非待回归
+        close_failed = 0  # 找到TB任务但关闭 API 失败
         logger.info("[关闭同步] 查询到 %d 条已关闭 Bug，检查TB任务状态...",
                      close_total)
 
@@ -1564,11 +1606,18 @@ class SyncEngine:
                         continue
                     if not task:
                         continue
+                    if not self._match_project(task, self.project_name):
+                        logger.warning("[关闭同步] %s 命中非目标所属项目任务，跳过",
+                                       identifier)
+                        continue
                     found_task = True
                     tfid = getattr(task, 'taskflowId', '')
                     if self._should_close_task(bug, task, tfid):
-                        self._close_task_by_id(bug, task.taskId, dry_run, tfid)
-                        stats.closed_synced += 1
+                        if self._close_task_by_id(bug, task.taskId,
+                                                  dry_run, tfid):
+                            stats.closed_synced += 1
+                        else:
+                            close_failed += 1
                         break
                     else:
                         close_skipped_not_regression += 1
@@ -1600,8 +1649,11 @@ class SyncEngine:
                         found_task = True
                         tfid = getattr(task, 'taskflowId', '')
                         if self._should_close_task(bug, task, tfid):
-                            self._close_task_by_id(bug, task.taskId, dry_run, tfid)
-                            stats.closed_synced += 1
+                            if self._close_task_by_id(bug, task.taskId,
+                                                      dry_run, tfid):
+                                stats.closed_synced += 1
+                            else:
+                                close_failed += 1
                             break
                         else:
                             close_skipped_not_regression += 1
@@ -1615,27 +1667,39 @@ class SyncEngine:
                             tasks = self.teambition.search_tasks(tag)
                         except Exception:
                             continue
-                        if tasks:
-                            task = tasks[0]
+                        for task in tasks:
+                            # 与主同步 Tier1.1 同样的三重校验，防止关闭到无关任务
+                            if getattr(task, 'isArchived', False):
+                                continue
+                            if not self._match_project(task, self.project_name):
+                                continue
+                            if not self._task_title_contains_zentao_id(task, bug.id):
+                                continue
                             found_task = True
                             tfid = getattr(task, 'taskflowId', '')
                             if self._should_close_task(bug, task, tfid):
-                                self._close_task_by_id(bug, task.taskId, dry_run, tfid)
-                                stats.closed_synced += 1
+                                if self._close_task_by_id(bug, task.taskId,
+                                                          dry_run, tfid):
+                                    stats.closed_synced += 1
+                                else:
+                                    close_failed += 1
                             else:
                                 close_skipped_not_regression += 1
                                 tb_status_name = self._get_taskflow_status_name(task.status)
                                 logger.debug("[关闭同步] Bug#%d TB %s 状态=%s，无需关闭",
                                              bug.id, task.taskId[:16], tb_status_name)
                             break
+                        if found_task:
+                            break
             if not found_task:
                 close_skipped_no_match += 1
 
         _elapsed = _time.time() - _t0
-        logger.info("[关闭同步] 完成: %d 条, 关闭 %d 条, 未匹配 %d 条, "
-                     "非待回归 %d 条, 耗时 %.1fs",
-                     close_total, stats.closed_synced, close_skipped_no_match,
-                     close_skipped_not_regression, _elapsed)
+        logger.info("[关闭同步] 完成: %d 条, 关闭 %d 条, 关闭失败 %d 条, "
+                     "未匹配 %d 条, 非待回归 %d 条, 耗时 %.1fs",
+                     close_total, stats.closed_synced, close_failed,
+                     close_skipped_no_match, close_skipped_not_regression,
+                     _elapsed)
 
         # 钉钉通知：关闭同步结果
         if self.dingtalk_bot and stats.closed_synced > 0:
@@ -1875,13 +1939,19 @@ class SyncEngine:
                 return mapped
 
         # 4. 没在 map 中的直接匹配字母等级
+        # S 是有效等级：外部TB 的严重程度字段会出现单独字母 S（用户确认），
+        # 透传保留；D/E/F 等非法字母归 C
+        if label.upper() == "S":
+            return "S"
         if label.upper() in ("A", "B", "C"):
             return label.upper()
-        if label.upper() in ("S", "D", "E", "F"):
+        if label.upper() in ("D", "E", "F"):
             return "C"
+        if s.upper() == "S":
+            return "S"
         if s.upper() in ("A", "B", "C"):
             return s.upper()
-        if s.upper() in ("S", "D", "E", "F"):
+        if s.upper() in ("D", "E", "F"):
             return "C"
         return "C"
 

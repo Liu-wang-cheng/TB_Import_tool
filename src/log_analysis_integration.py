@@ -579,17 +579,35 @@ class LogAnalysisIntegration:
                 classifier_cfg = classifier_cfg["classifier"]
             llm_cfg = classifier_cfg.get("llm", {})
             fb_cfg = llm_cfg.get("fallback", {})
-            # 视觉分析API Key优先使用fallback，其次使用主LLM（智谱AI平台通用）
-            vision_key = fb_cfg.get("api_key", "") or llm_cfg.get("api_key", "")
-            if vision_key:
+            vision_cfg = llm_cfg.get("vision", {}) or {}
+            # 视觉配置优先级：vision 段 > 兜底模型 > 主 LLM。
+            # 注意：api_key 与 base_url 必须同源，否则 key 会被发往错误的
+            # 服务端（原实现固定发往智谱公网，内网 key 必然 401）
+            if vision_cfg.get("api_key"):
+                vision_key = vision_cfg["api_key"]
+                vision_base = vision_cfg.get("base_url") or llm_cfg.get("base_url", "")
+            elif fb_cfg.get("enabled") and fb_cfg.get("api_key"):
+                vision_key = fb_cfg["api_key"]
+                vision_base = fb_cfg.get(
+                    "base_url", "https://open.bigmodel.cn/api/paas/v4")
+            else:
+                vision_key = llm_cfg.get("api_key", "")
+                vision_base = llm_cfg.get("base_url", "")
+            vision_model = vision_cfg.get("model", "")
+            if not vision_model:
+                vision_model = ("glm-4v-flash" if "bigmodel" in vision_base
+                                else "deepseek-v4-flash-vision-exp")
+            if vision_key and vision_base:
                 self.vision = VisionIntegration(
                     vision_api_key=vision_key,
+                    vision_base_url=vision_base,
+                    vision_model=vision_model,
                     zentao_client=zentao_client,
                     web_cookies=web_cookies,
                 )
-                logger.info("视觉分析模块已初始化")
+                logger.info("视觉分析模块已初始化（模型 %s）", vision_model)
             else:
-                logger.info("未配置视觉分析 API Key，跳过")
+                logger.info("未配置视觉分析 API Key 或 base_url，跳过")
         except Exception as e:
             logger.warning("视觉分析初始化失败: %s", e)
             self.vision = None
@@ -603,8 +621,9 @@ class LogAnalysisIntegration:
         # 模块化提示词构建器
         self.prompt_builder = PromptBuilder()
 
-        # RAG 知识库（历史案例检索）
-        self.knowledge_base = KnowledgeBase(config)
+        # RAG 知识库（历史案例检索）：配置位于 ai_analysis.knowledge_base，
+        # 传完整 config 会导致知识库永远读不到 enabled 而静默失效
+        self.knowledge_base = KnowledgeBase(config.get("ai_analysis", config))
         if self.knowledge_base.enabled:
             logger.info("RAG 知识库已初始化 (%d/%d 已批准)",
                         self.knowledge_base.approved_count,

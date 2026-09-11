@@ -29,7 +29,7 @@ class DingTalkBot:
         self.webhook_url = webhook_url
         self.secret = secret
         self._http = requests.Session()
-        self._recent_sent: dict = {}  # 消息去重缓存 {hash: timestamp}
+        self._recent_sent: dict = {}  # 消息去重缓存 {hash: (timestamp, 是否成功)}
         self._recent_sent_lock = threading.Lock()
 
     # ── 加签 ──────────────────────────────────────────
@@ -56,17 +56,18 @@ class DingTalkBot:
 
     def _post(self, payload: dict) -> bool:
         """POST 消息到钉钉 Webhook（带 30 秒去重）"""
-        # 消息去重：30 秒内相同内容不重复发送
+        # 消息去重：30 秒内相同内容不重复发送；命中缓存返回上次的真实结果。
+        # 此前"先记录后发送"：上次发送失败、30 秒内重发时会被当作成功静默吞掉
         msg_key = hash(json.dumps(payload, sort_keys=True, ensure_ascii=False))
         now = time.time()
         with self._recent_sent_lock:
-            if msg_key in self._recent_sent:
-                if now - self._recent_sent[msg_key] < 30:
-                    logger.info("钉钉消息去重跳过（30秒内重复）")
-                    return True
-            self._recent_sent[msg_key] = now
+            prev = self._recent_sent.get(msg_key)
+            if prev and now - prev[0] < 30:
+                logger.info("钉钉消息去重跳过（30秒内重复）")
+                return prev[1]
             # 清理过期缓存
-            self._recent_sent = {k: v for k, v in self._recent_sent.items() if now - v < 60}
+            self._recent_sent = {k: v for k, v in self._recent_sent.items()
+                                 if now - v[0] < 60}
 
         timestamp, sign = self._sign()
         url = self.webhook_url
@@ -75,6 +76,7 @@ class DingTalkBot:
             url = f"{url}{sep}timestamp={timestamp}&sign={sign}"
 
         headers = {"Content-Type": "application/json; charset=utf-8"}
+        ok = False
         try:
             resp = self._http.post(url, headers=headers,
                                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -82,17 +84,20 @@ class DingTalkBot:
             if resp.status_code != 200:
                 logger.warning("钉钉消息发送失败: HTTP %d %s",
                                resp.status_code, resp.text[:200])
-                return False
-            data = resp.json()
-            if data.get("errcode") != 0:
-                logger.warning("钉钉消息发送失败: %s %s",
-                               data.get("errcode"), data.get("errmsg"))
-                return False
-            logger.info("钉钉消息发送成功")
-            return True
+            else:
+                data = resp.json()
+                if data.get("errcode") != 0:
+                    logger.warning("钉钉消息发送失败: %s %s",
+                                   data.get("errcode"), data.get("errmsg"))
+                else:
+                    logger.info("钉钉消息发送成功")
+                    ok = True
         except Exception as e:
             logger.warning("钉钉消息发送异常: %s", e)
-            return False
+        # 发送完成后记录真实结果（失败不会被后续重发误判为成功）
+        with self._recent_sent_lock:
+            self._recent_sent[msg_key] = (now, ok)
+        return ok
 
     # ── 消息发送 ──────────────────────────────────────
 

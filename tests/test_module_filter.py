@@ -133,12 +133,14 @@ class TestResolveModuleDescendantIds:
         })
         assert client.resolve_module_descendant_ids(11, "123") == {"123"}
 
-    def test_module_not_in_tree_returns_none(self):
+    def test_module_not_in_tree_returns_exact_match_set(self):
+        """模块属于其他产品（不在此树）→ 返回 {mid} 精确匹配语义，
+        区别于 None（真正的树不可用）"""
         client = make_client()
         client.fetch_module_tree = Mock(return_value={
             "122": {"name": "HS341", "parent": "0"},
         })
-        assert client.resolve_module_descendant_ids(11, "999") is None
+        assert client.resolve_module_descendant_ids(11, "999") == {"999"}
 
     def test_tree_unavailable_returns_none(self):
         client = make_client()
@@ -460,25 +462,28 @@ class TestResolveModuleFilterIds:
     def test_multi_digit_merge_descendants(self):
         from src.utils import resolve_module_filter_ids
         src = self._source(desc=lambda p, m: {f"{m}", "136"} if p == 11 else None)
-        combined, api_ok = resolve_module_filter_ids(src, [11, 20], "123,158")
+        combined, api_ok, failed = resolve_module_filter_ids(src, [11, 20], "123,158")
         assert api_ok is True
         assert combined == {"123", "136", "158"}
+        assert failed == {20}  # 产品 20 解析失败需上报
 
     def test_mixed_digit_and_name(self):
         from src.utils import resolve_module_filter_ids
         src = self._source(
             desc=lambda p, m: {m, "137"} if m == "123" else None,
             by_name=lambda p, n: {"90", "91"} if n == "HS302" else None)
-        combined, api_ok = resolve_module_filter_ids(src, [11], "123,HS302")
+        combined, api_ok, failed = resolve_module_filter_ids(src, [11], "123,HS302")
         assert api_ok is True
         assert combined == {"123", "137", "90", "91"}
+        assert failed == set()
 
     def test_all_fail_returns_not_ok(self):
         from src.utils import resolve_module_filter_ids
         src = self._source(desc=lambda p, m: None)
-        combined, api_ok = resolve_module_filter_ids(src, [11], "999")
+        combined, api_ok, failed = resolve_module_filter_ids(src, [11], "999")
         assert api_ok is False
         assert combined == set()
+        assert failed == {11}
 
 
 class TestDingTalkZeroBugs:

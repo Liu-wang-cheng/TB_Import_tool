@@ -429,7 +429,7 @@ class TestTitleCleaning:
 
 
 class TestSeverityMapping:
-    """严重程度映射 (TB 不使用 S 等级)"""
+    """严重程度映射 (数字→ABCC, 中文→SABC, 字母 S 透传)"""
 
     def make_engine(self, severity_map=None, severity_labels=None):
         from src.sync_engine import SyncEngine
@@ -453,9 +453,11 @@ class TestSeverityMapping:
         assert e._map_severity("D") == "C"
 
     def test_letter_S(self):
+        """外部TB 的严重程度字段会出现单独字母 S → 必须原样保留"""
         e = self.make_engine({"1": "A", "2": "B", "3": "C", "4": "C"})
-        # S 作为输入（字母等级） → 输出 C
-        assert e._map_severity("S") == "C"
+        assert e._map_severity("S") == "S"
+        # 非法的字母等级仍归 C
+        assert e._map_severity("D") == "C"
 
     def test_text_severity(self):
         e = self.make_engine({"致命": "S", "严重": "A", "一般": "B", "建议": "C", "轻微": "C"})
@@ -1249,3 +1251,171 @@ class TestScheduledSync:
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)
+
+
+class TestCloseSyncResult:
+    """关闭同步真实结果（H1）：失败不报成功、不写"已关闭"评论"""
+
+    def _make_engine(self):
+        from src.sync_engine import SyncEngine
+        e = SyncEngine.__new__(SyncEngine)
+        e.teambition = MagicMock()
+        e._close_target_id = "done_id"
+        return e
+
+    def _bug(self):
+        b = MagicMock()
+        b.id = 7
+        return b
+
+    def test_failure_returns_false_without_comment(self):
+        e = self._make_engine()
+        e.teambition.update_task_status = MagicMock(
+            side_effect=Exception("boom"))
+        assert e._close_task_by_id(self._bug(), "task1", dry_run=False) is False
+        e.teambition.add_task_comment.assert_not_called()
+
+    def test_success_returns_true_and_comments(self):
+        e = self._make_engine()
+        assert e._close_task_by_id(self._bug(), "task1", dry_run=False) is True
+        e.teambition.add_task_comment.assert_called_once()
+
+    def test_dry_run_success(self):
+        e = self._make_engine()
+        assert e._close_task_by_id(self._bug(), "task1", dry_run=True) is True
+        e.teambition.update_task_status.assert_not_called()
+
+
+class TestLLMDoublingBudget:
+    """翻倍重试不占用常规重试预算（HTTP 抖动后仍能发出翻倍请求）"""
+
+    def _make_classifier(self):
+        from src.classifier import BugClassifier
+        c = BugClassifier.__new__(BugClassifier)
+        c._base_url = "http://x/v1"
+        c._api_key = "k"
+        c._model = "m"
+        c._timeout = 5
+        c._max_retries = 2
+        c._http = MagicMock()
+        c._fb_enabled = False
+        c._fb_api_key = ""
+        return c
+
+    @staticmethod
+    def _resp(status=200, content="", finish="length"):
+        r = MagicMock()
+        r.status_code = status
+        if status != 200:
+            r.text = "err"
+            return r
+        r.json.return_value = {"choices": [{
+            "message": {"content": content, "reasoning_content": "thinking"},
+            "finish_reason": finish,
+        }]}
+        return r
+
+    def test_doubling_gets_extra_attempt_after_http_error(self, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda *_: None)
+        c = self._make_classifier()
+        c._http.post.side_effect = [
+            self._resp(500),                          # 第1次：HTTP 抖动
+            self._resp(200, "", "length"),            # 第2次：思维链耗尽
+            self._resp(200, "1. OK", "stop"),         # 第3次：翻倍后成功
+        ]
+        out = c._call_primary_llm("p", 16000)
+        assert out == "1. OK"
+        assert c._http.post.call_count == 3
+        import json as _json
+        third = _json.loads(c._http.post.call_args_list[2].kwargs["data"]
+                            .decode("utf-8"))
+        assert third["max_tokens"] == 32000
+
+
+class TestReviewParseHandling:
+    """审核输出完全无法解析时按失败处理，避免静默空转（M13）"""
+
+    def _make_classifier(self, samples):
+        from src.classifier import BugClassifier
+        c = BugClassifier.__new__(BugClassifier)
+        sim = MagicMock()
+        sim.trained = True
+        sim._samples = samples
+        c._sim_classifier = sim
+        c._llm_enabled = True
+        c._api_key = "k"
+        c._valid_categories = ["A类", "B类"]
+        c._category_desc = {"A类": "", "B类": ""}
+        c._batch_size = 2
+        c.last_review_had_failure = False
+        c._validate_category = lambda s: s if s in ("A类", "B类") else None
+        return c
+
+    def test_unparseable_output_counts_as_failure(self):
+        samples = [(f"样本{i}", "A类") for i in range(20)]
+        c = self._make_classifier(samples)
+        # 没有任何"整批正常"类声明、也无法按序号解析 → 按失败处理
+        c._call_llm_api = lambda prompt, max_tokens=4000: "结果见下表：\n（表格略）"
+        c.review_training_data()
+        assert c.last_review_had_failure is True
+
+    def test_natural_language_all_ok_passes(self):
+        """模型用自然语言表达"整批正常"（如"均无需调整"）不算失败"""
+        samples = [(f"样本{i}", "A类") for i in range(20)]
+        c = self._make_classifier(samples)
+        c._call_llm_api = lambda prompt, max_tokens=4000: "这些样本的当前分类均无需调整"
+        c.review_training_data()
+        assert c.last_review_had_failure is False
+
+    def test_all_ok_sentinel_passes(self):
+        samples = [(f"样本{i}", "A类") for i in range(20)]
+        c = self._make_classifier(samples)
+        c._call_llm_api = lambda prompt, max_tokens=4000: "全部合理"
+        c.review_training_data()
+        assert c.last_review_had_failure is False
+
+
+class TestScheduledKeyConsumption:
+    """M7：定时同步启动失败不消费去重键，±1 分钟窗口内可补触发"""
+
+    def _make_main_window(self):
+        mw = MagicMock()
+        mw.chk_scheduled = MagicMock()
+        mw.time_schedule = MagicMock()
+        mw.chk_scheduled_notify = MagicMock()
+        mw.chk_time2 = MagicMock()
+        mw.time_schedule2 = MagicMock()
+        mw.chk_time2.isChecked.return_value = False
+        from PyQt6.QtCore import QTime as _QTime
+        mw.time_schedule2.time.return_value = _QTime(18, 0)
+        mw._worker = None
+        mw._scheduled_last_run_keys = set()
+        mw.config = {}
+        mw._project_root = "/tmp"
+        mw._log = MagicMock()
+        mw.status_label = MagicMock()
+        mw.log_text = MagicMock()
+        mw._apply_filters_to_config = MagicMock()
+        mw._start_worker = MagicMock(return_value=True)
+        return mw
+
+    def test_start_failure_does_not_consume_key(self):
+        from gui.main_window import MainWindow
+        from PyQt6.QtCore import QTime
+        mw = self._make_main_window()
+        mw.chk_scheduled.isChecked.return_value = True
+        mw.time_schedule.time.return_value = QTime(9, 30)
+        mw._run_scheduled_sync = MagicMock(return_value=False)  # 忙/失败
+        MainWindow._check_scheduled_sync(mw, QTime(9, 30))
+        assert mw._scheduled_last_run_keys == set()  # 未消费，可补触发
+
+    def test_start_success_consumes_key(self):
+        from gui.main_window import MainWindow
+        from PyQt6.QtCore import QTime, QDate
+        mw = self._make_main_window()
+        mw.chk_scheduled.isChecked.return_value = True
+        mw.time_schedule.time.return_value = QTime(9, 30)
+        mw._run_scheduled_sync = MagicMock(return_value=True)
+        MainWindow._check_scheduled_sync(mw, QTime(9, 30))
+        today = QDate.currentDate().toString("yyyy-MM-dd")
+        assert f"{today}:09:30" in mw._scheduled_last_run_keys

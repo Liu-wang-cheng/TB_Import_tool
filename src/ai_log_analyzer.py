@@ -916,7 +916,13 @@ class AILogAnalyzer:
             "max_tokens": max_tokens,
         }
 
-        for attempt in range(1, self._max_retries + 1):
+        max_attempts = self._max_retries
+        # 翻倍上限：相对初始预算 16 倍且不超 32000（防 256 token 的轻量
+        # 判定被放大成 32000 的昂贵请求）
+        token_cap = min(payload["max_tokens"] * 16, 32000)
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
             try:
                 resp = self._http.post(
                     url, headers=headers,
@@ -925,36 +931,53 @@ class AILogAnalyzer:
                 )
                 if resp.status_code != 200:
                     logger.warning("LLM API HTTP %d: %s", resp.status_code, resp.text[:200])
+                    if attempt < max_attempts:
+                        time.sleep(2 ** attempt)
                     continue
                 data = resp.json()
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                ch = (data.get("choices") or [{}])[0]
+                msg = ch.get("message") or {}
+                content = msg.get("content") or ""
+                finish = ch.get("finish_reason", "")
+                if not content and finish == "length" \
+                        and payload["max_tokens"] < token_cap:
+                    # 推理模型思维链耗尽输出预算：翻倍并额外重试，
+                    # 不占用常规重试次数（否则一次网络抖动就吃掉翻倍机会）
+                    payload["max_tokens"] = min(
+                        payload["max_tokens"] * 2, token_cap)
+                    max_attempts += 1
+                    logger.warning("LLM 输出被思维链耗尽，max_tokens 提升至 %d 重试",
+                                   payload["max_tokens"])
+                    continue
                 if not content:
-                    logger.warning("LLM 返回空内容")
+                    logger.warning("LLM 返回空内容 (finish_reason=%s)", finish)
+                    if attempt < max_attempts:
+                        time.sleep(2 ** attempt)
                     continue
 
                 # 先尝试提取并修复 JSON 截断
                 repaired, repair_errors = AILogAnalyzer._extract_and_repair_json(content)
                 if repair_errors:
+                    # 警告只记日志，不拼进 content（拼接会使合法 JSON 无法解析，
+                    # 下游 _parse_analysis_json 直接返回空字典）
                     logger.warning("LLM 输出 JSON 无法修复: %s", repair_errors[0])
-                    content += f"\n\n[JSON校验警告] {repair_errors[0]}"
                     return content
                 if repaired != content:
                     # 修复成功，用修复后的干净 JSON 替换
                     content = repaired
                     logger.info("LLM 输出 JSON 截断，已自动修复")
 
-                # JSON Schema 强制校验
+                # JSON Schema 强制校验（同样不修改 content）
                 is_valid, errors = self._validate_json_response(content)
                 if not is_valid:
                     logger.warning("LLM 输出 JSON Schema 校验失败 (%d个问题): %s",
                                    len(errors), "; ".join(errors[:3]))
-                    content += f"\n\n[JSON校验警告] {'; '.join(errors[:3])}"
                 return content
             except requests.exceptions.Timeout:
                 logger.warning("LLM 超时 (%ds), 第 %d 次", timeout, attempt)
             except Exception as e:
                 logger.warning("LLM 调用失败: %s", e)
-            if attempt < self._max_retries:
+            if attempt < max_attempts:
                 time.sleep(2 ** attempt)
 
         return None

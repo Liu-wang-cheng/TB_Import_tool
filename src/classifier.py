@@ -545,6 +545,9 @@ class BugClassifier:
                     review_items.append((idxs.pop(0), title, cat))
             logger.info("开始 AI 审核上次失败样本: %d 条（匹配到 %d 条）...",
                         len(target_items), len(review_items))
+            if not review_items:
+                logger.warning("上次失败样本在当前训练数据中均未匹配到"
+                               "（可能已被剔除或模型被替换），跳过本次重试")
         elif target_indices is not None:
             # 按索引范围精确匹配新增样本
             review_items = []
@@ -584,11 +587,15 @@ class BugClassifier:
             self._valid_categories or list(self._category_desc.keys()))
         removed_indices = set()
         failed_batches = 0
+        calls_used = 0
         batch_size = getattr(self, '_batch_size', 10)
         total_batches = (len(review_items) + batch_size - 1) // batch_size
 
         def _review_batch(batch) -> Optional[set]:
-            """审核一批，成功返回剔除索引集合；LLM 请求失败返回 None。"""
+            """审核一批，成功返回剔除索引集合；
+            LLM 请求失败或输出完全无法解析返回 None。"""
+            nonlocal calls_used
+            calls_used += 1
             lines = []
             for i, (_, title, cat) in enumerate(batch, 1):
                 lines.append(f"{i}. 标题: {title}  当前分类: {cat}")
@@ -601,7 +608,7 @@ class BugClassifier:
                 "对每条输出判定结果，格式为：\n"
                 "序号. OK（分类正确）\n"
                 "序号. 建议→正确分类名（分类不合理时给出建议）\n"
-                "只输出有问题的条目也可以，没有问题的不用全部列出。"
+                "只列出有问题的条目；如果整批都没有问题，输出一行：全部合理"
             )
 
             # 推理模型思维链计入输出预算：30 条/批实测需 16k tokens 才能产出判定
@@ -610,6 +617,7 @@ class BugClassifier:
                 return None
 
             removed = set()
+            parsed = 0
             for line in content.strip().splitlines():
                 line = line.strip()
                 if not line:
@@ -617,6 +625,7 @@ class BugClassifier:
                 m = re.match(r'(\d+)\s*[.、)]\s*(.+)', line)
                 if not m:
                     continue
+                parsed += 1
                 idx = int(m.group(1))
                 verdict = m.group(2).strip()
                 if 1 <= idx <= len(batch) and "OK" not in verdict.upper():
@@ -639,6 +648,18 @@ class BugClassifier:
                                      "(%s) → LLM建议: %s",
                                      batch[idx - 1][1][:30], orig_cat,
                                      suggested[:30])
+            # 格式偏离且无"整批正常"类声明 → 视为失败（拆半重试/下次重试），
+            # 避免解析 0 条却记录"全部合理"的静默空转。关键词集合放宽，
+            # 防止模型用"全部样本合理/均无误/all ok"等表述被误判失败
+            if parsed == 0:
+                lowered = content.lower()
+                ok_markers = ("全部合理", "均合理", "都合理", "全部正确",
+                              "无问题", "没有问题", "无误", "无需调整",
+                              "all ok", "all correct", "no issue", "no problem")
+                if not any(m in lowered for m in ok_markers):
+                    logger.warning("AI 审核输出格式无法解析且无'全部合理'类标记: %s",
+                                   content.strip()[:100])
+                    return None
             return removed
 
         def _review_with_split(batch, depth: int = 0) -> set:
@@ -660,8 +681,23 @@ class BugClassifier:
             return (_review_with_split(batch[:mid], depth + 1)
                     | _review_with_split(batch[mid:], depth + 1))
 
+        # 总预算熔断：LLM 服务"慢挂"（连接不断、单次 180s 超时）时，
+        # 30 条失败批不断拆半会放大成几十次调用，最长可能阻塞数小时
+        call_budget = max(20, total_batches * 8)
+        deadline = time.time() + 30 * 60
+        budget_warned = False
         for batch_num, batch_start in enumerate(range(0, len(review_items), batch_size), 1):
             batch = review_items[batch_start:batch_start + batch_size]
+            if calls_used >= call_budget or time.time() > deadline:
+                failed_batches += 1
+                self.last_review_failed_items.extend(
+                    (title, cat) for (_, title, cat) in batch)
+                if not budget_warned:
+                    budget_warned = True
+                    logger.warning(
+                        "AI 审核调用预算耗尽（已调用 %d 次 / 上限 %d 次或 30 分钟），"
+                        "剩余批次留待下次同步重试", calls_used, call_budget)
+                continue
             logger.info("AI 审核进度: %d/%d (已剔除 %d 条)",
                         batch_num, total_batches, len(removed_indices))
             removed_indices |= _review_with_split(batch)
@@ -1023,7 +1059,13 @@ class BugClassifier:
             "Content-Type": "application/json; charset=utf-8",
         }
 
-        for attempt in range(1, self._max_retries + 1):
+        max_attempts = self._max_retries
+        # 翻倍上限：相对初始预算 16 倍且不超 32000（防 256 token 类轻量调用
+        # 被放大成昂贵请求）
+        token_cap = min(payload["max_tokens"] * 16, 32000)
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
             try:
                 resp = self._http.post(
                     url, headers=headers,
@@ -1033,21 +1075,26 @@ class BugClassifier:
                 if resp.status_code != 200:
                     logger.warning("LLM API 返回 HTTP %d: %s",
                                    resp.status_code, resp.text[:200])
+                    if attempt < max_attempts:
+                        time.sleep(2 ** attempt)
                     continue
                 data = resp.json()
                 choice = data.get("choices", [{}])[0]
                 msg = choice.get("message", {})
                 content = msg.get("content", "")
                 finish_reason = choice.get("finish_reason", "")
-                # 推理模型（如 MiniMax-M2.7）: content 为空时检查 reasoning_content
-                if not content:
-                    reasoning = msg.get("reasoning_content", "")
-                    if reasoning and finish_reason == "length":
-                        logger.debug("LLM 推理耗尽 token (reasoning %d 字符), "
-                                     "finish_reason=length", len(reasoning))
-                        payload["max_tokens"] = min(
-                            payload.get("max_tokens", 400) * 2, 32000)
-                        continue
+                # 推理模型思维链耗尽输出预算：翻倍并额外重试，不占用常规
+                # 重试次数（否则一次网络抖动就吃掉翻倍机会）。网关可能不回传
+                # reasoning_content，因此不依赖该字段判断
+                if (not content and finish_reason == "length"
+                        and payload["max_tokens"] < token_cap):
+                    payload["max_tokens"] = min(
+                        payload["max_tokens"] * 2, token_cap)
+                    max_attempts += 1
+                    logger.warning("LLM 输出被思维链耗尽"
+                                   "（max_tokens 提升至 %d 重试）",
+                                   payload["max_tokens"])
+                    continue
                 if content:
                     if finish_reason == "length":
                         logger.debug("LLM 输出被截断 (finish_reason=length), "
@@ -1060,7 +1107,7 @@ class BugClassifier:
                 logger.warning("LLM API 超时 (%ds), 第 %d 次", self._timeout, attempt)
             except Exception as e:
                 logger.warning("LLM API 调用失败: %s", e)
-            if attempt < self._max_retries:
+            if attempt < max_attempts:
                 time.sleep(2 ** attempt)
 
         return None

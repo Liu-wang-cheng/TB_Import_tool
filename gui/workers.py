@@ -348,8 +348,13 @@ class ListBugsWorker(QThread):
                     from src.utils import resolve_module_filter_ids
                     self.progress.emit(
                         f"解析模块 '{module_filter}' 及子模块...")
-                    combined, api_ok = resolve_module_filter_ids(
+                    combined, api_ok, failed_pids = resolve_module_filter_ids(
                         source, product_ids, module_filter)
+                    if failed_pids:
+                        self.progress.emit(
+                            f"警告：产品 "
+                            f"{','.join(str(p) for p in sorted(failed_pids))} "
+                            f"模块解析失败，其缺陷可能被过滤")
                     if api_ok:
                         module_id_set = combined
                     else:
@@ -693,3 +698,50 @@ class UpdateDownloadWorker(QThread):
         except Exception as e:
             logger.exception("下载更新失败")
             self.error.emit(str(e), traceback.format_exc())
+
+
+class CollabAutoSyncWorker(QThread):
+    """协同学习后台同步（pull/push）
+
+    底层 requests 超时 15~60s，在 GUI 线程执行会冻结界面（Windows 会显示
+    "未响应"），必须放后台线程。
+    """
+
+    log = pyqtSignal(str, str)  # (message, level)
+
+    def __init__(self, ai_config: dict, action: str, parent=None):
+        super().__init__(parent)
+        self._ai_config = copy.deepcopy(ai_config)
+        self._action = action  # "pull" | "push"
+
+    def run(self):
+        from src.collaborative_learning import CollaborativeLearning
+        cl = CollaborativeLearning(self._ai_config)
+        try:
+            if self._action == "pull":
+                success, msg, has_updates = cl.pull()
+                if has_updates:
+                    self.log.emit(f"[协同学习] 自动拉取: {msg}", "INFO")
+                    self._rebuild_models()
+                elif success:
+                    logger.info("协同学习自动拉取: %s", msg)
+            else:
+                if not cl.enabled or not cl.should_sync():
+                    return
+                success, msg = cl.push()
+                if success:
+                    self.log.emit(f"[协同学习] 定时推送: {msg}", "INFO")
+        except Exception as e:
+            logger.warning("协同学习后台同步失败: %s", e)
+
+    def _rebuild_models(self):
+        """拉取到新数据后重建本地知识库模型"""
+        try:
+            from src.knowledge_base import KnowledgeBase
+            kb = KnowledgeBase(self._ai_config)
+            if kb.enabled:
+                kb.reload_data()
+                kb.rebuild_model()
+                self.log.emit("[协同学习] 知识库模型已重建", "INFO")
+        except Exception as e:
+            logger.warning("协同学习模型重建失败: %s", e)

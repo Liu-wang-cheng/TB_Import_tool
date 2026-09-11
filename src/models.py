@@ -82,7 +82,10 @@ class TeambitionTask:
     def get_base_title(self) -> str:
         title = self.content
         title = re.sub(r'【禅道\d+】', '', title)
-        title = re.sub(r'【[\w]+-\d+】', '', title)
+        # 只清 VLNS/CPAX 标注；不能用 【[\w]+-\d+】 宽泛模式，
+        # 会误清禅道产品编号（如【P260626-00013】），与 ZentaoBug 侧
+        # 归一化不一致会导致模糊比对漏判重复
+        title = re.sub(r'【(?:VLNS|CPAX)-\d+】', '', title)
         title = re.sub(r'【TB-[\w-]+】', '', title)
         return title.strip()
 

@@ -23,7 +23,7 @@ from dingtalk.bot import DingTalkBot
 from gui.config_dialog import ConfigDialog
 from gui.log_handler import QtLogHandler
 from gui.workers import (
-    AuthTestWorker, ListBugsWorker, SyncWorker,
+    AuthTestWorker, CollabAutoSyncWorker, ListBugsWorker, SyncWorker,
     UpdateCheckWorker, UpdateDownloadWorker,
 )
 
@@ -69,7 +69,7 @@ class MainWindow(QMainWindow):
         self.config = {}
         self._worker = None
         self._log_handler = None
-        self._module_thread = None
+        self._collab_worker = None  # 协同学习后台同步线程
         self._update_check_worker = None
         self._update_download_worker = None
         self._update_bat_path = None
@@ -99,8 +99,9 @@ class MainWindow(QMainWindow):
         （"QThread: Destroyed while thread is still running"）。
         """
         running = []
-        for th in (self._module_thread, self._update_download_worker,
-                   self._update_check_worker, self._worker):
+        for th in (self._update_download_worker,
+                   self._update_check_worker, self._worker,
+                   self._collab_worker):
             if th is not None and th.isRunning():
                 th.wait(3000)
                 if th.isRunning():
@@ -645,11 +646,12 @@ class MainWindow(QMainWindow):
         self.chk_ai_analysis.blockSignals(False)
 
         import yaml
-        for chk, yaml_path, key in [
-            (self.chk_fault_pattern, "configs/fault_patterns.yaml", "enabled"),
-            (self.chk_specialized_prompt, "configs/prompts.yaml", "enabled"),
+        for chk, rel_path, key in [
+            (self.chk_fault_pattern, "fault_patterns.yaml", "enabled"),
+            (self.chk_specialized_prompt, "prompts.yaml", "enabled"),
         ]:
             try:
+                yaml_path = os.path.join(self._project_root, "configs", rel_path)
                 with open(yaml_path, "r", encoding="utf-8") as f:
                     cfg = yaml.safe_load(f) or {}
                 chk.blockSignals(True)
@@ -715,7 +717,9 @@ class MainWindow(QMainWindow):
             update_yaml_values(prompt_path, {"enabled": self.chk_specialized_prompt.isChecked()})
 
         # RAG 知识库 → ai_analysis.yaml
-        kb_enabled = self.chk_knowledge_base.isChecked() and ai_enabled
+        # 只写子开关自身状态：与总开关做 AND 会在关闭 AI 时把用户
+        # 单独开启的 RAG 设置永久清掉
+        kb_enabled = self.chk_knowledge_base.isChecked()
         if os.path.exists(ai_path):
             update_yaml_values(ai_path, {"knowledge_base.enabled": kb_enabled})
         self.config.setdefault("ai_analysis", {}).setdefault("knowledge_base", {})["enabled"] = kb_enabled
@@ -757,7 +761,15 @@ class MainWindow(QMainWindow):
             return
 
         from gui.qt_compat import QTimer
-        QTimer.singleShot(5000, self._do_collab_auto_pull)
+        # 启动自动拉取：单发定时器（重入保护——配置保存后 _load_config
+        # 会再次调用本函数，QTimer.singleShot 会叠加多个待触发回调）
+        if getattr(self, "_collab_pull_timer", None) is not None:
+            self._collab_pull_timer.stop()
+            self._collab_pull_timer.deleteLater()
+        self._collab_pull_timer = QTimer(self)
+        self._collab_pull_timer.setSingleShot(True)
+        self._collab_pull_timer.timeout.connect(self._do_collab_auto_pull)
+        self._collab_pull_timer.start(5000)
 
         # 定时推送：每小时检查一次。
         # 重入保护：配置对话框保存后 _load_config 会再次调用本函数，
@@ -765,49 +777,36 @@ class MainWindow(QMainWindow):
         self._collab_sync_interval_hours = cl_cfg.get("sync_interval_hours", 168)
         if getattr(self, "_collab_sync_timer", None) is not None:
             self._collab_sync_timer.stop()
+            self._collab_sync_timer.deleteLater()
         self._collab_sync_timer = QTimer(self)
         self._collab_sync_timer.timeout.connect(self._do_collab_periodic_sync)
         self._collab_sync_timer.start(3600 * 1000)  # 每小时检查
 
     def _do_collab_auto_pull(self):
-        """后台自动拉取共享数据。"""
-        from src.collaborative_learning import CollaborativeLearning
-        cl = CollaborativeLearning(self.config.get("ai_analysis", {}))
-        try:
-            success, msg, has_updates = cl.pull()
-            if has_updates:
-                self._log(f"[协同学习] 自动拉取: {msg}")
-                # 尝试重建模型
-                self._rebuild_models_after_pull()
-            elif success:
-                logger.info("协同学习自动拉取: %s", msg)
-        except Exception as e:
-            logger.warning("协同学习自动拉取失败: %s", e)
+        """后台自动拉取共享数据（QThread：网络超时 15~60s，不能占用 GUI 线程）"""
+        self._start_collab_worker("pull")
 
     def _do_collab_periodic_sync(self):
-        """定时检查是否需要推送。"""
-        from src.collaborative_learning import CollaborativeLearning
-        cl = CollaborativeLearning(self.config.get("ai_analysis", {}))
-        if not cl.enabled or not cl.should_sync():
-            return
-        try:
-            success, msg = cl.push()
-            if success:
-                self._log(f"[协同学习] 定时推送: {msg}")
-        except Exception as e:
-            logger.warning("协同学习定时推送失败: %s", e)
+        """定时检查是否需要推送（QThread）"""
+        self._start_collab_worker("push")
 
-    def _rebuild_models_after_pull(self):
-        """在协同学习拉取新数据后重建本地模型。"""
-        try:
-            from src.knowledge_base import KnowledgeBase
-            kb = KnowledgeBase(self.config.get("ai_analysis", {}))
-            if kb.enabled:
-                kb.reload_data()
-                kb.rebuild_model()
-                self._log("[协同学习] 知识库模型已重建")
-        except Exception as e:
-            logger.warning("协同学习模型重建失败: %s", e)
+    def _start_collab_worker(self, action: str):
+        if self._collab_worker is not None and self._collab_worker.isRunning():
+            logger.info("协同学习同步仍在进行，跳过本次 %s", action)
+            return
+        worker = CollabAutoSyncWorker(
+            self.config.get("ai_analysis", {}), action, parent=self)
+        worker.log.connect(lambda msg, level="INFO": self._log(msg, level))
+        # 捕获 worker 本体回调：避免旧线程的完成信号（队列延迟）误删新线程
+        worker.finished.connect(
+            lambda w=worker: self._on_collab_worker_finished(w))
+        self._collab_worker = worker
+        worker.start()
+
+    def _on_collab_worker_finished(self, worker):
+        if self._collab_worker is worker:
+            self._collab_worker = None
+        worker.deleteLater()
 
     def _on_platform_changed(self, index: int, save_current: bool = True):
         """源平台切换时更新界面标签、提示文字、字段值"""
@@ -962,6 +961,22 @@ class MainWindow(QMainWindow):
             _pid = re.sub(r"[\[\]'\"]", "", str(_pid))
             self.filter_module.setText(_pid.strip())
             self.filter_url.setText(str(tb_src_cfg.get("url", "") or ""))
+            # 恢复状态筛选：外部TB 的关闭同步依赖 sync_closed_status，
+            # 不回读会导致界面固定显示"激活"，任意一次保存都把它静默改写为关
+            statuses = tb_src_filters.get("statuses")
+            closed = bool(self.config.get("sync", {}).get(
+                "sync_closed_status", False))
+            if statuses is None and closed:
+                status_label = "已关闭"
+            elif statuses and closed:
+                status_label = "激活+已关闭"
+            else:
+                status_label = "激活"
+            _idx = self.filter_status.findText(status_label)
+            if _idx >= 0:
+                self.filter_status.blockSignals(True)
+                self.filter_status.setCurrentIndex(_idx)
+                self.filter_status.blockSignals(False)
             # 指派人：从公用 assignee.yaml 加载（外部 TB 和禅道共用）
             self._load_assignee_list(self.config.get("assignee", {}))
 
@@ -1590,15 +1605,25 @@ class MainWindow(QMainWindow):
 
         复用 ZentaoClient 单例缓存，避免重复认证/扫描带来的网络请求与日志噪音。
         """
+        # 外部TB 源不使用禅道状态码，直接跳过
+        if self.config.get("source", {}).get("platform", "zentao") == "teambition":
+            return
+        zt_cfg = self.config.get("zentao", {})
+        # 单例 key：base_url + account + password + branch（branch 变更也要
+        # 重新刷新，否则提前 return 会跳过 set_branch_id 同步）
+        cache_key = (zt_cfg.get("base_url", ""), zt_cfg.get("account", ""),
+                     zt_cfg.get("password", ""),
+                     str(zt_cfg.get("filters", {}).get("branch", "")))
+        # 同一连接只动态刷新一次：本函数含 GUI 线程内的网络请求（认证 +
+        # 状态接口 + 可能的浏览页预热，自建版含 api_delay），状态分组极少变化
+        if getattr(self, "_status_refreshed_key", None) == cache_key:
+            return
         # 复用 ZentaoClient 全局缓存（_cloud_browse_cache 等是 class-level 实例共享）
         # 直接通过 source_factory 单例获取 client 即可
         try:
             from src.source_factory import _CLIENT_CACHE
             from src.zentao_client import ZentaoClient
 
-            # 单例 key：base_url + account
-            zt_cfg = self.config.get("zentao", {})
-            cache_key = (zt_cfg.get("base_url", ""), zt_cfg.get("account", ""), zt_cfg.get("password", ""))
             client = _CLIENT_CACHE.get(cache_key)
             if client is None:
                 sync_cfg = self.config.get("sync", {})
@@ -1638,6 +1663,7 @@ class MainWindow(QMainWindow):
                     "激活+已关闭": list(open_codes) + list(closed_codes),
                 }
                 logger.info("动态加载状态码分组: %s", self._status_code_map)
+                self._status_refreshed_key = cache_key
         except Exception as e:
             logger.warning("动态加载状态码失败，使用兜底: %s", e)
 
@@ -1749,15 +1775,23 @@ class MainWindow(QMainWindow):
             if not isinstance(scheduled, dict):
                 scheduled = {}
         enabled = scheduled.get("enabled", False)
-        time_str = scheduled.get("time", "09:00")
-        t = QTime.fromString(time_str, "HH:mm")
-        if not t.isValid():
-            t = QTime(9, 0)
+
+        def _parse_time(value, default_h, default_m):
+            """手写 YAML 的 time: 10:30 会被 PyYAML 解析为 int（六十进制，
+            如 10:30→630），直接送 QTime.fromString 会抛 TypeError"""
+            if isinstance(value, int):
+                # 60 进制还原；超出范围则用默认值
+                if 0 <= value < 24 * 60:
+                    return QTime(value // 60, value % 60)
+                return QTime(default_h, default_m)
+            t_ = QTime.fromString(str(value or ""), "HH:mm")
+            if not t_.isValid():
+                t_ = QTime(default_h, default_m)
+            return t_
+
+        t = _parse_time(scheduled.get("time"), 9, 0)
         time2_enabled = bool(scheduled.get("time2_enabled", False))
-        time2_str = scheduled.get("time2", "18:00")
-        t2 = QTime.fromString(time2_str, "HH:mm")
-        if not t2.isValid():
-            t2 = QTime(18, 0)
+        t2 = _parse_time(scheduled.get("time2"), 18, 0)
         # 屏蔽信号：逐项 set 会触发 _save_scheduled_config 用中间态
         # （time 未 set、days 未加载）多次写盘
         widgets = ([self.chk_scheduled, self.time_schedule,
@@ -1873,14 +1907,16 @@ class MainWindow(QMainWindow):
                 key = f"{today}:{target.toString('HH:mm')}"
                 if key in self._scheduled_last_run_keys:
                     continue
-                self._scheduled_last_run_keys.add(key)
-                self._run_scheduled_sync()
+                # 启动成功后才记录去重键：忙/失败时不消费，±1 分钟窗口内
+                # 下一分钟还会重试，避免当天该时间点被永久跳过
+                if self._run_scheduled_sync():
+                    self._scheduled_last_run_keys.add(key)
 
-    def _run_scheduled_sync(self):
-        """执行定时同步（不弹确认框，静默触发）"""
+    def _run_scheduled_sync(self) -> bool:
+        """执行定时同步（不弹确认框，静默触发）。返回是否成功启动"""
         if self._worker is not None and self._worker.isRunning():
             self._log("定时同步跳过：上次同步仍在进行中", "WARNING")
-            return
+            return False
         self.log_text.clear()
         now_str = QTime.currentTime().toString("HH:mm")
         self._log(f"=== 定时同步触发（{now_str}）===")
@@ -1892,8 +1928,9 @@ class MainWindow(QMainWindow):
         worker.finished.connect(self._on_scheduled_sync_result)
         worker.error.connect(self._on_worker_error)
         if not self._start_worker(worker):
-            return
+            return False
         worker.start()
+        return True
 
     def _on_scheduled_sync_result(self, stats_text):
         """定时同步完成：日志记录 + 可选弹窗提示"""

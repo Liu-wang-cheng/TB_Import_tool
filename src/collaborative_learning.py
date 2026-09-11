@@ -55,7 +55,27 @@ class CollaborativeLearning:
         self._auto_push = cl_cfg.get("auto_push", True)
         self._data_dir = data_dir
         self._api_base = f"https://api.github.com/repos/{self._owner}/{self._repo}/contents"
-        self._last_sync_time: float = 0
+        # 上次同步时间需跨进程持久化：GUI 每小时新建实例，内存态会让
+        # should_sync 永远停在"首次调用"分支 → 定时推送静默失效
+        self._last_sync_time: float = self._load_last_sync_ts()
+
+    def _sync_state_path(self) -> str:
+        from src.utils import get_app_data_dir
+        return os.path.join(get_app_data_dir(), "collab_last_sync.json")
+
+    def _load_last_sync_ts(self) -> float:
+        try:
+            with open(self._sync_state_path(), "r", encoding="utf-8") as f:
+                return float(json.load(f).get("last_sync_ts", 0))
+        except Exception:
+            return 0.0
+
+    def _persist_last_sync_ts(self):
+        try:
+            with open(self._sync_state_path(), "w", encoding="utf-8") as f:
+                json.dump({"last_sync_ts": self._last_sync_time}, f)
+        except OSError as e:
+            logger.warning("协同学习同步时间持久化失败: %s", e)
 
     @property
     def enabled(self) -> bool:
@@ -199,9 +219,15 @@ class CollaborativeLearning:
     # ── JSONL 合并 ────────────────────────────────────────
 
     def _merge_jsonl(self, local_content: bytes, remote_content: bytes) -> bytes:
-        """按 id 字段去重合并两份 JSONL。"""
-        seen_ids: set = set()
-        lines: list[str] = []
+        """按 id 字段去重合并两份 JSONL。
+
+        同 id 冲突取时间戳（feedback_at 优先，其次 created_at）较新的一条：
+        保留"先出现者"会让本地旧副本压过远端的新审核结论（approved/
+        rejected 状态在多用户间来回翻转），随后 push 再把旧状态覆盖回远端。
+        """
+        merged: dict = {}          # rid → (时间戳, JSON 行)
+        order: list[str] = []      # 保持首次出现顺序
+        passthrough: list[str] = []  # 无 id / 无法解析的行原样保留
 
         for content in (local_content, remote_content):
             text = content.decode("utf-8")
@@ -211,15 +237,23 @@ class CollaborativeLearning:
                     continue
                 try:
                     obj = json.loads(line)
-                    rid = obj.get("id", "")
-                    if rid and rid in seen_ids:
-                        continue
-                    if rid:
-                        seen_ids.add(rid)
-                    lines.append(json.dumps(obj, ensure_ascii=False))
                 except json.JSONDecodeError:
-                    lines.append(line)
+                    passthrough.append(line)
+                    continue
+                rid = obj.get("id", "")
+                if not rid:
+                    passthrough.append(json.dumps(obj, ensure_ascii=False))
+                    continue
+                ts = str(obj.get("feedback_at") or obj.get("created_at") or "")
+                normalized = json.dumps(obj, ensure_ascii=False)
+                prev = merged.get(rid)
+                if prev is None:
+                    merged[rid] = (ts, normalized)
+                    order.append(rid)
+                elif ts > prev[0]:
+                    merged[rid] = (ts, normalized)
 
+        lines = [merged[rid][1] for rid in order] + passthrough
         return "\n".join(lines).encode("utf-8")
 
     def _merge_yaml(self, local_content: bytes, remote_content: bytes) -> bytes:
@@ -367,6 +401,7 @@ class CollaborativeLearning:
 
         if pushed_count > 0:
             self._last_sync_time = time.time()
+            self._persist_last_sync_ts()
             return True, f"已推送 {pushed_count} 个文件"
         if not messages:
             return True, "无变更需要推送"
@@ -399,6 +434,7 @@ class CollaborativeLearning:
             return False
         if self._last_sync_time <= 0:
             self._last_sync_time = time.time()
+            self._persist_last_sync_ts()
             return False
         elapsed_hours = (time.time() - self._last_sync_time) / 3600
         return elapsed_hours >= self._interval_hours

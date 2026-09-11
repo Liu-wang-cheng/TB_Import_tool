@@ -175,7 +175,7 @@ class TeambitionClient:
                 return body
             except TeambitionAPIError:
                 raise
-            except requests.exceptions.ConnectionError as e:
+            except requests.exceptions.RequestException as e:
                 last_error = e
                 if attempt == 2:
                     raise
@@ -268,9 +268,11 @@ class TeambitionClient:
 
         用 TQL uniqueId 字段精确查询（uniqueId = 数字）。
         """
-        # 剥所有前缀：VLNS-/CPAX- 及项目专属编号前缀（如 "323A-24" → 24）。
-        # TQL uniqueId 只接受数字，带前缀必失败
-        num = re.sub(r'^[^0-9]*', '', str(identifier))
+        ident = str(identifier).strip()
+        # TQL uniqueId 只接受纯数字：提取尾部数字段（"VLNS-66259"→"66259"、
+        # "323A-24"→"24"）。旧写法剥除前导非数字字符，对"323A-24"无效
+        m = re.search(r'(\d+)\s*$', ident)
+        num = m.group(1) if m else ident
 
         # 用 TQL uniqueId 精确查询（快且准确，无需遍历）
         try:
@@ -281,16 +283,22 @@ class TeambitionClient:
             task_ids = data.get("result", [])
             for tid in task_ids:
                 task = self.get_task(tid)
-                if task and task.taskIdentifier == num:
+                if task and (task.taskIdentifier or "").strip() in (num, ident):
                     return task
         except Exception as e:
             logger.debug("TQL uniqueId 查询失败: %s", e)
 
-        # 回退：全文搜索（标题含编号文本时能找到）
-        results = self.search_tasks(num)
-        for task in results:
-            if task and task.taskIdentifier == num:
-                return task
+        # 回退：全文搜索（标题含编号文本时能找到）；ident 与 num 各搜一次，
+        # 兼容标题里带/不带前缀两种写法
+        for keyword in (ident, num):
+            if not keyword:
+                continue
+            results = self.search_tasks(keyword)
+            for task in results:
+                if task and (task.taskIdentifier or "").strip() in (num, ident):
+                    return task
+            if keyword == num:
+                break
         return None
 
     def search_tasks(self, keyword: str,

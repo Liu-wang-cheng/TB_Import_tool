@@ -74,8 +74,12 @@ def list_bugs(source, filters: dict, severity_map: dict = None,
     if module_filter and product_ids:
         # 支持逗号分隔多值（如 "123,136"）：每个值解析后代/名称集合后合并
         from src.utils import resolve_module_filter_ids
-        combined, api_ok = resolve_module_filter_ids(
+        combined, api_ok, failed_pids = resolve_module_filter_ids(
             source, product_ids, module_filter)
+        if failed_pids:
+            print(f"[警告] 产品 "
+                  f"{','.join(str(p) for p in sorted(failed_pids))} "
+                  f"模块解析失败，其缺陷可能被过滤漏导")
         if api_ok:
             module_id_set = combined
         else:

@@ -37,13 +37,20 @@ class TeambitionSourceAdapter:
     def __init__(self, client: TeambitionSourceClient, project_id: str = "",
                  field_names: dict = None):
         self._client = client
-        self.project_id = project_id or client.project_id
+        from src.utils import _as_str_list
+        configured = _as_str_list(
+            project_id or getattr(client, "project_id", ""))
+        # 多项目时 uniqueId 是项目内编号，同号会冲突（去重误丢、详情缓存
+        # 串号），需按项目命名空间化（见 _scoped_bug_id）
+        self._multi_project = len(configured) > 1
+        self.project_id = configured[0] if configured else ""
         # 按字段名称精确映射（默认名称表 CUSTOMFIELD_NAME_TO_KEY，
         # 用户可用 field_names 配置覆盖名称→语义 对应关系）
         self._field_names = field_names or {}
         self._bug_scenariofield_id = ""
-        self._unique_id_prefix = ""  # 项目任务编号前缀（如 "323A"）
-        # uniqueId(int) → task 原始 dict，供 fetch_bug_detail 回查
+        # 项目 ID → 任务编号前缀（如 "323A"）；多项目时各项目前缀不同
+        self._prefix_by_project: Dict[str, str] = {}
+        # bug.id(int) → task 原始 dict，供 fetch_bug_detail 回查
         self._task_cache: Dict[int, dict] = {}
         # 全局文件索引(int) → {"task_id": str, "file": dict}
         self._file_registry: Dict[int, dict] = {}
@@ -69,24 +76,41 @@ class TeambitionSourceAdapter:
                 self.project_id)
         return self._bug_scenariofield_id
 
-    def _task_to_bug(self, task: dict) -> ZentaoBug:
-        """外部 TB task → ZentaoBug"""
-        unique_id = task.get("uniqueId") or 0
-        bug_id = int(unique_id) if str(unique_id).isdigit() else 0
-        if bug_id == 0:
+    def _scoped_bug_id(self, pid: str, unique_id, hex_id: str = "") -> int:
+        """项目内 uniqueId → 本工具内的 bug.id。
+
+        单项目保持原编号（日志直观、行为与旧版一致）；配置多个项目时
+        按项目 ID 的 crc32 叠加命名空间（同项目恒定、跨项目几乎不可能
+        碰撞），避免跨项目同号互相覆盖。
+        """
+        base = int(unique_id) if str(unique_id).isdigit() else 0
+        if base == 0 and hex_id:
             # 无编号时用 _id（24位 hex）转数值兜底（避免 id=0 冲突）。
             # 不能用 abs(hash())：str hash 跨进程随机（PYTHONHASHSEED），
             # 去重标签会跨运行不一致导致重复建任务。
-            _tid = str(task.get("_id", ""))
             try:
-                bug_id = int(_tid, 16)
+                base = int(hex_id, 16)
             except ValueError:
-                bug_id = abs(hash(_tid)) % (10 ** 9)
+                base = abs(hash(hex_id)) % (10 ** 9)
+        if not self._multi_project:
+            return base
+        import zlib
+        ns = (zlib.crc32((pid or "").encode("utf-8")) & 0xFFFFF) + 1
+        return ns * (10 ** 12) + (base % (10 ** 12))
+
+    def _task_to_bug(self, task: dict) -> ZentaoBug:
+        """外部 TB task → ZentaoBug"""
+        pid = (task.get("_src_pid") or task.get("_projectId")
+               or task.get("projectId") or self.project_id or "")
+        unique_id = task.get("uniqueId") or 0
+        bug_id = self._scoped_bug_id(pid, unique_id,
+                                     str(task.get("_id", "")))
 
         # 专属任务 ID：uniqueIdPrefix-uniqueId（如 "323A-24"），用于去重标签
+        prefix = self._prefix_by_project.get(pid, "")
         task_id = ""
-        if self._unique_id_prefix and str(unique_id).isdigit():
-            task_id = f"{self._unique_id_prefix}-{unique_id}"
+        if prefix and str(unique_id).isdigit():
+            task_id = f"{prefix}-{unique_id}"
         elif str(unique_id).isdigit():
             task_id = str(unique_id)
 
@@ -271,10 +295,16 @@ class TeambitionSourceAdapter:
         if not pid:
             logger.warning("外部 TB 未配置 project_id，无法拉取缺陷")
             return []
-        # 获取项目任务编号前缀（如 "323A"），拼接专属任务 ID
-        if not self._unique_id_prefix:
-            self._unique_id_prefix = self._client.get_unique_id_prefix(pid)
+        # 获取项目任务编号前缀（如 "323A"），拼接专属任务 ID（按项目缓存）
+        if pid not in self._prefix_by_project:
+            self._prefix_by_project[pid] = self._client.get_unique_id_prefix(pid)
         sfc_id = self._ensure_bug_type()
+        if not sfc_id:
+            # 场景类型解析失败时不可无过滤拉取：需求/子任务等非缺陷任务
+            # 会被当成缺陷导入内部 TB
+            raise RuntimeError(
+                f"外部TB 项目 {pid} 未找到'缺陷'场景配置，已中止该项目拉取"
+                f"（避免非缺陷任务被导入；请检查项目或场景名称）")
         # server_status="all" 时拉已完成缺陷（isDone=True，状态"关闭"），
         # 用于关闭同步；默认拉未完成缺陷
         is_done = True if server_status == "all" else None
@@ -286,6 +316,9 @@ class TeambitionSourceAdapter:
         # 避免 int 文件索引被新批复用导致附件下载到错误内容
         bugs = []
         for task in tasks:
+            # 显式标记来源项目：_projectId 键的存在性依赖 TB 版本，
+            # 多项目命名空间/前缀解析一律以本次拉取的 pid 为准
+            task["_src_pid"] = pid
             bug = self._task_to_bug(task)
             self._task_cache[bug.id] = task
             bugs.append(bug)

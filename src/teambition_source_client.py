@@ -50,6 +50,9 @@ class TeambitionSourceClient:
         self._user_cache: Dict[str, str] = {}
         self._sfconfig_cache: Dict[str, str] = {}  # scenariofieldconfigId → name
         self._cf_name_cache: Dict[str, str] = {}  # customfieldId → 字段名称
+        # task_id → activities 缓存：单条缺陷在同步中会多次拉评论
+        # （VLNS 检查、去重、附件收集、评论同步），同步过程中评论不变
+        self._comments_cache: Dict[str, List[dict]] = {}
         self._media_driver = None  # 备注媒体签名抓取的 Edge 浏览器（惰性）
 
     # ── 认证 ──────────────────────────────────────────
@@ -304,7 +307,10 @@ class TeambitionSourceClient:
         """拉取任务评论（activity.comment 和 activity.comment.attachments）
 
         返回 [{actor, date, action, comment, attachments}, ...]
+        结果按 task_id 缓存（同步过程中多次调用不重复请求）
         """
+        if task_id in self._comments_cache:
+            return self._comments_cache[task_id]
         acts = self._get(f"/tasks/{task_id}/activities")
         if not isinstance(acts, list):
             return []
@@ -337,6 +343,7 @@ class TeambitionSourceClient:
                     for f in files
                 ],
             })
+        self._comments_cache[task_id] = comments
         return comments
 
     @staticmethod
@@ -406,6 +413,7 @@ class TeambitionSourceClient:
         """
         if not task_id or not content:
             return False
+        self._comments_cache.pop(task_id, None)  # 写入后评论不再与缓存一致
         try:
             r = self._http.post(
                 f"{WEB_API}/tasks/{task_id}/activities",

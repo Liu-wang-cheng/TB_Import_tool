@@ -57,9 +57,15 @@ echo [OK] __pycache__ cleaned
 echo.
 
 REM Strip api_key before packaging
+REM ⚠ 备份必须放在 configs 之外：spec 的 datas 会递归打包整个 configs 目录，
+REM   若 .bak 留在 configs\ 内，其中的真实密钥会被打进 zip 发布到公开 Release
 echo [CLEAN] Stripping api_key from config ...
-copy /y "configs\classifier.yaml" "configs\classifier.yaml.bak" >nul
-copy /y "configs\ai_analysis.yaml" "configs\ai_analysis.yaml.bak" >nul
+set "STRIP_BAK=%TEMP%\tb_import_strip_bak"
+if not exist "%STRIP_BAK%" mkdir "%STRIP_BAK%"
+copy /y "configs\classifier.yaml" "%STRIP_BAK%\classifier.yaml.bak" >nul
+copy /y "configs\ai_analysis.yaml" "%STRIP_BAK%\ai_analysis.yaml.bak" >nul
+REM 兜底：清掉历史构建可能残留在 configs 的 .bak
+del /q "configs\classifier.yaml.bak" "configs\ai_analysis.yaml.bak" 2>nul
 python strip_api_key.py
 echo [OK] api_key stripped
 echo.
@@ -71,10 +77,9 @@ pyinstaller --clean --noconfirm zentao2teambition.spec
 set BUILD_RESULT=%errorlevel%
 
 REM Restore original configs
-copy /y "configs\classifier.yaml.bak" "configs\classifier.yaml" >nul
-del "configs\classifier.yaml.bak" >nul 2>&1
-copy /y "configs\ai_analysis.yaml.bak" "configs\ai_analysis.yaml" >nul
-del "configs\ai_analysis.yaml.bak" >nul 2>&1
+copy /y "%STRIP_BAK%\classifier.yaml.bak" "configs\classifier.yaml" >nul
+copy /y "%STRIP_BAK%\ai_analysis.yaml.bak" "configs\ai_analysis.yaml" >nul
+del /q "%STRIP_BAK%\classifier.yaml.bak" "%STRIP_BAK%\ai_analysis.yaml.bak" >nul 2>&1
 
 if %BUILD_RESULT% neq 0 (
     echo.
@@ -100,6 +105,14 @@ if %errorlevel% neq 0 (
     goto :fail
 )
 echo [OK] Created dist\%EXE_NAME%.zip
+echo.
+
+REM 发布前安全校验：包内不得含 .bak（历史事故：备份文件把真实密钥带进了公开 Release）
+python -c "import zipfile,sys;z=zipfile.ZipFile(r'dist\%EXE_NAME%.zip');bad=[n for n in z.namelist() if n.lower().endswith('.bak')];print('[FAIL] 包内发现 .bak: '+','.join(bad)) if bad else print('[OK] 包内无 .bak 残留');sys.exit(1 if bad else 0)"
+if %errorlevel% neq 0 (
+    echo [ERROR] 安全校验未通过，已中止发布
+    goto :fail
+)
 echo.
 
 REM Auto Release to GitHub Release

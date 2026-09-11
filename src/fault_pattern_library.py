@@ -114,8 +114,10 @@ class FaultPatternLibrary:
         if key_logs:
             for entry in key_logs:
                 if isinstance(entry, dict):
+                    # 生产者写入的键是 file（ai_log_analyzer），兼容旧 source
                     parts.append(f"[{entry.get('time', '')}] {entry.get('level', '')} "
-                                 f"{entry.get('source', '')} {entry.get('msg', '')}")
+                                 f"{entry.get('file') or entry.get('source', '')} "
+                                 f"{entry.get('msg', '')}")
                 else:
                     parts.append(str(entry))
 
@@ -170,11 +172,13 @@ class FaultPatternLibrary:
         if best_confidence <= 0:
             return None
 
-        # must_not_match 检查（单个规则级别）
-        must_not = rules[0].get("must_not_match") if rules else None
-        if must_not and must_not in compiled:
-            if compiled[must_not].search(log_text):
-                return None
+        # must_not_match 检查（遍历全部规则，与 must_not_context 一致；
+        # 只读 rules[0] 会让写在第 2 条及之后的排除规则静默失效）
+        for rule in rules:
+            must_not = rule.get("must_not_match")
+            if must_not and must_not in compiled:
+                if compiled[must_not].search(log_text):
+                    return None
 
         # must_not_context 检查（全局上下文级别，排除特定场景）
         for rule in rules:

@@ -572,9 +572,23 @@ class ConfigDialog(QDialog):
                        if line.strip()] if assigned_text else None
         assignee_path = os.path.join(self.config_dir, "assignee.yaml")
         if os.path.exists(assignee_path):
-            update_yaml_values(assignee_path, {
-                "assigned_to": assigned_to,
-            })
+            values = {"assigned_to": assigned_to}
+            # 同步裁剪 known 列表：本页删除的指派人不应在主窗口"复活"
+            # （只删"原本在 assigned_to 中、本次被删"的，保留未勾选项）
+            try:
+                with open(assignee_path, "r", encoding="utf-8") as f:
+                    cur = yaml.safe_load(f) or {}
+                old = cur.get("assigned_to") or []
+                if isinstance(old, str):
+                    old = [old]
+                removed = set(old) - set(assigned_to or [])
+                known = cur.get("assigned_to_known") or []
+                if isinstance(known, list) and removed:
+                    values["assigned_to_known"] = [
+                        n for n in known if n not in removed]
+            except Exception:
+                pass
+            update_yaml_values(assignee_path, values)
 
         # 3. teambition_source.yaml —— 外部 TB 源专属配置
         tb_src_path = os.path.join(self.config_dir, "teambition_source.yaml")
@@ -630,13 +644,12 @@ class ConfigDialog(QDialog):
     def _save_ai_analysis(self):
         values = {
             "enabled": self.ai_enabled.isChecked(),
+            # 始终写入（清空 = 写 null 恢复默认值）；此前空值跳过写入
+            # 导致清空输入框再保存无效
+            "drc_server": self.ai_drc_server.text().strip() or None,
+            "drc_username": self.ai_drc_username.text().strip() or None,
+            "drc_password": self.ai_drc_password.text().strip() or None,
         }
-        if self.ai_drc_server.text().strip():
-            values["drc_server"] = self.ai_drc_server.text().strip()
-        if self.ai_drc_username.text().strip():
-            values["drc_username"] = self.ai_drc_username.text().strip()
-        if self.ai_drc_password.text().strip():
-            values["drc_password"] = self.ai_drc_password.text().strip()
         # 所属项目：只读，自动与 TB 配置同步，无需保存
 
         # 协同学习

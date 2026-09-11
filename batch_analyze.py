@@ -179,14 +179,22 @@ def filter_by_utc_hour(files, start_h, end_h, start_m=0, end_m=0):
 # === Phase 2: Download with checkpoint ===
 def load_checkpoint():
     if CHECKPOINT.exists():
-        with open(CHECKPOINT, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(CHECKPOINT, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            # 中途断电/强杀会留下半截 JSON；损坏时忽略重来，
+            # 避免同一 SN/日期组合的下载持续性失败
+            print(f"[WARN] checkpoint 损坏，已忽略重来: {e}")
     return {}
 
 
 def save_checkpoint(data):
-    with open(CHECKPOINT, 'w', encoding='utf-8') as f:
+    # 原子写入：先写临时文件再替换，中途中断不会留下半截 JSON
+    tmp = CHECKPOINT.with_suffix('.tmp')
+    with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(data, f)
+    os.replace(tmp, CHECKPOINT)
 
 
 def download_memfiles(memfiles):
@@ -582,7 +590,10 @@ def analyze_merged_logs():
         from_state = et_info['msg'].split('->')[0].split(':')[-1].strip()
 
         # Build event chain — only show core fault cascade events
-        NOISE_PATTERNS = ('robot in small corner', 'fail to get', 'dataSourceChange', '0')
+        # 注意：不要放裸 '0'——子串匹配下含任何数字的日志都会命中，
+        # 会把 W 级告警在事件链中大面积静默丢弃
+        NOISE_PATTERNS = ('robot in small corner', 'fail to get',
+                          'dataSourceChange')
         event_chain = []
         for t, ts_str, mod, lvl, msg in context_logs:
             if t < et_time - 10:

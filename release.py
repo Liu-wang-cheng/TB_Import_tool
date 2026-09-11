@@ -74,11 +74,13 @@ def create_release(repo: str, token: str, version: str, notes: str) -> int:
             "draft": False,
             "prerelease": False,
         },
+        timeout=(10, 60),
     )
     if r.status_code == 422:
         r2 = requests.get(
             f"https://api.github.com/repos/{repo}/releases/tags/v{version}",
             headers=headers,
+            timeout=(10, 60),
         )
         if r2.status_code == 200:
             return r2.json()["id"]
@@ -95,12 +97,17 @@ def upload_asset(repo: str, token: str, release_id: int,
     r = requests.get(
         f"https://api.github.com/repos/{repo}/releases/{release_id}/assets",
         headers=headers,
+        timeout=(10, 60),
     )
-    for asset in r.json():
-        if asset["name"] == asset_name:
+    assets = r.json() if r.status_code == 200 else []
+    if not isinstance(assets, list):
+        assets = []
+    for asset in assets:
+        if asset.get("name") == asset_name:
             requests.delete(
                 f"https://api.github.com/repos/{repo}/releases/assets/{asset['id']}",
                 headers=headers,
+                timeout=(10, 60),
             )
             print(f"  [DEL] 旧 asset {asset_name} 已删除")
 
@@ -117,6 +124,7 @@ def upload_asset(repo: str, token: str, release_id: int,
             f"?name={quote(asset_name)}",
             headers=upload_headers,
             data=f,
+            timeout=(10, 600),
         )
     r.raise_for_status()
     return r.json()["browser_download_url"]
@@ -140,7 +148,7 @@ def update_version_json(repo: str, token: str, version: str,
         repo_url = f"https://github.com/{repo}.git"
         try:
             subprocess.run(["git", "clone", "--depth", "1", repo_url, tmpdir],
-                           check=True, capture_output=True)
+                           check=True, capture_output=True, timeout=180)
         except subprocess.CalledProcessError as e:
             print(f"[ERROR] git clone 失败:\n{e.stderr.decode('utf-8', errors='replace')}")
             sys.exit(1)
@@ -161,27 +169,27 @@ def update_version_json(repo: str, token: str, version: str,
             print(f"  [SYNC] README.md updated")
 
         subprocess.run(["git", "config", "user.name", "release-bot"],
-                       cwd=tmpdir, check=True, capture_output=True)
+                       cwd=tmpdir, check=True, capture_output=True, timeout=30)
         subprocess.run(["git", "config", "user.email",
                         "release-bot@users.noreply.github.com"],
-                       cwd=tmpdir, check=True, capture_output=True)
+                       cwd=tmpdir, check=True, capture_output=True, timeout=30)
         subprocess.run(["git", "add"] + files_to_add,
-                       cwd=tmpdir, check=True, capture_output=True)
+                       cwd=tmpdir, check=True, capture_output=True, timeout=60)
         diff_result = subprocess.run(["git", "diff", "--cached", "--quiet"],
-                                     cwd=tmpdir, capture_output=True)
+                                     cwd=tmpdir, capture_output=True, timeout=60)
         if diff_result.returncode != 0:
             subprocess.run(["git", "commit", "-m",
                             f"release v{version}: update version.json & README"],
-                           cwd=tmpdir, check=True, capture_output=True)
+                           cwd=tmpdir, check=True, capture_output=True, timeout=60)
             subprocess.run(["git", "push", "origin", "main"],
-                           cwd=tmpdir, check=True, capture_output=True)
+                           cwd=tmpdir, check=True, capture_output=True, timeout=180)
         else:
             print(f"  [GIT] version.json & README 无变化，跳过 commit")
 
         subprocess.run(["git", "tag", "-f", f"v{version}"],
-                       cwd=tmpdir, check=True, capture_output=True)
+                       cwd=tmpdir, check=True, capture_output=True, timeout=30)
         subprocess.run(["git", "push", "-f", "origin", f"v{version}"],
-                       cwd=tmpdir, capture_output=True)
+                       cwd=tmpdir, capture_output=True, timeout=180)
 
     print(f"  [GIT] version.json + README pushed, tag v{version} pushed")
 

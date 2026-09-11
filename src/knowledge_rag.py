@@ -169,8 +169,10 @@ class KnowledgeRAG:
             return ""
 
         # 精确匹配 -> 前缀匹配
-        data = self._category_map.get(category)
-        if not data:
+        # 注意 category（缺陷无分类）为空时不能进前缀循环：
+        # k.startswith("") 恒为真，会命中插入顺序里的第一个类别（错误领域）
+        data = self._category_map.get(category) if category else None
+        if not data and category:
             for k, v in self._category_map.items():
                 if category.startswith(k) or k.startswith(category):
                     data = v

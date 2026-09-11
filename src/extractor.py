@@ -160,6 +160,26 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
     clean = re.sub(r'(\d{1,2})\s*[时点]\s*(\d{1,2})\s*分?',
                    lambda m: f"{m.group(1)}:{int(m.group(2)):02d}", clean)
 
+    def _infer_year(mon: int, day: int) -> Optional[int]:
+        """用参考日期补全年份；补出的日期比参考日期晚超过 180 天时按
+        "上一年"处理（如 1 月开单、步骤里写 12/28，指的是上一年）。
+
+        阈值放宽到 180 天：真实数据存在"4/17 创建、8/26 发现"（+131 天）
+        的合法值，不能按偏小的未来差值回退
+        """
+        y = reference_date.year if reference_date else None
+        if y is None:
+            return None
+        try:
+            cand = datetime(y, mon, day)
+            if reference_date.tzinfo is not None:
+                cand = cand.replace(tzinfo=reference_date.tzinfo)
+            if (cand - reference_date).days > 180:
+                return y - 1
+        except (ValueError, TypeError):
+            pass
+        return y
+
     # 0. 优先匹配模板格式 "时间：6/3 20:40" 或 "时间: 6/3 20：47"
     ref_year = reference_date.year if reference_date else None
     if ref_year and 2020 <= ref_year <= 2035:
@@ -172,7 +192,8 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
                 int(tpl.group(3)), int(tpl.group(4)))
             if 1 <= mon <= 12 and 1 <= day <= 31 \
                     and 0 <= hour <= 23 and 0 <= minute <= 59:
-                return f"{ref_year:04d}-{mon:02d}-{day:02d} {hour:02d}:{minute:02d}"
+                y = _infer_year(mon, day)
+                return f"{y:04d}-{mon:02d}-{day:02d} {hour:02d}:{minute:02d}"
         # 中文模板格式 "时间：8月24日 16:35" / "时间：2026年8月24日"
         # （数字与"月""日"之间可能有空格，如 "8 月 24 日"）。
         # 放在斜杠无时间格式之前：中文带时间的比斜杠无时间更精确
@@ -181,20 +202,21 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
             r'(?:\s*(\d{1,2})[：:](\d{2}))?',
             clean)
         if tpl3:
-            year = int(tpl3.group(1)) if tpl3.group(1) else ref_year
             mon, day = int(tpl3.group(2)), int(tpl3.group(3))
+            year = int(tpl3.group(1)) if tpl3.group(1) else _infer_year(mon, day)
             hour = int(tpl3.group(4)) if tpl3.group(4) else 0
             minute = int(tpl3.group(5)) if tpl3.group(5) else 0
             if 1 <= mon <= 12 and 1 <= day <= 31 \
                     and 0 <= hour <= 23 and 0 <= minute <= 59 \
-                    and 2020 <= year <= 2035:
+                    and year and 2020 <= year <= 2035:
                 return f"{year:04d}-{mon:02d}-{day:02d} {hour:02d}:{minute:02d}"
         # 模板格式无时间部分 "时间：6/3"
         tpl2 = re.search(r'时间[：:]\s*(\d{1,2})/(\d{1,2})(?!\s*\d)', clean)
         if tpl2:
             mon, day = int(tpl2.group(1)), int(tpl2.group(2))
             if 1 <= mon <= 12 and 1 <= day <= 31:
-                return f"{ref_year:04d}-{mon:02d}-{day:02d} 00:00"
+                y = _infer_year(mon, day)
+                return f"{y:04d}-{mon:02d}-{day:02d} 00:00"
 
     best_result = None
     best_score = 0  # 优先选择有时间的、年份完整的
@@ -224,8 +246,9 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
                     hour, minute = h, m
                     has_time = True
                     # 记录时间位置（转换为全局坐标）
-                    time_start = max(0, dm.start() - 30) + tm.start()
-                    time_end = dm.start() - 30 + tm.end()
+                    win_start = max(0, dm.start() - 30)
+                    time_start = win_start + tm.start()
+                    time_end = win_start + tm.end()
                     used_time_ranges.append((time_start, time_end))
                     break
 
@@ -262,8 +285,9 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
                 if 0 <= h <= 23 and 0 <= m <= 59:
                     hour, minute = h, m
                     has_time = True
-                    time_start = max(0, dm.start() - 30) + tm.start()
-                    time_end = dm.start() - 30 + tm.end()
+                    win_start = max(0, dm.start() - 30)
+                    time_start = win_start + tm.start()
+                    time_end = win_start + tm.end()
                     used_time_ranges.append((time_start, time_end))
                     break
 
@@ -277,7 +301,8 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
 
             if score > best_score:
                 best_score = score
-                best_result = (reference_year, month, day, hour, minute)
+                best_result = (_infer_year(month, day), month, day,
+                               hour, minute)
 
     # 2.5 中文日期格式：2026年8月24日 / 8月24日（无年份用 reference 年补全）
     # "X月X日" 带汉字标记，误匹配风险低；无时间也接受（时间取 00:00）
@@ -285,11 +310,11 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
             r'(?<![\d])(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日',
             clean):
         year_str, mon_str, day_str = dm.groups()
-        year = int(year_str) if year_str else reference_year
-        if not year or not (2020 <= year <= 2035):
-            continue
         month = int(mon_str)
         day = int(day_str)
+        year = int(year_str) if year_str else _infer_year(month, day)
+        if not year or not (2020 <= year <= 2035):
+            continue
         if not (1 <= month <= 12 and 1 <= day <= 31):
             continue
 
@@ -301,8 +326,9 @@ def extract_datetime(text: str, reference_date: datetime = None) -> Optional[str
             if 0 <= h <= 23 and 0 <= m <= 59:
                 hour, minute = h, m
                 has_time = True
-                time_start = max(0, dm.start() - 30) + tm.start()
-                time_end = dm.start() - 30 + tm.end()
+                win_start = max(0, dm.start() - 30)
+                time_start = win_start + tm.start()
+                time_end = win_start + tm.end()
                 used_time_ranges.append((time_start, time_end))
                 break
 

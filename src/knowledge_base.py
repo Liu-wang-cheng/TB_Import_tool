@@ -141,8 +141,11 @@ class KnowledgeBase:
         self._rebuild_model()
 
     def _rebuild_model(self):
-        approved = [r for r in self._records if r.status == "approved"]
-        if not approved:
+        # 索引 approved + rejected：后者用于"反面教材"检索
+        # （retrieve_similar status_filter="rejected"），pending 尚未判定不入索引
+        indexed = [r for r in self._records
+                   if r.status in ("approved", "rejected")]
+        if not indexed:
             return
 
         try:
@@ -154,7 +157,7 @@ class KnowledgeBase:
 
         features = []
         self._record_ids = []
-        for r in approved:
+        for r in indexed:
             feat = self._build_feature(r)
             features.append(feat)
             self._record_ids.append(r.id)
@@ -173,7 +176,7 @@ class KnowledgeBase:
         )
         self._tfidf_matrix = self._vectorizer.fit_transform(segmented)
         self._save_model()
-        logger.info("知识库 TF-IDF 模型已重建，%d 条记录", len(approved))
+        logger.info("知识库 TF-IDF 模型已重建，%d 条记录", len(indexed))
 
     def _build_feature(self, record: AnalysisRecord) -> str:
         parts = [record.title, record.category, record.root_cause,
@@ -366,14 +369,18 @@ class KnowledgeBase:
         query_vec = self._vectorizer.transform([segmented])
         scores = cosine_similarity(query_vec, self._tfidf_matrix)[0]
 
-        # 按状态过滤
+        # 矩阵行序 = approved 记录序（_rebuild_model 构建），必须经 _record_ids
+        # 映射回记录；直接用行号索引全量 _records 会错位（rejected/pending 混排）
+        record_by_id = {r.id: r for r in self._records}
+        last = min(len(self._record_ids), len(scores))
         if status_filter:
             valid_indices = [
-                i for i, rid in enumerate(self._record_ids)
-                if i < len(self._records) and self._records[i].status == status_filter
+                i for i in range(last)
+                if (rec := record_by_id.get(self._record_ids[i])) is not None
+                and rec.status == status_filter
             ]
         else:
-            valid_indices = list(range(min(len(self._records), len(self._record_ids))))
+            valid_indices = list(range(last))
 
         if not valid_indices:
             return []
@@ -382,9 +389,10 @@ class KnowledgeBase:
         scored.sort(key=lambda x: x[1], reverse=True)
 
         results = []
-        for idx, score in scored[:top_k]:
-            if idx < len(self._records):
-                results.append(self._records[idx])
+        for idx, _score in scored[:top_k]:
+            rec = record_by_id.get(self._record_ids[idx])
+            if rec is not None:
+                results.append(rec)
         return results
 
     def format_few_shot_examples(self, records: list) -> str:

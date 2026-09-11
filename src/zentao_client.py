@@ -164,7 +164,7 @@ class ZentaoClient:
         resp = self._http.post(url, json={
             "account": self.account,
             "password": self.password,
-        })
+        }, timeout=30)
         if resp.status_code not in (200, 201):
             raise ZentaoAPIError(resp.status_code, resp.text, "/tokens")
         data = resp.json()
@@ -215,7 +215,7 @@ class ZentaoClient:
             "/api-getsessionid.json",
             "/index.php?m=api&f=getsessionid")
         url = f"{self.base_url}{session_path}"
-        resp = self._http.get(url)
+        resp = self._http.get(url, timeout=30)
         if resp.status_code != 200:
             raise ZentaoAPIError(resp.status_code, "获取session失败", session_path)
         try:
@@ -244,7 +244,8 @@ class ZentaoClient:
             "account": self.account,
             "password": self.password,
             "zentaosid": self._session_id,
-        }, headers={"Content-Type": "application/x-www-form-urlencoded"})
+        }, headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=30)
         if resp.status_code != 200:
             raise ZentaoAPIError(resp.status_code, "session登录失败", "/user-login")
 
@@ -762,13 +763,15 @@ class ZentaoClient:
                     return {}
             except ZentaoAPIError:
                 raise
-            except requests.exceptions.ConnectionError as e:
+            except requests.exceptions.RequestException as e:
                 if attempt == 2:
                     raise
                 wait = 2 ** attempt
                 logger.warning("请求失败，%d秒后重试: %s", wait, e)
                 time.sleep(wait)
-        return {}
+        # 3 次 401 重认证后仍失败：显式报错，避免认证/权限故障被当成
+        # "0 条数据"静默吞掉
+        raise ZentaoAPIError(401, "重新认证后仍返回 401", path)
 
     # ── Bug 操作 ──────────────────────────────────────
 
@@ -1261,8 +1264,9 @@ class ZentaoClient:
                                       module_id) -> Optional[set]:
         """模块 ID 及其全部后代 ID 集合（禅道网页 byModule 的递归语义）。
 
-        - 返回 set（含空）：完整树可用，按此集合过滤
-        - 返回 None：树不可用或模块不存在 → 调用方回退精确匹配
+        - 返回 set：完整树可用；模块不在该产品树中时返回 {module_id}
+          （即"精确匹配"语义，模块属于其他产品，属正常情况）
+        - 返回 None：树不可用（网络/接口失败）→ 调用方按解析失败处理
         """
         try:
             tree = self.fetch_module_tree(product_id)
@@ -1273,8 +1277,12 @@ class ZentaoClient:
             return None
         mid = str(module_id)
         if mid not in tree:
+            # 树可用但模块不在其中：返回 {mid} 表达"精确匹配"，与 None
+            # （真正的解析失败）区分开——多产品共用模块过滤时，模块往往
+            # 只存在于部分产品，若按失败处理会把其余产品的缺陷全部拖进
+            # 逐条比对慢路径
             logger.info("模块 %s 不在产品 %s 模块树中，按精确匹配处理", mid, product_id)
-            return None
+            return {mid}
         children = {}
         for cid, node in tree.items():
             children.setdefault(node.get("parent", "0"), []).append(cid)

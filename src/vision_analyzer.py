@@ -30,8 +30,17 @@ VISION_SYSTEM_PROMPT = (
 
 
 def _encode_image_to_base64(image_bytes: bytes) -> str:
-    """将图片字节编码为 base64 数据 URL。"""
-    return f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+    """将图片字节编码为 base64 数据 URL（按魔数识别真实 MIME，不硬编码 jpeg）"""
+    mime = "image/jpeg"
+    if image_bytes[:8].startswith(b"\x89PNG"):
+        mime = "image/png"
+    elif image_bytes[:6] in (b"GIF87a", b"GIF89a"):
+        mime = "image/gif"
+    elif image_bytes[:2] == b"BM":
+        mime = "image/bmp"
+    elif image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        mime = "image/webp"
+    return f"data:{mime};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
 
 
 def _extract_keyframes(video_path: Path, max_frames: int = 8) -> List[bytes]:
@@ -47,6 +56,7 @@ def _extract_keyframes(video_path: Path, max_frames: int = 8) -> List[bytes]:
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         logger.error("无法打开视频: %s", video_path)
+        cap.release()
         return []
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))

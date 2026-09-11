@@ -50,6 +50,12 @@ classifier:
     model: "deepseek-v4-pro"
     provider: ""
     timeout: 180
+    # 视觉分析模型（可选，留空复用上方 base_url/api_key，
+    # 模型默认 deepseek-v4-flash-vision-exp；用智谱则设 glm-4v-flash）
+    # vision:
+    #   api_key: ""
+    #   base_url: ""
+    #   model: ""
   similarity:
     cache_dir: data
     enabled: true

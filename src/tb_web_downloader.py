@@ -19,6 +19,25 @@ VIDEO_EXTS = (".mp4", ".mov", ".avi", ".mkv")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp")
 
 
+def _is_valid_media(data: bytes, min_size: int = 16) -> bool:
+    """拒绝空内容与 HTML/JSON 错误页（登录页被当媒体缓存后，
+    后续每次都'命中缓存'，视觉分析会永久静默失效）"""
+    if not data or len(data) < min_size:
+        return False
+    head = data[:8].lstrip()
+    return head[:1] not in (b"<", b"{")
+
+
+def _is_valid_media_file(path: Path, min_size: int = 16) -> bool:
+    try:
+        if not path.exists() or path.stat().st_size < min_size:
+            return False
+        with open(path, "rb") as f:
+            return _is_valid_media(f.read(16), min_size=min_size)
+    except OSError:
+        return False
+
+
 def _extract_file_ids_from_task(task_raw: dict) -> List[dict]:
     """从任务原始详情中提取文件 ID 列表。"""
     files = []
@@ -107,7 +126,7 @@ class TBWebDownloader:
         """下载单个附件文件。"""
         self.video_dir.mkdir(parents=True, exist_ok=True)
         local_path = self.video_dir / file_name
-        if local_path.exists() and local_path.stat().st_size > 0:
+        if _is_valid_media_file(local_path):
             logger.info("附件已缓存: %s", local_path)
             return local_path
 
@@ -119,6 +138,10 @@ class TBWebDownloader:
         try:
             resp = self._http.get(url, cookies=self._cookies, timeout=120)
             if resp.status_code == 200:
+                if not _is_valid_media(resp.content):
+                    logger.warning("下载内容不是有效媒体（疑似错误页），丢弃: %s",
+                                   file_name)
+                    return None
                 with open(local_path, "wb") as f:
                     f.write(resp.content)
                 logger.info("下载成功: %s (%d bytes)", local_path, len(resp.content))

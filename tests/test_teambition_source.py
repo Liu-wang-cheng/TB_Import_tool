@@ -329,15 +329,29 @@ class TestTaskIdComposition:
 
     def test_task_id_composed(self):
         adapter = make_adapter()
-        adapter._unique_id_prefix = "323A"
+        adapter._prefix_by_project[adapter.project_id] = "323A"
         bug = adapter._task_to_bug(make_task())
         assert bug.task_id == "323A-24"
 
     def test_task_id_without_prefix(self):
         adapter = make_adapter()
-        adapter._unique_id_prefix = ""
         bug = adapter._task_to_bug(make_task())
         assert bug.task_id == "24"
+
+    def test_multi_project_ids_scoped(self):
+        """多项目时同号 uniqueId 必须映射为不同 bug.id（去重/缓存不串号）"""
+        multi = TeambitionSourceAdapter(
+            make_adapter()._client, project_id=["projA", "projB"])
+        t_a = make_task(_projectId="projA")
+        t_b = make_task(_projectId="projB")
+        bug_a = multi._task_to_bug(t_a)
+        bug_b = multi._task_to_bug(t_b)
+        assert bug_a.id != bug_b.id
+        # 同项目多次映射结果稳定
+        assert multi._task_to_bug(t_a).id == bug_a.id
+        # 单项目保持原编号（行为与旧版一致）
+        single = make_adapter()
+        assert single._task_to_bug(make_task()).id == 24
 
 
 class TestWriteback:

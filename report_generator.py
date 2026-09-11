@@ -3,10 +3,16 @@
 HTML report generator for HS4 batch analyzer.
 Fault-centric layout: root cause → event chain → system health → details.
 """
+import html as _html
 import json
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _esc(text) -> str:
+    """HTML 转义日志原文（DRC 日志常含 -->、<0x...>，内插会破坏报告 DOM）"""
+    return _html.escape(str(text or ""))
 
 TAG_LABELS = {
     'trigger': '触发', 'state_change': '状态变更', 'error': '错误',
@@ -103,12 +109,12 @@ def generate_report(mem_records, top_records, drc_result, drc_total, report_path
         )
         error_rows = ''.join(
             f'<tr><td>{_utc_to_bj(e["time"])}</td><td><span class="badge-{e["level"].lower()}">{e["level"]}</span></td>'
-            f'<td>{e["module"]}</td><td class="msg" style="white-space:normal;word-break:break-all">{e["msg"]}</td></tr>'
+            f'<td>{_esc(e["module"])}</td><td class="msg" style="white-space:normal;word-break:break-all">{_esc(e["msg"])}</td></tr>'
             for e in drc_result['errors_warns'][:60]
         )
         _TYPE_LABELS = {'nav': '导航状态', 'work_status': '工作状态', 'nav_state': '导航器状态', 'status': '组件状态'}
         nav_table_rows = ''.join(
-            f'<tr><td>{_utc_to_bj(e["time"])}</td><td>{_TYPE_LABELS.get(e.get("type",""), e.get("type",""))}</td><td class="msg" style="white-space:normal;word-break:break-all">{e["msg"]}</td></tr>'
+            f'<tr><td>{_utc_to_bj(e["time"])}</td><td>{_TYPE_LABELS.get(e.get("type",""), e.get("type",""))}</td><td class="msg" style="white-space:normal;word-break:break-all">{_esc(e["msg"])}</td></tr>'
             for e in drc_result['nav_transitions'][:80]
         )
         nav_count = len(drc_result['nav_transitions'])
@@ -137,8 +143,8 @@ def generate_report(mem_records, top_records, drc_result, drc_total, report_path
                 f'<div class="chain-item chain-{e["tag"]}">'
                 f'<span class="chain-time">{_utc_to_bj(e["time"])}</span>'
                 f'<span class="badge-{e["level"].lower()}">{e["level"]}</span>'
-                f'<span class="chain-module">{e.get("module","")}</span>'
-                f'<span class="chain-msg">{e["msg"]}</span>'
+                f'<span class="chain-module">{_esc(e.get("module",""))}</span>'
+                f'<span class="chain-msg">{_esc(e["msg"])}</span>'
                 f'<span class="chain-tag tag-{e["tag"]}">{TAG_LABELS.get(e["tag"],"")}</span>'
                 f'</div>'
                 for e in fc['event_chain']
@@ -146,7 +152,7 @@ def generate_report(mem_records, top_records, drc_result, drc_total, report_path
 
             logs_html = ''.join(
                 f'<tr><td>{_utc_to_bj(l["time"])}</td><td><span class="badge-{l["level"].lower()}">{l["level"]}</span></td>'
-                f'<td>{l["module"]}</td><td class="msg" style="white-space:normal;word-break:break-all">{l["msg"]}</td></tr>'
+                f'<td>{_esc(l["module"])}</td><td class="msg" style="white-space:normal;word-break:break-all">{_esc(l["msg"])}</td></tr>'
                 for l in fc['logs']
             )
 
