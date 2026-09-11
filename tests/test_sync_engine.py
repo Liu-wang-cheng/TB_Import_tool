@@ -923,6 +923,47 @@ class TestAIReviewRetry:
         assert len(calls) == 1
         assert not os.path.exists(flag)
 
+    def test_flag_records_failed_items(self, tmp_path, monkeypatch):
+        """失败批次 → 标记文件写入失败样本明细（title+分类）"""
+        import json
+        engine, flag = self._make_engine(tmp_path, monkeypatch)
+        def review():
+            engine.classifier.last_review_had_failure = True
+            engine.classifier.last_review_failed_items = [
+                ("标题A", "A类"), ("标题B", "B类")]
+        engine.classifier.review_training_data = review
+        engine._run_review(engine.classifier.review_training_data)
+        data = json.loads(open(flag, encoding="utf-8").read())
+        assert data["failed_items"] == [["标题A", "A类"], ["标题B", "B类"]]
+
+    def test_retry_targets_failed_items_only(self, tmp_path, monkeypatch):
+        """标记含明细 → 只重审这些失败样本（target_items），不全量重跑"""
+        import json
+        engine, flag = self._make_engine(tmp_path, monkeypatch)
+        with open(flag, "w", encoding="utf-8") as f:
+            json.dump({"failed_items": [["标题A", "A类"], ["标题B", "B类"]]}, f)
+        calls = []
+        def review(**kwargs):
+            calls.append(kwargs)
+            engine.classifier.last_review_had_failure = False
+        engine.classifier.review_training_data = review
+        executed = engine._retry_pending_review()
+        assert executed is True
+        assert calls == [{"target_items": [("标题A", "A类"), ("标题B", "B类")]}]
+        assert not os.path.exists(flag)
+
+    def test_retry_legacy_empty_flag_full_review(self, tmp_path, monkeypatch):
+        """旧格式空标记 → 回退全量重审（兼容 v2.8.6 之前的标记文件）"""
+        engine, flag = self._make_engine(tmp_path, monkeypatch)
+        open(flag, "w").close()
+        calls = []
+        def review(*args, **kwargs):
+            calls.append((args, kwargs))
+            engine.classifier.last_review_had_failure = False
+        engine.classifier.review_training_data = review
+        engine._retry_pending_review()
+        assert calls == [((), {})]
+
     def test_retry_keeps_flag_on_failure(self, tmp_path, monkeypatch):
         """重试仍失败 → 标记保留，下次同步再试"""
         engine, flag = self._make_engine(tmp_path, monkeypatch)
@@ -993,12 +1034,53 @@ class TestReviewBatchSplit:
         assert c.last_review_had_failure is False  # 拆分后全部成功
 
     def test_single_item_failure_counts(self):
-        """拆到单条仍失败 → 计失败批次（写重试标记链路）"""
+        """拆到单条仍失败 → 计失败批次并记录失败样本明细"""
         samples = [(f"样本{i}", "A类") for i in range(20)]
         c = self._make_classifier(samples)
         c._call_llm_api = lambda prompt, max_tokens=400: None
-        c.review_training_data()
+        c.review_training_data(max_per_category=0)  # 全量审核，20 条全失败
         assert c.last_review_had_failure is True
+        assert len(c.last_review_failed_items) == 20
+        assert ("样本0", "A类") in c.last_review_failed_items
+
+    def test_target_items_reviews_only_failed(self):
+        """target_items 重试只审核指定失败样本，不重新抽样全量"""
+        samples = [(f"样本{i}", "A类") for i in range(20)] + [("坏样本", "A类")]
+        c = self._make_classifier(samples)
+        prompts = []
+
+        def fake_llm(prompt, max_tokens=400):
+            prompts.append(prompt)
+            return "1. 建议→B类"
+
+        c._call_llm_api = fake_llm
+        removed = c.review_training_data(target_items=[("坏样本", "A类")])
+        assert removed == 1
+        assert len(prompts) == 1
+        assert "坏样本" in prompts[0]
+        assert "样本3" not in prompts[0]
+        assert c.last_review_had_failure is False
+        c._sim_classifier.train.assert_called_once()
+        c._sim_classifier.save.assert_called_once()
+
+    def test_target_items_missing_skipped(self):
+        """target_items 中已不存在的样本 → 跳过，不调 LLM"""
+        samples = [(f"样本{i}", "A类") for i in range(20)]
+        c = self._make_classifier(samples)
+        c._call_llm_api = MagicMock()
+        removed = c.review_training_data(target_items=[("已剔除样本", "A类")])
+        assert removed == 0
+        c._call_llm_api.assert_not_called()
+
+    def test_target_items_content_match_after_index_shift(self):
+        """样本索引偏移后按内容匹配仍能定位（上轮剔除导致索引变化）"""
+        samples = [("样本0", "A类")] + [(f"样本{i}", "A类") for i in range(1, 20)]
+        c = self._make_classifier(samples)
+        prompts = []
+        c._call_llm_api = lambda prompt, max_tokens=400: prompts.append(prompt) or "1. 建议→B类"
+        removed = c.review_training_data(target_items=[("样本5", "A类")])
+        assert removed == 1
+        assert len(prompts) == 1
 
 
 class TestScheduledSync:

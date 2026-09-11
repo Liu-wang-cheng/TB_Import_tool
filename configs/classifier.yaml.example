@@ -46,10 +46,10 @@ classifier:
     base_url: "http://192.168.x.x:8081/v1"
     batch_size: 30
     enabled: true
-    max_retries: 1
-    model: ""
+    max_retries: 2
+    model: "deepseek-v4-pro"
     provider: ""
-    timeout: 30
+    timeout: 180
   similarity:
     cache_dir: data
     enabled: true

@@ -432,13 +432,16 @@ class BugClassifier:
         self._llm_enabled = llm_cfg.get("enabled", False)
         self._api_key: str = llm_cfg.get("api_key", "")
         self._base_url: str = llm_cfg.get("base_url", "")
-        self._model: str = llm_cfg.get("model", "deepseek-chat")
-        self._timeout: int = llm_cfg.get("timeout", 30)
-        self._max_retries: int = llm_cfg.get("max_retries", 1)
+        self._model: str = llm_cfg.get("model", "deepseek-v4-pro")
+        self._timeout: int = llm_cfg.get("timeout", 180)
+        # ≥2 才能让"思维链耗尽 → 翻倍 token 重试"拿到第二次机会
+        self._max_retries: int = llm_cfg.get("max_retries", 2)
         self._batch_size: int = llm_cfg.get("batch_size", 10)
         # 最近一次 AI 审核是否存在失败批次（供 sync_engine 决定是否
         # 在下次同步时重试审核流程）
         self.last_review_had_failure: bool = False
+        # 失败批次的具体样本（title, category），供下次同步定向重审
+        self.last_review_failed_items: List[Tuple[str, str]] = []
 
         provider = llm_cfg.get("provider", "")
         if provider == "deepseek" and not self._base_url:
@@ -506,18 +509,23 @@ class BugClassifier:
         return self._sim_classifier.load()
 
     def review_training_data(self, max_per_category: int = 3,
-                              target_indices: range = None) -> int:
+                              target_indices: range = None,
+                              target_items: List[Tuple[str, str]] = None) -> int:
         """用 LLM 审核 TF-IDF 训练样本，剔除分类不合理的样本并重新训练。
 
         Args:
             max_per_category: 每个分类抽检的最大条数，0 表示全部审核。
-                仅在 target_indices 为 None 时生效。
+                仅在未指定 target_indices / target_items 时生效。
             target_indices: 指定要审核的样本索引范围（增量学习后新增样本的索引）。
                 设置后忽略 max_per_category，只审核这些索引对应的样本。
+            target_items: 指定要审核的样本内容 (title, category)（上次审核
+                失败批次的重试）。按内容匹配当前样本，不受索引偏移影响；
+                优先级高于 target_indices。
         返回被剔除的样本数量。
         """
         sim = self._sim_classifier
         self.last_review_had_failure = False
+        self.last_review_failed_items = []
         if not sim.trained or not self._llm_enabled or not self._api_key:
             return 0
 
@@ -525,7 +533,19 @@ class BugClassifier:
         if len(samples) < 20:
             return 0
 
-        if target_indices is not None:
+        if target_items is not None:
+            # 按内容匹配当前样本（上轮剔除后索引可能已偏移）
+            available: Dict[Tuple[str, str], List[int]] = {}
+            for i, s in enumerate(samples):
+                available.setdefault(s, []).append(i)
+            review_items = []
+            for title, cat in target_items:
+                idxs = available.get((title, cat))
+                if idxs:
+                    review_items.append((idxs.pop(0), title, cat))
+            logger.info("开始 AI 审核上次失败样本: %d 条（匹配到 %d 条）...",
+                        len(target_items), len(review_items))
+        elif target_indices is not None:
             # 按索引范围精确匹配新增样本
             review_items = []
             for i in target_indices:
@@ -584,7 +604,8 @@ class BugClassifier:
                 "只输出有问题的条目也可以，没有问题的不用全部列出。"
             )
 
-            content = self._call_llm_api(prompt, max_tokens=4000)
+            # 推理模型思维链计入输出预算：30 条/批实测需 16k tokens 才能产出判定
+            content = self._call_llm_api(prompt, max_tokens=16000)
             if not content:
                 return None
 
@@ -629,6 +650,8 @@ class BugClassifier:
                 return result
             if len(batch) <= 1 or depth >= 5:
                 failed_batches += 1
+                self.last_review_failed_items.extend(
+                    (title, cat) for (_, title, cat) in batch)
                 logger.warning("AI 审核批次失败（%d 条，拆分后仍失败）", len(batch))
                 return set()
             mid = len(batch) // 2
@@ -964,7 +987,7 @@ class BugClassifier:
 
     # ── LLM API 调用 ────────────────────────────────────
 
-    def _call_llm_api(self, prompt: str, max_tokens: int = 400) -> Optional[str]:
+    def _call_llm_api(self, prompt: str, max_tokens: int = 1200) -> Optional[str]:
         if not self._http:
             return None
 
@@ -1023,7 +1046,7 @@ class BugClassifier:
                         logger.debug("LLM 推理耗尽 token (reasoning %d 字符), "
                                      "finish_reason=length", len(reasoning))
                         payload["max_tokens"] = min(
-                            payload.get("max_tokens", 400) * 2, 8000)
+                            payload.get("max_tokens", 400) * 2, 32000)
                         continue
                 if content:
                     if finish_reason == "length":

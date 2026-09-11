@@ -496,11 +496,34 @@ class SyncEngine:
         from src.utils import get_app_data_dir
         return os.path.join(get_app_data_dir(), "ai_review_retry.flag")
 
+    def _read_failed_review_items(self) -> list:
+        """读取重试标记中的失败样本明细，供定向重审。
+
+        返回 [(title, category), ...]；文件为空/旧格式/损坏时返回 []，
+        调用方回退为全量重审。
+        """
+        try:
+            with open(self._review_retry_flag_path(), "r",
+                      encoding="utf-8") as f:
+                raw = f.read().strip()
+            if not raw:
+                return []
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return []
+            result = []
+            for item in data.get("failed_items") or []:
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    result.append((str(item[0]), str(item[1])))
+            return result
+        except (OSError, ValueError):
+            return []
+
     def _run_review(self, review_fn, progress_callback=None,
                     msg: str = "AI 审核训练数据..."):
         """执行 AI 审核并按结果维护重试标记。
 
-        审核存在失败批次 → 写标记（下次同步重试）；
+        审核存在失败批次 → 写标记（含失败样本明细，下次同步定向重试）；
         审核完整 → 清除历史标记。
         """
         if progress_callback:
@@ -519,9 +542,15 @@ class SyncEngine:
             return
         flag_path = self._review_retry_flag_path()
         if getattr(self.classifier, "last_review_had_failure", False):
+            failed_items = getattr(
+                self.classifier, "last_review_failed_items", None) or []
+            payload = {"failed_items": [[str(t), str(c)]
+                                        for t, c in failed_items]}
             try:
-                open(flag_path, "w").close()
-                logger.warning("AI 审核存在失败批次，已标记下次同步重试审核")
+                with open(flag_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False)
+                logger.warning("AI 审核存在失败批次（%d 条样本），已标记下次同步重试",
+                               len(payload["failed_items"]))
             except OSError as e:
                 logger.warning("写入 AI 审核重试标记失败: %s", e)
         elif os.path.exists(flag_path):
@@ -532,18 +561,30 @@ class SyncEngine:
                 pass
 
     def _retry_pending_review(self, progress_callback=None) -> bool:
-        """检测到上次审核失败标记时，先重跑一次 AI 审核流程。
+        """检测到上次审核失败标记时，重试审核。
 
-        重试成功 → 清除标记；重试仍失败 → 保留标记（下次同步再试）。
+        标记含失败样本明细 → 只重审这些样本；否则（旧格式）全量重审。
+        重试成功 → 清除标记；重试仍失败 → 保留剩余失败样本（下次再试）。
         返回是否执行了重试。
         """
         if not os.path.exists(self._review_retry_flag_path()):
             return False
-        logger.info("检测到上次 AI 审核失败标记，本次同步先重试审核流程...")
-        self._run_review(
-            lambda: self.classifier.review_training_data(),
-            progress_callback,
-            msg="AI 审核重试（上次存在失败批次）...")
+        failed_items = self._read_failed_review_items()
+        if failed_items:
+            logger.info("检测到上次 AI 审核失败标记，本次同步重试 %d 条失败样本...",
+                        len(failed_items))
+            self._run_review(
+                lambda: self.classifier.review_training_data(
+                    target_items=failed_items),
+                progress_callback,
+                msg=f"AI 审核重试（上次失败 {len(failed_items)} 条）...")
+        else:
+            logger.info("检测到上次 AI 审核失败标记（无样本明细），"
+                        "本次同步先重跑审核流程...")
+            self._run_review(
+                lambda: self.classifier.review_training_data(),
+                progress_callback,
+                msg="AI 审核重试（上次存在失败批次）...")
         return True
 
     def _train_similarity_classifier(self, progress_callback=None):
