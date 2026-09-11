@@ -567,10 +567,8 @@ class BugClassifier:
         batch_size = getattr(self, '_batch_size', 10)
         total_batches = (len(review_items) + batch_size - 1) // batch_size
 
-        for batch_num, batch_start in enumerate(range(0, len(review_items), batch_size), 1):
-            batch = review_items[batch_start:batch_start + batch_size]
-            logger.info("AI 审核进度: %d/%d (已剔除 %d 条)",
-                        batch_num, total_batches, len(removed_indices))
+        def _review_batch(batch) -> Optional[set]:
+            """审核一批，成功返回剔除索引集合；LLM 请求失败返回 None。"""
             lines = []
             for i, (_, title, cat) in enumerate(batch, 1):
                 lines.append(f"{i}. 标题: {title}  当前分类: {cat}")
@@ -588,10 +586,9 @@ class BugClassifier:
 
             content = self._call_llm_api(prompt, max_tokens=4000)
             if not content:
-                logger.warning("AI 审核请求失败，跳过本批")
-                failed_batches += 1
-                continue
+                return None
 
+            removed = set()
             for line in content.strip().splitlines():
                 line = line.strip()
                 if not line:
@@ -613,7 +610,7 @@ class BugClassifier:
                         suggested = re.sub(r'.*建议[：:→]?\s*', '', suggested).strip()
                     validated = self._validate_category(suggested)
                     if validated and validated != orig_cat:
-                        removed_indices.add(orig_idx)
+                        removed.add(orig_idx)
                         logger.info("  AI 审核剔除: \"%s\" 从 %s → 建议为 %s",
                                      batch[idx - 1][1][:30], orig_cat, validated)
                     elif not validated:
@@ -621,13 +618,37 @@ class BugClassifier:
                                      "(%s) → LLM建议: %s",
                                      batch[idx - 1][1][:30], orig_cat,
                                      suggested[:30])
+            return removed
+
+        def _review_with_split(batch, depth: int = 0) -> set:
+            """批失败时自适应拆半重试（大 prompt 服务端易失败），
+            单条仍失败才计入 failed_batches。"""
+            nonlocal failed_batches
+            result = _review_batch(batch)
+            if result is not None:
+                return result
+            if len(batch) <= 1 or depth >= 5:
+                failed_batches += 1
+                logger.warning("AI 审核批次失败（%d 条，拆分后仍失败）", len(batch))
+                return set()
+            mid = len(batch) // 2
+            logger.warning("AI 审核批次失败（%d 条），拆分为 %d+%d 条重试",
+                           len(batch), mid, len(batch) - mid)
+            return (_review_with_split(batch[:mid], depth + 1)
+                    | _review_with_split(batch[mid:], depth + 1))
+
+        for batch_num, batch_start in enumerate(range(0, len(review_items), batch_size), 1):
+            batch = review_items[batch_start:batch_start + batch_size]
+            logger.info("AI 审核进度: %d/%d (已剔除 %d 条)",
+                        batch_num, total_batches, len(removed_indices))
+            removed_indices |= _review_with_split(batch)
 
         if failed_batches:
             # 有批次审核失败 → 标记本次审核不完整，sync_engine 据此
             # 写重试标记，下次同步时重新运行审核流程
             self.last_review_had_failure = True
-            logger.warning("AI 审核存在 %d/%d 个批次失败，本次审核不完整",
-                           failed_batches, total_batches)
+            logger.warning("AI 审核存在 %d 个批次失败（自适应拆分后），本次审核不完整",
+                           failed_batches)
 
         if not removed_indices:
             logger.info("AI 审核完成: 抽检 %d 条，全部合理", len(review_items))

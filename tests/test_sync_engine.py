@@ -954,6 +954,53 @@ class TestAIReviewRetry:
         assert c.last_review_had_failure is False
 
 
+class TestReviewBatchSplit:
+    """AI 审核批失败自适应拆半重试"""
+
+    def _make_classifier(self, samples):
+        from src.classifier import BugClassifier
+        c = BugClassifier.__new__(BugClassifier)
+        sim = MagicMock()
+        sim.trained = True
+        sim._samples = samples
+        c._sim_classifier = sim
+        c._llm_enabled = True
+        c._api_key = "k"
+        c._valid_categories = ["A类", "B类"]
+        c._category_desc = {"A类": "", "B类": ""}
+        c._batch_size = 4
+        c.last_review_had_failure = False
+        c._validate_category = lambda s: s if s in ("A类", "B类") else None
+        return c
+
+    def test_batch_split_retries_and_succeeds(self):
+        """大批失败 → 拆半后成功，不算失败批次（样本数需 >=20 才进入审核）"""
+        samples = [(f"样本{i}", "A类") for i in range(20)]
+        c = self._make_classifier(samples)
+        calls = []
+
+        def fake_llm(prompt, max_tokens=400):
+            calls.append(prompt)
+            # 含 >2 条的 prompt 失败；<=2 条成功
+            n = prompt.count("标题:")
+            if n > 2:
+                return None
+            return "\n".join(f"{i}. OK" for i in range(1, n + 1))
+
+        c._call_llm_api = fake_llm
+        removed = c.review_training_data()
+        assert removed == 0
+        assert c.last_review_had_failure is False  # 拆分后全部成功
+
+    def test_single_item_failure_counts(self):
+        """拆到单条仍失败 → 计失败批次（写重试标记链路）"""
+        samples = [(f"样本{i}", "A类") for i in range(20)]
+        c = self._make_classifier(samples)
+        c._call_llm_api = lambda prompt, max_tokens=400: None
+        c.review_training_data()
+        assert c.last_review_had_failure is True
+
+
 class TestScheduledSync:
     """定时同步：_check_scheduled_sync 到点触发逻辑"""
 
