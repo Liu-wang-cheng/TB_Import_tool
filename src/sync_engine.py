@@ -367,9 +367,14 @@ class SyncEngine:
         if self.extraction_enabled:
             self._learn_sn_patterns(progress_callback)
 
-        # 从 TB 已分类任务中学习训练 TF-IDF 模型
+        # 从 TB 已分类任务中学习训练 TF-IDF 模型。
+        # 分类器准备失败（含 AI 审核/训练/保存异常）不得中断同步：
+        # 记录告警后继续，分类走 LLM/部门兜底
         if self.classifier:
-            self._train_similarity_classifier(progress_callback)
+            try:
+                self._train_similarity_classifier(progress_callback)
+            except Exception as e:
+                logger.warning("分类器准备失败（不影响同步，分类将走兜底）: %s", e)
 
         for i, bug in enumerate(bugs):
             if progress_callback:
