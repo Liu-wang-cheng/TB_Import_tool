@@ -55,9 +55,9 @@ src/
   zentao_client.py            → 禅道 REST API v1：Token 认证 + Session 认证（用于文件下载）
   teambition_client.py        → TB 开放 API：JWT appToken 认证、任务 CRUD、文件上传到 OSS
   sync_engine.py              → 核心同步逻辑：去重、字段映射、双向标题同步、附件和评论同步
-  classifier.py               → 缺陷分类器：TF-IDF 相似度（本地学习）+ LLM + 部门兜底
+  classifier.py               → 缺陷分类器：TF-IDF 相似度（本地学习）+ LLM + 类型映射兜底
                                 SimilarityClassifier: jieba分词 + TF-IDF + 余弦相似度
-                                BugClassifier: 四层管道 + AI审核训练数据 + 部门过滤
+                                BugClassifier: 四层管道 + AI审核训练数据（部门过滤已移除）
   ai_log_analyzer.py          → AI 日志分析：LLM 调用、LogSummarizer 日志摘要、领域知识 SYSTEM_PROMPT
   log_analysis_integration.py → 日志分析集成：从 SN/时间下载 DRC 日志 → AI 分析 → 写入 TB 评论 + HTML 报告
   vision_analyzer.py          → 视觉分析器：GLM-4V 多模态分析视频关键帧和图片（cv2 提取帧）
@@ -134,10 +134,10 @@ docs/
 - **配置解析**：`config_resolver.py` 认证后将中文名称解析为 ID。支持：`scenariofieldconfig_name` → ID、`customfields` 名称 → ID、`creator_name` → 用户 ID。`project_id` 必须直接填写 UUID（appToken 模式下无项目搜索 API）
 - **多文件配置**：`config_loader.py` 加载并合并 `configs/` 目录下的 YAML（兼容旧版单文件 `config.yaml`）
 - **严重程度映射**：禅道 1-4 → TB S/A/B/C
-- **分类管道（四层）**：① TF-IDF 相似度（本地学习）→ ② LLM 大模型分类 → ③ LLM 审核（兜底前 AI 复核）→ ④ 部门兜底（按指派人部门归入"其他问题"）
+- **分类管道（四层）**：① TF-IDF 相似度（本地学习）→ ② LLM 大模型分类 → ③ LLM 审核（兜底前 AI 复核）→ ④ Bug 类型映射兜底（`type_category_map`，无匹配归"应用-其他问题"；部门过滤/部门兜底已于 v2.7.0 移除）
 - **TF-IDF 相似度分类**：使用 jieba 中文分词 + scikit-learn TfidfVectorizer + 余弦相似度。首次运行扫描 TB 最新 N 条缺陷任务（`max_fetch` 可配置，默认 5000），缓存到 `data/classifier_model.pkl`。超过 7 天自动增量学习最新 500 条。无需 GPU
-- **AI 审核训练数据**：训练/增量学习后，LLM 抽检每个分类的样本，剔除不合理分类并重新训练，确保模型质量
-- **部门过滤**：有明确部门的执行者（IOT/算法/应用/嵌入式/硬件/驱动）只匹配本部门分类；项目/测试/产品部门不限制
+- **AI 审核训练数据**：训练/增量学习后，LLM 抽检每个分类的样本，剔除不合理分类并重新训练，确保模型质量。审核批次失败时写 `data/ai_review_retry.flag`，下次同步自动重跑审核
+- **分类兜底**：TF-IDF/LLM 均未命中时按 `type_category_map`（bug_type → 分类）兜底，无匹配归"应用-其他问题"。部门过滤已于 v2.7.0 移除（历史上曾按执行者部门限制匹配范围）
 - **TB 任务详情与列表差异**：列表 API `/v3/project/{pid}/task/query` 不返回 `customfields` 值，需逐条调 `/v3/task/query` 获取详情。自定义字段值格式为 `[{"id":"xxx","title":"显示名"}]`，取 `title` 字段
 - **附件上传超时**：按文件大小动态计算（最低 100KB/s），范围 120-900 秒，避免大文件卡死
 - **模块过滤**：先探测禅道模块 API 是否支持层级查询，支持则 BFS 展开子模块，不支持则回退逐条详情匹配
