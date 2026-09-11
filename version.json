@@ -1,7 +1,7 @@
 {
   "version": "2.8.7",
-  "sha256": "05839ea5478017233ef0bb31a3e2163a3b172faf337e5ad2f17ac8ec5e333381",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.6/SmartDefectPlatform.zip",
+  "sha256": "3a5029cb627e0218962188e312bc645db102a4d8f9608486a409c6bd484146e8",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.7/SmartDefectPlatform.zip",
   "release_date": "2026-09-11",
   "release_notes": "v2.8.7 修复：AI审核/LLM分类持续失败根因（推理模型思维链占满输出token预算，审核4000→16000、分类默认1200、max_retries默认2）；审核失败重试改为只重试上次失败的样本；默认审核模型 deepseek-v4-pro",
   "min_version": "1.0"
