@@ -170,6 +170,19 @@ def extract_department_prefix(assigned_to: str) -> str:
     return ""
 
 
+def normalize_assignee_input(name: str) -> str:
+    """指派人输入清洗：仅当带已知部门前缀时去掉前缀，只留名字。
+
+    与 extract_department_prefix 的白名单语义一致——普通名字里即使含
+    "-" 也不能误切（此前 GUI 添加指派人一律按第一个 "-" 截断，
+    "乐动开发-343" 会被存成 "343" 导致筛选永远匹配不到）
+    """
+    name = (name or "").strip()
+    if extract_department_prefix(name):
+        return name.split("-", 1)[1].strip()
+    return name
+
+
 def _as_int_list(value) -> list:
     """把单值/列表/逗号分隔串统一为 int 列表（空返回 []）"""
     if value is None or value == "":

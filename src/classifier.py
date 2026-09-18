@@ -593,8 +593,12 @@ class BugClassifier:
 
         def _review_batch(batch) -> Optional[set]:
             """审核一批，成功返回剔除索引集合；
-            LLM 请求失败或输出完全无法解析返回 None。"""
+            LLM 请求失败、输出无法解析或预算耗尽返回 None。"""
             nonlocal calls_used
+            # 预算检查下沉到批内（含拆半递归）：否则一个失败批最坏拆出
+            # ~19 次调用 × 180s 超时，30 分钟预算承诺会被突破
+            if calls_used >= call_budget or time.time() > deadline:
+                return None
             calls_used += 1
             lines = []
             for i, (_, title, cat) in enumerate(batch, 1):

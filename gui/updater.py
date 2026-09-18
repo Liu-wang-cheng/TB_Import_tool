@@ -86,6 +86,10 @@ def compare_versions(current: str, remote: str) -> int:
         return parts
     c, r = _parts(current), _parts(remote)
     for a, b in zip(c, r):
+        # 段类型不一致（如 "2.8.8-rc" 的 "8-rc" vs 8）时统一按字符串比较，
+        # 避免 int/str 混比抛 TypeError
+        if type(a) is not type(b):
+            a, b = str(a), str(b)
         if a < b:
             return 1
         if a > b:
@@ -155,12 +159,26 @@ def race_mirrors(mirrors: list, version_file: str,
     return results
 
 
+def _is_direct_github(base_url: str) -> bool:
+    """判断是否 GitHub 直连（权威无缓存）。
+
+    不能用子串匹配：ghfast 的 base_url 内嵌 raw.githubusercontent.com，
+    会被误判为直连并可能因延迟更低被优先取到（其 CDN 有缓存，会取到
+    旧的 version.json 导致误报"已是最新"）
+    """
+    from urllib.parse import urlparse
+    try:
+        return urlparse(base_url).hostname == "raw.githubusercontent.com"
+    except Exception:
+        return False
+
+
 def fetch_version_info(sorted_mirrors: List[MirrorResult],
                        version_file: str) -> Optional[Tuple[VersionInfo, MirrorResult]]:
     """获取 version.json。优先从 GitHub 直连获取（权威无缓存），失败再走镜像。"""
     # version.json 是小文件，优先直连 GitHub 确保最新，不走 CDN 缓存
-    github_mirrors = [m for m in sorted_mirrors if "raw.githubusercontent" in m.base_url]
-    other_mirrors = [m for m in sorted_mirrors if "raw.githubusercontent" not in m.base_url]
+    github_mirrors = [m for m in sorted_mirrors if _is_direct_github(m.base_url)]
+    other_mirrors = [m for m in sorted_mirrors if not _is_direct_github(m.base_url)]
     ordered = github_mirrors + other_mirrors
 
     for mirror in ordered:

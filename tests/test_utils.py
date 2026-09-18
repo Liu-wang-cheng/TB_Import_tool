@@ -191,3 +191,14 @@ class TestModels:
         from src.models import SyncResult, SyncAction
         sr = SyncResult(2, SyncAction.SKIPPED_FILTERED, "", "过滤跳过")
         assert sr.action == SyncAction.SKIPPED_FILTERED
+
+
+def test_normalize_assignee_input():
+    """指派人输入清洗：仅白名单部门前缀去掉，普通名字不误切"""
+    from src.utils import normalize_assignee_input
+    assert normalize_assignee_input("IOT-陈斌") == "陈斌"
+    assert normalize_assignee_input("应用-罗林旺") == "罗林旺"
+    assert normalize_assignee_input("陈斌") == "陈斌"
+    # 非白名单前缀的 "-" 不能截断（曾一律 split 导致名字被切坏）
+    assert normalize_assignee_input("张三-测试") == "张三-测试"
+    assert normalize_assignee_input(" 胡继珍 ") == "胡继珍"

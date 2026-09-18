@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 # 同步互斥锁：防止并发同步导致重复创建
 _sync_lock = threading.Lock()
 
+# 指令后台执行池（限制并发数，避免资源耗尽）
+# 注意：曾误挂在不存在的 handle_dingtalk_callback 上导致 NameError，
+# 所有指令 500；改用模块级常量
+_executor = ThreadPoolExecutor(max_workers=2)
+
 # ── 配置 ──────────────────────────────────────────
 
 # 指令 → 动作映射
@@ -113,6 +118,8 @@ def run_sync(reply_webhook: str, dry_run: bool = False):
     if not dry_run and not _sync_lock.acquire(blocking=False):
         DingTalkBot.reply_text(reply_webhook, "同步正在进行中，请稍后再试")
         return
+    source = None
+    teambition = None
     start_time = time.time()
     try:
         config = load_config()
@@ -155,12 +162,20 @@ def run_sync(reply_webhook: str, dry_run: bool = False):
             f"执行失败 ({'试运行' if dry_run else '正式同步'})\n错误: {str(e)[:500]}"
         )
     finally:
+        # 长驻服务：每次指令新建的客户端必须显式关闭（连接池不随 GC 及时释放）
+        for c in (source, teambition):
+            if c is not None:
+                try:
+                    c.close()
+                except Exception:
+                    pass
         if not dry_run:
             _sync_lock.release()
 
 
 def run_list_bugs(reply_webhook: str):
-    """后台线程列出禅道 Bug"""
+    """后台线程列出禅道 Bug（支持多产品/多项目，筛选口径与同步一致）"""
+    source = None
     try:
         config = load_config()
         source, _ = init_clients(config)
@@ -168,16 +183,38 @@ def run_list_bugs(reply_webhook: str):
 
         filters = config.get("zentao", {}).get("filters", {})
         normalize_zentao_filters(filters)
-        assigned_to = resolve_assigned_to(filters, source.account)
+        # 指派人：与同步引擎一致，读公用 assignee 配置
+        # （此前读 zentao.filters.assigned_to 旧位置，口径与同步不一致）
+        assigned_to = resolve_assigned_to(
+            config.get("assignee", {}), source.account)
 
-        bugs = source.fetch_all_bugs(
-            product_id=filters.get("product_id"),
-            project_id=filters.get("project_id"),
-            statuses=filters.get("statuses"),
-            date_from=filters.get("date_from"),
-            date_to=filters.get("date_to"),
-            assigned_to=assigned_to,
-        )
+        product_ids = filters.get("product_ids") or (
+            [int(filters["product_id"])] if filters.get("product_id") else [])
+        project_ids = filters.get("project_ids") or (
+            [int(filters["project_id"])] if filters.get("project_id") else [])
+        bugs = []
+        for pid in product_ids or [None]:
+            for jid in project_ids or [None]:
+                try:
+                    batch = source.fetch_all_bugs(
+                        product_id=pid,
+                        project_id=jid,
+                        statuses=filters.get("statuses"),
+                        date_from=filters.get("date_from"),
+                        date_to=filters.get("date_to"),
+                        assigned_to=assigned_to,
+                    )
+                    bugs.extend(batch)
+                except Exception as e:
+                    logger.warning("列出Bug: 组合(产品=%s, 项目=%s)失败: %s",
+                                   pid, jid, e)
+        seen = set()
+        dedup = []
+        for b in bugs:
+            if b.id not in seen:
+                seen.add(b.id)
+                dedup.append(b)
+        bugs = dedup
 
         sev_map = config.get("teambition", {}).get("severity_map", {})
         sev_labels = source.fetch_severity_labels(filters.get("product_id"))
@@ -203,6 +240,12 @@ def run_list_bugs(reply_webhook: str):
     except Exception as e:
         logger.error("列出Bug失败: %s", e, exc_info=True)
         DingTalkBot.reply_text(reply_webhook, f"列出Bug失败: {str(e)[:500]}")
+    finally:
+        if source is not None:
+            try:
+                source.close()
+            except Exception:
+                pass
 
 
 def send_help(reply_webhook: str):
@@ -300,15 +343,12 @@ def dingtalk_callback():
         return ""
 
     # 6. 在后台线程中异步执行（限制并发数，避免资源耗尽）
-    if not hasattr(handle_dingtalk_callback, '_executor'):
-        handle_dingtalk_callback._executor = ThreadPoolExecutor(max_workers=2)
-
     if action == "sync":
-        handle_dingtalk_callback._executor.submit(run_sync, reply_webhook, False)
+        _executor.submit(run_sync, reply_webhook, False)
     elif action == "dry_run":
-        handle_dingtalk_callback._executor.submit(run_sync, reply_webhook, True)
+        _executor.submit(run_sync, reply_webhook, True)
     elif action == "list_bugs":
-        handle_dingtalk_callback._executor.submit(run_list_bugs, reply_webhook)
+        _executor.submit(run_list_bugs, reply_webhook)
 
     return ""
 

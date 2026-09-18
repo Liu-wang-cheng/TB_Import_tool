@@ -1286,8 +1286,9 @@ class MainWindow(QMainWindow):
             self, "添加指派人", "输入指派人（如 陈斌、罗林旺）:"
         )
         if ok and name.strip():
-            # 去掉部门前缀，只存名字
-            clean = name.strip().split("-", 1)[-1].strip()
+            # 去掉部门前缀只存名字；仅限白名单部门前缀（普通名字不误切）
+            from src.utils import normalize_assignee_input
+            clean = normalize_assignee_input(name)
             self.filter_assigned.blockSignals(True)
             item = QListWidgetItem(clean)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)

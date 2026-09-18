@@ -70,10 +70,10 @@ def export_bugs(config: dict, output_path: str = ""):
                 logger.warning(
                     "模块API不可用，将在 fetch_bug_detail 循环中逐条比对 moduleName")
 
-    # 过滤标题中带 VLNS 的已导入 Bug
+    # 过滤标题中带 VLNS/CPAX 的已导入 Bug（双向标注为双前缀，缺一会重复导出）
     export_list = []
     for bug in bugs:
-        if re.search(r'VLNS-\d+', bug.title):
+        if re.search(r'(?:VLNS|CPAX)-\d+', bug.title):
             logger.info("跳过已导入: Bug#%d %s", bug.id, bug.title)
         else:
             export_list.append(bug)
@@ -108,8 +108,15 @@ def export_bugs(config: dict, output_path: str = ""):
 
     # 填充数据
     skipped_module = 0
+    failed_detail = 0
     for bug_summary in bugs:
-        bug = source.fetch_bug_detail(bug_summary.id)
+        # 单条详情失败不中断整体导出（超时/500 时跳过并计数）
+        try:
+            bug = source.fetch_bug_detail(bug_summary.id)
+        except Exception as e:
+            failed_detail += 1
+            logger.warning("跳过-详情获取失败: Bug#%d %s", bug_summary.id, e)
+            continue
 
         # 模块名称过滤回退：数字ID已在前面过滤过；module_id_set 已预解析也已过滤；
         # 只有当 product_id 缺失或模块API不可用时才在此逐条比对 moduleName
@@ -160,10 +167,15 @@ def export_bugs(config: dict, output_path: str = ""):
         output_path = os.path.join(output_dir, f"teambition_import_{ts}.xlsx")
 
     wb.save(output_path)
-    exported = len(bugs) - skipped_module
+    exported = len(bugs) - skipped_module - failed_detail
     print(f"\n导出完成！文件: {output_path}")
+    notes = []
     if skipped_module:
-        print(f"共导出 {exported} 条缺陷（按模块过滤跳过 {skipped_module} 条）")
+        notes.append(f"按模块过滤跳过 {skipped_module} 条")
+    if failed_detail:
+        notes.append(f"详情获取失败跳过 {failed_detail} 条")
+    if notes:
+        print(f"共导出 {exported} 条缺陷（{'；'.join(notes)}）")
     else:
         print(f"共导出 {exported} 条缺陷")
     return output_path

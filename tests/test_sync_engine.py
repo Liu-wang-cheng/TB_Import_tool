@@ -187,6 +187,26 @@ class TestCPAXDetection:
         assert "VLNS-68402" in result
         assert "P260626-00013" in result
 
+    def test_tb_task_base_title_aligned_with_zentao_side(self):
+        """v2.8.8：TB 侧归一化与禅道侧对称——剥 VLNS/禅道标注，但保留
+        禅道产品编号（曾用宽泛正则误清导致模糊比对不对称）"""
+        from src.models import TeambitionTask
+        t = TeambitionTask(content="【VLNS-123】机器无法回充")
+        assert "VLNS-123" not in t.get_base_title()
+        t2 = TeambitionTask(content="【P260626-00013】机器无法回充")
+        assert "P260626-00013" in t2.get_base_title()
+
+    def test_tier2_similarity_symmetric_across_markers(self):
+        """同一条缺陷的两侧形态（【禅道1】 vs 【VLNS-9】）剥标注后
+        相似度应为 1.0，不会被标注差异拉低而漏判重复"""
+        import difflib
+        from src.models import ZentaoBug, TeambitionTask
+        a = ZentaoBug(id=1, title="【禅道1】机器无法回充").get_base_title()
+        b = TeambitionTask(content="【VLNS-9】机器无法回充").get_base_title()
+        r = difflib.SequenceMatcher(
+            None, SyncEngine._normalize(a), SyncEngine._normalize(b)).ratio()
+        assert r == 1.0
+
 
 class TestExtractInlineImageIds:
     """_extract_inline_image_ids"""
@@ -1419,3 +1439,178 @@ class TestScheduledKeyConsumption:
         MainWindow._check_scheduled_sync(mw, QTime(9, 30))
         today = QDate.currentDate().toString("yyyy-MM-dd")
         assert f"{today}:09:30" in mw._scheduled_last_run_keys
+
+
+class TestFuzzyDedupRecallFallback:
+    """Tier2 头部子串二次召回：仅"零有效候选"时启用，且二次召回用 0.92 阈值"""
+
+    FULL = "机器在地毯上跑机，频繁出现运行速度异常减慢"
+    HEAD = "机器在地毯上跑机"
+
+    def _make_engine(self, responses, source_type="zentao"):
+        e = SyncEngine.__new__(SyncEngine)
+        e.project_name = ""
+        e.cf_ids = {}
+        e.dedup_threshold = 0.8
+        e.source_type = source_type
+        e.loose_tag_dedup = True
+        e.source_tag_in_tb = "【禅道{bug_id}】"
+        e.source = MagicMock()
+        e.source.extract_vlns_numbers = MagicMock(return_value=[])
+        e.teambition = MagicMock()
+        calls = []
+
+        def fake_search(keyword):
+            calls.append(keyword)
+            if keyword in ("【禅道1】", "禅道1", "#1"):
+                return []
+            return responses.get(keyword, [])
+
+        e.teambition.search_tasks = MagicMock(side_effect=fake_search)
+        e._calls = calls
+        return e
+
+    def test_edited_tb_title_still_deduped(self):
+        from src.models import ZentaoBug, TeambitionTask
+        task = TeambitionTask(taskId="t1", status="active",
+                              content=self.FULL + "现象")
+        e = self._make_engine({self.HEAD: [task]})
+        bug = ZentaoBug(id=1, title=self.FULL)
+        assert e._find_existing_task(bug) is task
+        assert self.HEAD in e._calls  # 用过头子串关键词
+
+    def test_no_fallback_when_candidates_exist(self):
+        """首轮已有有效候选（未达阈值）→ 不再二次召回"""
+        from src.models import ZentaoBug, TeambitionTask
+        low = TeambitionTask(taskId="t9", status="active",
+                             content="机器在地毯上跑机，偶发停机")
+        e = self._make_engine({self.FULL: [low]})
+        bug = ZentaoBug(id=1, title=self.FULL)
+        assert e._find_existing_task(bug) is None
+        assert self.HEAD not in e._calls
+
+    def test_fallback_uses_strict_threshold(self):
+        """二次召回要求 ≥0.92：相似度 0.842 的"同模板尾部差异"不判重"""
+        from src.models import ZentaoBug, TeambitionTask
+        mid = TeambitionTask(taskId="t8", status="active",
+                             content="机器在地毯上跑机，频繁出现异常减速")
+        e = self._make_engine({self.HEAD: [mid]})
+        bug = ZentaoBug(id=1, title=self.FULL)
+        assert e._find_existing_task(bug) is None
+
+    def test_teambition_source_strips_leading_source_tag(self):
+        """外部TB源：内部任务标题带源标签（【323A-24】）前缀，
+        比对前锚定剥掉一个前导标签，避免标签拉低相似度漏判"""
+        from src.models import ZentaoBug, TeambitionTask
+        task = TeambitionTask(taskId="t2", status="active",
+                              content="【323A-24】机器无法回充")
+        e = self._make_engine({"机器无法回充": [task]},
+                              source_type="teambition")
+        bug = ZentaoBug(id=1, title="机器无法回充")
+        assert e._find_existing_task(bug) is task
+
+
+class TestDedupTierOrder:
+    """去重层级顺序：Tier1 标签命中 → Tier1.5 VLNS 命中 → 归档不参与"""
+
+    def _make_engine(self):
+        e = SyncEngine.__new__(SyncEngine)
+        e.project_name = ""
+        e.cf_ids = {}
+        e.dedup_threshold = 0.8
+        e.source_type = "zentao"
+        e.loose_tag_dedup = False  # 简化场景，跳过 Tier1.1
+        e.source_tag_in_tb = "【禅道{bug_id}】"
+        e.source = MagicMock()
+        e.source.extract_vlns_numbers = MagicMock(return_value=[])
+        e.teambition = MagicMock()
+        return e
+
+    def test_tier1_tag_hit_returns_immediately(self):
+        from src.models import ZentaoBug, TeambitionTask
+        tag_task = TeambitionTask(taskId="t1", status="active",
+                                  content="【禅道7】机器无法回充")
+        e = self._make_engine()
+        e.teambition.search_tasks = MagicMock(return_value=[tag_task])
+        bug = ZentaoBug(id=7, title="机器无法回充")
+        assert e._find_existing_task(bug) is tag_task
+
+    def test_archived_tier1_task_not_matched(self):
+        from src.models import ZentaoBug, TeambitionTask
+        archived = TeambitionTask(taskId="t1", status="active",
+                                  isArchived=True,
+                                  content="【禅道7】机器无法回充")
+        e = self._make_engine()
+        e.teambition.search_tasks = MagicMock(return_value=[archived])
+        e.teambition.get_task_by_identifier = MagicMock(return_value=None)
+        bug = ZentaoBug(id=7, title="机器无法回充")
+        assert e._find_existing_task(bug) is None
+
+    def test_tier15_vlns_hit(self):
+        from src.models import ZentaoBug, TeambitionTask
+        task = TeambitionTask(taskId="t5", status="active",
+                              content="【VLNS-9】机器无法回充")
+        e = self._make_engine()
+        e.teambition.search_tasks = MagicMock(return_value=[])
+        e.teambition.get_task_by_identifier = MagicMock(return_value=task)
+        e.source.extract_vlns_numbers = MagicMock(return_value=["9"])
+        bug = ZentaoBug(id=7, title="机器无法回充")
+        assert e._find_existing_task(bug) is task
+
+
+class TestVersionPlaceholder:
+    """版本字段为"主干"等占位值时从重现步骤提取
+
+    数据驱动（真实采样 100 条详情：56 条 openedBuild=主干）：
+    步骤格式含 "软件版本：2.3.60 / 8.1.6.1"、"版本：2.3.34/8.1.4.1"、
+    "整机版本：2.3.25"、"版本：安卓"（非数字需跳过）等。
+    """
+
+    def _make_engine(self):
+        e = SyncEngine.__new__(SyncEngine)
+        e.cf_ids = {"version": "cf_version"}
+        e.extraction_enabled = True
+        return e
+
+    def _version(self, engine, bug):
+        fields = engine._build_customfields(bug, "A", "类别X")
+        for f in fields:
+            if f["cfId"] == "cf_version":
+                return f["value"][0]
+        return None
+
+    def test_placeholder_software_version(self):
+        from src.models import ZentaoBug
+        e = self._make_engine()
+        b = ZentaoBug(id=1, title="t", openedBuild="主干",
+                      steps="现象：xx<br />软件版本：2.3.60 / 8.1.6.1<br />序列号：HQ1")
+        assert self._version(e, b) == "2.3.60"
+
+    def test_placeholder_bare_label_multi_sep(self):
+        from src.models import ZentaoBug
+        e = self._make_engine()
+        b = ZentaoBug(id=2, title="t", openedBuild="主干",
+                      steps="版本：2.3.34/8.1.4.1")
+        assert self._version(e, b) == "2.3.34"
+
+    def test_placeholder_whole_machine_label(self):
+        from src.models import ZentaoBug
+        e = self._make_engine()
+        b = ZentaoBug(id=3, title="t", openedBuild="主干",
+                      steps="整机版本：2.3.25")
+        assert self._version(e, b) == "2.3.25"
+
+    def test_placeholder_android_value_keeps_field(self):
+        from src.models import ZentaoBug
+        e = self._make_engine()
+        b = ZentaoBug(id=4, title="t", openedBuild="主干",
+                      steps="版本：安卓")
+        assert self._version(e, b) == "主干"  # 提取不到保留原值
+
+    def test_real_field_value_not_overridden(self):
+        """字段有实际版本（如"乐动版本V2.3.14"）时保持字段优先"""
+        from src.models import ZentaoBug
+        e = self._make_engine()
+        b = ZentaoBug(id=5, title="t", openedBuild="乐动版本V2.3.14",
+                      steps="软件版本：9.9.99")
+        assert self._version(e, b) == "乐动版本V2.3.14"

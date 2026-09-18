@@ -71,9 +71,14 @@ class CollaborativeLearning:
             return 0.0
 
     def _persist_last_sync_ts(self):
+        # 原子写：GUI 定时线程与配置对话框线程可能并发写同一状态文件，
+        # 直接覆写可能留下半截 JSON 导致时间戳丢失重走首次分支
         try:
-            with open(self._sync_state_path(), "w", encoding="utf-8") as f:
+            path = self._sync_state_path()
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"last_sync_ts": self._last_sync_time}, f)
+            os.replace(tmp, path)
         except OSError as e:
             logger.warning("协同学习同步时间持久化失败: %s", e)
 
@@ -244,17 +249,36 @@ class CollaborativeLearning:
                 if not rid:
                     passthrough.append(json.dumps(obj, ensure_ascii=False))
                     continue
-                ts = str(obj.get("feedback_at") or obj.get("created_at") or "")
+                key = self._ts_sort_key(obj)
                 normalized = json.dumps(obj, ensure_ascii=False)
                 prev = merged.get(rid)
                 if prev is None:
-                    merged[rid] = (ts, normalized)
+                    merged[rid] = (key, normalized)
                     order.append(rid)
-                elif ts > prev[0]:
-                    merged[rid] = (ts, normalized)
+                elif key > prev[0]:
+                    merged[rid] = (key, normalized)
 
         lines = [merged[rid][1] for rid in order] + passthrough
         return "\n".join(lines).encode("utf-8")
+
+    @staticmethod
+    def _ts_sort_key(obj: dict):
+        """冲突时间戳排序键：优先解析为 datetime（兼容 'T'/空格分隔、
+        非补零月份），解析失败退回字符串。
+
+        字符串直接比较在未补零（"2026-9-30" > "2026-10-01"）和
+        'T'/空格混用时（'T'=0x54 > ' '=0x20）会给出错误的新旧判断，
+        导致旧审核结论压过新结论。"""
+        ts = str(obj.get("feedback_at") or obj.get("created_at") or "")
+        try:
+            norm = ts.strip().replace(" ", "T", 1)
+            if norm.endswith("Z"):
+                norm = norm[:-1] + "+00:00"
+            dt = datetime.fromisoformat(norm)
+            # 统一去时区，避免 aware/naive 混比 TypeError
+            return (1, dt.replace(tzinfo=None))
+        except (ValueError, TypeError):
+            return (0, ts)
 
     def _merge_yaml(self, local_content: bytes, remote_content: bytes) -> bytes:
         """深度合并两份 YAML 反馈文件。
@@ -404,6 +428,10 @@ class CollaborativeLearning:
             self._persist_last_sync_ts()
             return True, f"已推送 {pushed_count} 个文件"
         if not messages:
+            # 无变更也是一次成功的同步检查：刷新时间戳，否则 interval
+            # 到期后每小时都会真跑一次 push（多个 GitHub GET）
+            self._last_sync_time = time.time()
+            self._persist_last_sync_ts()
             return True, "无变更需要推送"
         return False, "; ".join(messages)
 

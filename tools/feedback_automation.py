@@ -347,11 +347,30 @@ def main():
         yaml.dump(patch, f, allow_unicode=True, sort_keys=False)
     logger.info("补丁已保存到 %s", PATCH_FILE)
 
-    # 询问是否直接应用补丁
+    # 应用补丁需显式确认（--apply）：默认只生成补丁文件，不覆写知识库。
+    # 此前无确认直接覆写正式知识库（knowledge_rag 读取路径），且源文件
+    # 不存在时会写入只含补丁片段的半成品
+    import sys as _sys
+    if "--apply" not in _sys.argv:
+        logger.info("未加 --apply，仅生成补丁文件（确认无误后 re-run 并加 --apply）")
+        return
+    if not SOURCE_KB.exists():
+        logger.warning("源知识库不存在（%s），拒绝应用补丁以免写出半成品",
+                       SOURCE_KB)
+        return
+    import os as _os
+    import shutil
+    from datetime import datetime as _dt
+    backup = SOURCE_KB.with_name(
+        f"{SOURCE_KB.stem}.bak_{_dt.now():%Y%m%d_%H%M%S}.yaml")
+    shutil.copy2(SOURCE_KB, backup)
+    logger.info("知识库已备份: %s", backup)
     updated_kb = apply_patch_to_kb(source_kb, patch)
-    with open(SOURCE_KB, "w", encoding="utf-8") as f:
+    tmp = SOURCE_KB.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         yaml.dump(updated_kb, f, allow_unicode=True, sort_keys=False)
-    logger.info("补丁已自动应用到 %s", SOURCE_KB)
+    _os.replace(tmp, SOURCE_KB)  # 原子替换，避免中途失败写坏
+    logger.info("补丁已应用到 %s", SOURCE_KB)
 
 
 if __name__ == "__main__":

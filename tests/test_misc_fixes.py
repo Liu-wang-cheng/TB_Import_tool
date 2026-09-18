@@ -198,3 +198,36 @@ class TestCollabMergePolicy:
         remote = b'{"id": "y", "status": "approved"}\n'
         out = cl._merge_jsonl(local, remote).decode("utf-8")
         assert '"x"' in out and '"y"' in out
+
+
+class TestCollabTsCompare:
+    """合并冲突的时间戳比较：解析为 datetime（未补零/T 与空格混写）"""
+
+    def _cl(self):
+        from src.collaborative_learning import CollaborativeLearning
+        return CollaborativeLearning.__new__(CollaborativeLearning)
+
+    def test_unpadded_month_parsed_correctly(self):
+        """'2026-9-30' vs '2026-10-01'：字符串比较会误判 9 月更新，
+        解析后应取 10 月（右侧）的新结论"""
+        cl = self._cl()
+        local = (b'{"id": "c", "status": "rejected", '
+                 b'"created_at": "2026-01-01 00:00:00", '
+                 b'"feedback_at": "2026-9-30 10:00:00"}\n')
+        remote = (b'{"id": "c", "status": "approved", '
+                  b'"created_at": "2026-01-01 00:00:00", '
+                  b'"feedback_at": "2026-10-01 09:00:00"}\n')
+        out = cl._merge_jsonl(local, remote).decode("utf-8")
+        assert '"approved"' in out
+
+    def test_t_separator_not_inherently_newer(self):
+        """同日 'T' 格式（09:00）不比空格格式（10:00）新，本地更新应保留"""
+        cl = self._cl()
+        local = (b'{"id": "d", "status": "rejected", '
+                 b'"created_at": "2026-01-01 00:00:00", '
+                 b'"feedback_at": "2026-05-01 10:00:00"}\n')
+        remote = (b'{"id": "d", "status": "approved", '
+                  b'"created_at": "2026-01-01 00:00:00", '
+                  b'"feedback_at": "2026-05-01T09:00:00"}\n')
+        out = cl._merge_jsonl(local, remote).decode("utf-8")
+        assert '"rejected"' in out

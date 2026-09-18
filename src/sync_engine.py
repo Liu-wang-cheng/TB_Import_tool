@@ -1440,6 +1440,31 @@ class SyncEngine:
             logger.warning("添加关闭评论失败: %s", e)
         return True
 
+    def _verify_unverified_closed_bugs(self, bugs, failed_pids, mf_list):
+        """模块解析失败产品的关闭同步兜底：逐条取详情按 moduleName/module
+        比对（语义同主同步的逐条回退）。详情获取失败保守跳过——不关闭
+        未经模块验证的任务。"""
+        out = []
+        for b in bugs:
+            if getattr(b, "_src_pid", None) not in failed_pids:
+                out.append(b)
+                continue
+            try:
+                full = self.source.fetch_bug_detail(b.id)
+            except Exception as e:
+                logger.warning("[关闭同步] Bug#%s 详情获取失败，跳过: %s",
+                               b.id, e)
+                continue
+            id_match = any(p.isdigit() and str(full.module) == p
+                           for p in mf_list)
+            name_match = any(p in (full.moduleName or "") for p in mf_list)
+            if id_match or name_match:
+                out.append(b)
+            else:
+                logger.info("[关闭同步] Bug#%s 模块 '%s' 不匹配 '%s'，跳过",
+                            b.id, full.moduleName, self.module_filter)
+        return out
+
     def _run_close_sync_phase(self, stats: SyncStats, dry_run: bool,
                                progress_callback=None):
         """关闭同步阶段：独立查询已关闭的禅道Bug（不走指派人筛选），
@@ -1505,6 +1530,8 @@ class SyncEngine:
             except Exception as e:
                 logger.error("[关闭同步] 拉取失败 (ID=%s): %s", pid, e)
                 continue
+            for b in batch:
+                b._src_pid = pid  # 供模块解析部分失败时保留其缺陷
             closed_bugs.extend(batch)
         # 保序去重
         seen = set()
@@ -1531,13 +1558,22 @@ class SyncEngine:
                         self.source, [int(p) for p in pids], self.module_filter)
                 else:
                     combined, api_ok, failed_pids = set(), False, set()
-                if failed_pids:
-                    logger.warning("[关闭同步] 产品 %s 模块解析失败，"
-                                   "其已关闭缺陷可能被过滤漏关",
-                                   ",".join(str(p) for p in sorted(failed_pids)))
                 if api_ok:
-                    closed_bugs = [b for b in closed_bugs
-                                   if str(b.module) in combined]
+                    if failed_pids:
+                        # 与主同步一致：解析失败产品的已关闭缺陷保留，
+                        # 改为逐条取详情比对（关闭是写操作，宁多取详情验证）
+                        logger.warning(
+                            "[关闭同步] 产品 %s 模块解析失败，其缺陷保留并逐条比对",
+                            ",".join(str(p) for p in sorted(failed_pids)))
+                        closed_bugs = [
+                            b for b in closed_bugs
+                            if str(b.module) in combined
+                            or getattr(b, "_src_pid", None) in failed_pids]
+                        closed_bugs = self._verify_unverified_closed_bugs(
+                            closed_bugs, failed_pids, mf_list)
+                    else:
+                        closed_bugs = [b for b in closed_bugs
+                                       if str(b.module) in combined]
                     logger.info("[关闭同步] 模块 '%s' 命中 %d 个ID，过滤后 %d 条",
                                 self.module_filter, len(combined), len(closed_bugs))
                 else:
@@ -1838,20 +1874,39 @@ class SyncEngine:
         base_title = bug.get_base_title()
         if not base_title:
             return None
-        results = self.teambition.search_tasks(base_title)
-        for task in results:
-            if getattr(task, 'isArchived', False):
-                continue
-            if not self._match_project(task, self.project_name):
-                continue
-            task_base = task.get_base_title()
-            ratio = difflib.SequenceMatcher(
-                None, self._normalize(base_title),
-                self._normalize(task_base),
-            ).ratio()
-            if ratio >= self.dedup_threshold:
-                logger.info("模糊匹配命中 (%.2f): %s", ratio, task_base[:60])
-                return task
+        norm_base = self._normalize(base_title)
+        # 全文搜索按"词元全包含"召回（实测：标题加/删字即召回为 0）：
+        # 完整标题搜不到被改过的任务。两条约束防误判/防浪费：
+        # - 二次召回（头部子串）仅在首次"零有效候选"时启用；
+        # - 放宽召回可能拉进"同模板仅尾部差异"的无关任务，二次召回
+        #   要求更高的相似度（≥0.92）
+        keywords = [(base_title, self.dedup_threshold)]
+        head = re.split(r'[，,。.；;：:！!？?、\s]', base_title)[0].strip()
+        fallback = head[:25] if len(head) >= 8 else base_title[:15]
+        if len(fallback) >= 8 and fallback != base_title:
+            keywords.append((fallback, max(self.dedup_threshold, 0.92)))
+        for keyword, threshold in keywords:
+            results = self.teambition.search_tasks(keyword)
+            valid = [t for t in results
+                     if not getattr(t, 'isArchived', False)
+                     and self._match_project(t, self.project_name)]
+            for task in valid:
+                task_base = task.get_base_title()
+                # 外部TB源：内部任务标题带源标签前缀（如【323A-24】），
+                # 锚定剥掉一个前导标签对齐两侧文本（不动正文中的产品编号）
+                if self.source_type == "teambition":
+                    task_base = re.sub(r'^【[A-Za-z0-9]{1,10}-\d+】', '',
+                                       task_base)
+                ratio = difflib.SequenceMatcher(
+                    None, norm_base,
+                    self._normalize(task_base),
+                ).ratio()
+                if ratio >= threshold:
+                    logger.info("模糊匹配命中 (%.2f): %s", ratio, task_base[:60])
+                    return task
+            if valid:
+                # 首轮已有有效候选但均未达阈值：不再二次召回
+                break
         return None
 
     def _match_project(self, task, project_name: str) -> bool:
@@ -2174,18 +2229,23 @@ class SyncEngine:
                 "value": [category],
             })
         if self.cf_ids.get("version"):
-            version = bug.openedBuild or ""
-            # 当 API 未返回 openedBuild 时，从 steps 模板提取
-            if not version and self.extraction_enabled and bug.steps:
-                import re as _re
+            version = (bug.openedBuild or "").strip()
+            # "主干"等占位值不含实际版本信息，视为未填；用户反馈有的把
+            # 版本写在重现步骤里、字段却填"主干"，导致导入版本错误
+            placeholder = version.lower() in ("主干", "trunk", "无", "/", "-")
+            if (not version or placeholder) and self.extraction_enabled and bug.steps:
                 from src.extractor import clean_template_text
                 steps_clean = clean_template_text(bug.steps, strip_html=False)
-                m = _re.search(
-                    r'(?:软件版本|固件版本)[：:\s]*(\d+\.\d+(?:\.\d+)?)',
+                # 标签集合按真实数据扩充（软件/固件/整机/设备/应用/APP 版本、
+                # 纯"版本："）；取首个数字版本段（"2.3.34/8.1.4.1"→2.3.34，
+                # "软件版本：安卓"无数字自动跳过）
+                m = re.search(
+                    r'(?:软件|固件|整机|设备|应用|APP|app)?版本(?:号)?'
+                    r'[：:\s]*[Vv]?((?:\d+\.)+\d+)',
                     steps_clean)
                 if m:
                     version = m.group(1)
-            if version:
+            if version and version not in ("/", "-"):
                 fields.append({
                     "cfId": self.cf_ids["version"],
                     "value": [version],

@@ -19,17 +19,19 @@ APP_ID = os.getenv("TB_APP_ID", "")
 APP_SECRET = os.getenv("TB_APP_SECRET", "")
 
 if not APP_ID or not APP_SECRET:
-    # 尝试从项目 config 文件读取
+    # 尝试从项目 config 文件读取（切到项目根目录，configs/ 为相对路径）
     import sys
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, ROOT)
+    os.chdir(ROOT)
     try:
         from src.config_loader import load_configs
         cfg = load_configs()
         tb_cfg = cfg.get("teambition", {})
         APP_ID = tb_cfg.get("app_id", "")
         APP_SECRET = tb_cfg.get("app_secret", "")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[警告] 读取项目配置失败: {e}")
 
 auth_code_holder = {"code": None}
 event = threading.Event()

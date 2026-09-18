@@ -1,8 +1,8 @@
 {
-  "version": "2.8.8",
+  "version": "2.8.9",
   "sha256": "a1bcde133d074f89afe7a5e24cff512103b7db5a253a6151eafc28d6bbe2a970",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.8/SmartDefectPlatform.zip",
-  "release_date": "2026-09-11",
-  "release_notes": "v2.8.8 全面审查两轮修复（50+项）：关闭同步失败不再误报成功、查找任务增加三重校验；知识库配置层级与检索索引修复；外部TB多项目编号隔离与接线修复；严重程度字母S透传；协同学习定时推送与合并冲突修复；AI审核预算熔断与解析判定；DRC报告/钉钉/发布脚本修复；打包安全加固（.bak泄露修复+发布前校验）",
+  "release_date": "2026-09-18",
+  "release_notes": "v2.8.9 第三轮审查修复：版本提取修复（字段为\"主干\"时从重现步骤提取软件/整机/设备版本）；去重二次召回收紧（仅零候选启用+0.92阈值）+外部TB源标签对齐；协同学习时间戳解析比较与无变更刷新；审核预算下沉到拆分递归；关闭同步模块失败产品逐条比对；钉钉回调NameError修复+多产品列出；更新器ghfast误判直连修复；导出工具VLNS/CPAX双前缀过滤；指派人按白名单前缀清洗",
   "min_version": "1.0"
 }
