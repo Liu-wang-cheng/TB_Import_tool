@@ -33,6 +33,13 @@ class ZentaoClient:
         self._session_id: Optional[str] = None
         self._session_logged_in = False
         self._clean_url = None  # None=未检测, True=伪静态, False=index.php模式
+        # 下载路径偏好记忆：None=未探测（先试伪静态 clean URL）。
+        # 自建实例若不支持伪静态路由，首次探测失败并回退成功后续记
+        # "dynamic"，后续文件直接走可用路径，不再逐个文件白探一次
+        self._download_mode: Optional[str] = None
+        # session 下载认证失败缓存：token 可用但 session 不可用的实例上，
+        # 避免每个文件的每次下载尝试都重复发起必失败的 session 请求
+        self._session_auth_failed = False
         self._cloud_session_auth = False  # 禅道云版：用 session 代替 token 认证
         self._branch_id = 0  # 分支ID，云版 URL 解析时设置，自建版忽略
         self._http = requests.Session()
@@ -1497,40 +1504,74 @@ class ZentaoClient:
 
     # ── 文件下载 ──────────────────────────────────────
 
-    def _download_file(self, file_stem: str, timeout: int = 60) -> requests.Response:
+    @staticmethod
+    def _is_valid_file_response(resp) -> bool:
+        """响应是否为真实文件（排除登录页/错误 HTML）"""
+        if resp.status_code != 200:
+            return False
+        ct = resp.headers.get("Content-Type", "")
+        if "text/html" in ct:
+            return False
+        # 有些服务器不返回正确的 Content-Type，检查文件头魔数
+        head = (resp.content or b"")[:32].lstrip().lower()
+        if head.startswith(b"<!doctype") or head.startswith(b"<html"):
+            return False
+        return True
+
+    def _download_by_candidates(self, candidates: list,
+                                timeout: int = 60) -> requests.Response:
+        """按实例记忆的可用路径顺序尝试下载候选。
+
+        每实例首次先试伪静态 clean URL；若该实例不支持（自建版常见
+        404），回退成功后记住 "dynamic"，后续文件直接走可用路径。
+        只在最后一个候选失败时告警，中间候选的探测失败仅记 debug，
+        避免"回退成功却打出 文件下载失败"的误导性 WARNING。
+        """
+        paths = list(candidates)
+        mode = getattr(self, "_download_mode", None)
+        if mode == "dynamic":
+            paths.sort(key=lambda p: 0 if "index.php" in p else 1)
+        elif mode == "clean":
+            paths.sort(key=lambda p: 0 if "index.php" not in p else 1)
+        last = None
+        for i, path in enumerate(paths):
+            last = self._download_file(
+                path, timeout=timeout,
+                warn_on_fail=(i == len(paths) - 1))
+            if self._is_valid_file_response(last):
+                self._download_mode = (
+                    "dynamic" if "index.php" in path else "clean")
+                return last
+        return last
+
+    def _download_file(self, file_stem: str, timeout: int = 60,
+                       warn_on_fail: bool = True) -> requests.Response:
         """下载文件，依次尝试 cookie / session / token / login-session / 无认证
         file_stem: 不含 base_url 的相对路径（由调用方通过 _build_url 构建）
+        warn_on_fail: 是否在最终失败时打 WARNING（中间候选探测传 False）
         """
         # 云版：cookie 认证
         if self._cloud_session_auth:
             return self._http.get(f"{self.base_url}/{file_stem}", timeout=timeout)
 
-        def _is_valid(resp):
-            """验证响应是真实文件而非登录页面或其他HTML"""
-            if resp.status_code != 200:
-                return False
-            ct = resp.headers.get("Content-Type", "")
-            if "text/html" in ct:
-                return False
-            # 有些服务器不返回正确的 Content-Type，检查文件头魔数
-            if resp.content[:15] == b"<!DOCTYPE html>":
-                return False
-            return True
-
         # 自建版：依次尝试多种认证方式
         tried = []
-        # 1) /api-getsessionid 获取 session
-        try:
-            self._ensure_session()
-            if self._session_id:
-                resp = self._http.get(
-                    f"{self.base_url}/{file_stem}",
-                    params={"zentaosid": self._session_id}, timeout=timeout)
-                if _is_valid(resp):
-                    return resp
-                tried.append(f"session={resp.status_code}")
-        except ZentaoAPIError:
-            tried.append("session=fail")
+        # 1) /api-getsessionid 获取 session（失败一次后本实例内不再重试）
+        if getattr(self, "_session_auth_failed", False):
+            tried.append("session=skip")
+        else:
+            try:
+                self._ensure_session()
+                if self._session_id:
+                    resp = self._http.get(
+                        f"{self.base_url}/{file_stem}",
+                        params={"zentaosid": self._session_id}, timeout=timeout)
+                    if self._is_valid_file_response(resp):
+                        return resp
+                    tried.append(f"session={resp.status_code}")
+            except ZentaoAPIError:
+                self._session_auth_failed = True
+                tried.append("session=fail")
 
         # 2) token 认证
         self._ensure_token()
@@ -1538,7 +1579,7 @@ class ZentaoClient:
             resp = self._http.get(
                 f"{self.base_url}/{file_stem}",
                 headers={"Token": self._token}, timeout=timeout)
-            if _is_valid(resp):
+            if self._is_valid_file_response(resp):
                 return resp
             tried.append(f"token={resp.status_code}")
 
@@ -1557,7 +1598,7 @@ class ZentaoClient:
                 if login_resp2.status_code == 200:
                     resp = self._http.get(
                         f"{self.base_url}/{file_stem}", timeout=timeout)
-                    if _is_valid(resp):
+                    if self._is_valid_file_response(resp):
                         return resp
                     tried.append(f"login-session={resp.status_code}")
         except Exception:
@@ -1565,19 +1606,18 @@ class ZentaoClient:
 
         # 4) 无认证兜底
         resp = self._http.get(f"{self.base_url}/{file_stem}", timeout=timeout)
-        if resp.status_code != 200:
-            logger.warning("文件下载失败 %s (尝试: %s)", file_stem, ", ".join(tried))
+        if not self._is_valid_file_response(resp):
+            log = logger.warning if warn_on_fail else logger.debug
+            log("文件下载失败 %s (尝试: %s)", file_stem, ", ".join(tried))
         return resp
 
     def download_attachment(self, file_id: int,
                             filename: str = "") -> AttachmentFile:
-        # 优先 clean URL，失败回退动态路径
+        # 路径顺序按实例记忆：首次试 clean URL，不支持则回退动态并记住
         clean_path = f"file-download-{file_id}.html"
         dynamic_path = f"index.php?m=file&f=download&fileID={file_id}"
-        resp = self._download_file(clean_path)
-        if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
-            resp = self._download_file(dynamic_path)
-        if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
+        resp = self._download_by_candidates([clean_path, dynamic_path])
+        if not self._is_valid_file_response(resp):
             raise ZentaoAPIError(resp.status_code, "下载附件失败",
                                  f"/file-download-{file_id}")
 
@@ -1607,20 +1647,30 @@ class ZentaoClient:
             if fid in self._file_name_cache:
                 return self._file_name_cache[fid]
         name = ""
+        # clean URL 与动态路径都试（自建实例可能不支持伪静态路由，
+        # 只探 clean 会拿不到真实文件名，占位符会退化成 image_{id}.png）
+        paths = [f"file-download-{fid}.html",
+                 f"index.php?m=file&f=download&fileID={fid}"]
+        if getattr(self, "_download_mode", None) == "dynamic":
+            paths.reverse()
         try:
             if self._cloud_session_auth:
                 self._ensure_session()
-            resp = self._http.get(
-                f"{self.base_url}/file-download-{fid}.html",
-                stream=True, timeout=20)
-            if resp.status_code == 200:
-                cd = resp.headers.get("Content-Disposition", "")
-                match = re.search(
-                    r'filename\*?=(?:UTF-8\'\')?"?([^";\n]+)"?',
-                    cd, re.IGNORECASE)
-                if match:
-                    name = match.group(1)
-            resp.close()
+            for path in paths:
+                resp = self._http.get(f"{self.base_url}/{path}",
+                                      stream=True, timeout=20)
+                try:
+                    if resp.status_code == 200:
+                        cd = resp.headers.get("Content-Disposition", "")
+                        match = re.search(
+                            r'filename\*?=(?:UTF-8\'\')?"?([^";\n]+)"?',
+                            cd, re.IGNORECASE)
+                        if match:
+                            name = match.group(1)
+                finally:
+                    resp.close()
+                if name:
+                    break
         except Exception as e:
             logger.warning("探测文件 %s 名称失败: %s", fid, e)
         with self._file_name_cache_lock:
@@ -1630,20 +1680,16 @@ class ZentaoClient:
         return name
 
     def download_image(self, file_id: int) -> AttachmentFile:
-        # 优先用 file-download clean URL（与 download_attachment 一致），
-        # 该接口返回 Content-Disposition 携带真实文件名；
-        # 失败回退到 file-read（预览接口）作为兜底
+        # 候选顺序按实例记忆：file-download clean URL → 动态路径 →
+        # file-read（预览接口）兜底
         clean_path = f"file-download-{file_id}.html"
         dynamic_path = f"index.php?m=file&f=download&fileID={file_id}"
-        resp = self._download_file(clean_path)
-        if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
-            resp = self._download_file(dynamic_path)
-        if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
-            read_path = f"file-read-{file_id}.html"
-            resp = self._download_file(read_path)
-            if resp.status_code != 200 or resp.content[:15] == b"<!DOCTYPE html>":
-                raise ZentaoAPIError(resp.status_code, "下载图片失败",
-                                     f"/file-download-{file_id}")
+        read_path = f"file-read-{file_id}.html"
+        resp = self._download_by_candidates(
+            [clean_path, dynamic_path, read_path])
+        if not self._is_valid_file_response(resp):
+            raise ZentaoAPIError(resp.status_code, "下载图片失败",
+                                 f"/file-download-{file_id}")
         # 从文件头魔数检测真实图片格式，避免硬编码 .png 导致 TB 显示异常
         ext, mime = ZentaoClient._detect_image_format(resp.content)
         content_type = resp.headers.get("Content-Type", "")

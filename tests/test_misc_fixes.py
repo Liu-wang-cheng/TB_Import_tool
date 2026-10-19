@@ -231,3 +231,66 @@ class TestCollabTsCompare:
                   b'"feedback_at": "2026-05-01T09:00:00"}\n')
         out = cl._merge_jsonl(local, remote).decode("utf-8")
         assert '"rejected"' in out
+
+
+class TestDownloadPathPreference:
+    """下载路径偏好记忆：clean URL 不支持时首次回退后记住动态路径，
+    后续文件不再逐个白探；中间候选失败只记 debug（此前每次都打误导性 WARNING）"""
+
+    def _client(self):
+        from src.zentao_client import ZentaoClient
+        c = ZentaoClient.__new__(ZentaoClient)
+        c._download_mode = None
+        return c
+
+    @staticmethod
+    def _resp(status, content=b""):
+        from types import SimpleNamespace
+        return SimpleNamespace(status_code=status, content=content,
+                               headers={"Content-Type": "video/mp4"})
+
+    def test_falls_back_then_prefers_dynamic(self):
+        c = self._client()
+        calls = []
+
+        def fake_dl(path, timeout=60, warn_on_fail=True):
+            calls.append((path, warn_on_fail))
+            if "index.php" in path:
+                return self._resp(200, b"data" * 20)
+            return self._resp(404)
+
+        c._download_file = fake_dl
+        clean = "file-download-1.html"
+        dyn = "index.php?m=file&f=download&fileID=1"
+        r = c._download_by_candidates([clean, dyn])
+        assert c._is_valid_file_response(r)
+        assert [p for p, _ in calls] == [clean, dyn]
+        assert c._download_mode == "dynamic"
+        # 第二次下载：动态路径优先，不再先探 clean
+        calls.clear()
+        c._download_by_candidates([clean, dyn])
+        assert calls[0][0] == dyn
+
+    def test_intermediate_candidate_not_warned(self):
+        c = self._client()
+        flags = []
+
+        def fake_dl(path, timeout=60, warn_on_fail=True):
+            flags.append((path, warn_on_fail))
+            return (self._resp(404) if "index.php" not in path
+                    else self._resp(200, b"data" * 20))
+
+        c._download_file = fake_dl
+        c._download_by_candidates(
+            ["file-download-1.html", "index.php?m=file&f=download&fileID=1"])
+        assert flags[0] == ("file-download-1.html", False)  # 探测失败不告警
+        assert flags[1][1] is True                           # 最后候选才告警
+
+    def test_valid_file_response_rejects_html(self):
+        c = self._client()
+        assert c._is_valid_file_response(
+            self._resp(200, b"  <html><body>login</body>")) is False
+        assert c._is_valid_file_response(
+            self._resp(200, b"<!DOCTYPE html><html>")) is False
+        assert c._is_valid_file_response(
+            self._resp(200, b"\x89PNG\r\n\x1a\n" + b"x" * 40)) is True

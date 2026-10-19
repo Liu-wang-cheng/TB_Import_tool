@@ -26,6 +26,7 @@ from gui.workers import (
     AuthTestWorker, CollabAutoSyncWorker, ListBugsWorker, SyncWorker,
     UpdateCheckWorker, UpdateDownloadWorker,
 )
+from gui.ui_profiles import load_profiles, save_profile
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,8 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._load_style()
         self._load_config()
+        # 方案下拉框：只加载列表，不自动应用任何方案
+        self._refresh_ui_profiles()
 
         # 启动后延迟检查更新（非阻塞）
         from gui.qt_compat import QTimer
@@ -167,6 +170,26 @@ class MainWindow(QMainWindow):
         self.platform_arrow.setStyleSheet("color: #666; font-weight: bold;")
         platform_row.addWidget(self.platform_arrow)
         platform_row.addStretch()
+
+        # 界面方案：下拉选择即恢复；保存按钮弹窗命名（本行最右侧）
+        self.cmb_ui_profile = QComboBox()
+        self.cmb_ui_profile.setMinimumWidth(150)
+        self.cmb_ui_profile.setMaximumWidth(220)
+        self.cmb_ui_profile.setToolTip("选择已保存的界面方案，立即恢复对应参数")
+        self.cmb_ui_profile.currentIndexChanged.connect(
+            self._on_ui_profile_selected)
+        platform_row.addWidget(self.cmb_ui_profile)
+
+        self.btn_save_profile = QPushButton("保存方案")
+        self.btn_save_profile.setFixedSize(76, 28)
+        self.btn_save_profile.setStyleSheet(
+            "QPushButton { padding: 2px; font-size: 12px; border-radius: 3px; }"
+        )
+        self.btn_save_profile.setToolTip(
+            "保存当前产品ID/模块ID/状态/指派人/服务器地址/账号密码为方案")
+        self.btn_save_profile.clicked.connect(self._on_save_profile)
+        platform_row.addWidget(self.btn_save_profile)
+
         grid.addLayout(platform_row)
 
         # 第0行：URL 自动解析
@@ -1021,6 +1044,220 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(display_name)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
             item.setCheckState(Qt.Checked if name in checked_set else Qt.Unchecked)
+            self.filter_assigned.addItem(item)
+        self.filter_assigned.blockSignals(False)
+        self._update_toggle_btn_text()
+
+    # ── 界面方案配置 ──────────────────────────────────
+
+    def _ui_profiles_path(self) -> str:
+        """方案文件路径：data/ 下（gitignore 且不进发布包）"""
+        return os.path.join(self._project_root, "data", "ui_profiles.yaml")
+
+    def _refresh_ui_profiles(self, select_name: str = None):
+        """从磁盘重载方案列表并刷新下拉框（不自动应用）"""
+        self._ui_profiles = load_profiles(self._ui_profiles_path())
+        self.cmb_ui_profile.blockSignals(True)
+        self.cmb_ui_profile.clear()
+        self.cmb_ui_profile.addItem("（选择方案载入…）")
+        for p in self._ui_profiles:
+            self.cmb_ui_profile.addItem(p.get("name", ""))
+        if select_name:
+            idx = self.cmb_ui_profile.findText(select_name)
+            self.cmb_ui_profile.setCurrentIndex(idx if idx > 0 else 0)
+        else:
+            self.cmb_ui_profile.setCurrentIndex(0)
+        self.cmb_ui_profile.blockSignals(False)
+
+    def _ui_profile_widgets(self) -> list:
+        """方案序列化控件清单：(key, widget, kind)
+
+        kind: text / text_sel / index / bool / date / time / bools
+        覆盖界面上的全部配置项；新增配置控件时在此补一行即可。
+        """
+        return [
+            ("url", self.filter_url, "text"),
+            ("product", self.filter_product, "text"),
+            ("module", self.filter_module, "text"),
+            ("status", self.filter_status, "text_sel"),
+            ("date_mode", self.filter_date_mode, "text_sel"),
+            ("date_from", self.filter_date_from, "date"),
+            ("date_to", self.filter_date_to, "date"),
+            ("reopen", self.chk_reopen, "bool"),
+            ("base_url", self.edit_zentao_base_url, "text"),
+            ("account", self.edit_zentao_account, "text"),
+            ("password", self.edit_zentao_password, "text"),
+            ("executor_mode", self.cmb_executor_mode, "index"),
+            ("executor_name", self.edit_executor_name, "text"),
+            ("tb_creator", self.edit_tb_creator, "text"),
+            ("tb_creator_id", self.edit_tb_creator_id, "text"),
+            ("tb_participants", self.edit_tb_participants, "text"),
+            ("tb_belong_project", self.edit_tb_belong_project, "text"),
+            ("ai_analysis", self.chk_ai_analysis, "bool"),
+            ("fault_pattern", self.chk_fault_pattern, "bool"),
+            ("specialized_prompt", self.chk_specialized_prompt, "bool"),
+            ("knowledge_base", self.chk_knowledge_base, "bool"),
+            ("scheduled", self.chk_scheduled, "bool"),
+            ("schedule_time", self.time_schedule, "time"),
+            ("scheduled_notify", self.chk_scheduled_notify, "bool"),
+            ("time2_enabled", self.chk_time2, "bool"),
+            ("schedule_time2", self.time_schedule2, "time"),
+            ("schedule_mode", self.cmb_schedule_mode, "index"),
+            ("schedule_days", self.chk_weekdays, "bools"),
+        ]
+
+    @staticmethod
+    def _ui_profile_widget_get(widget, kind):
+        if kind == "text":
+            return widget.text()
+        if kind == "text_sel":
+            return widget.currentText()
+        if kind == "index":
+            return widget.currentIndex()
+        if kind == "bool":
+            return widget.isChecked()
+        if kind == "time":
+            return widget.time().toString("HH:mm")
+        if kind == "date":
+            d = widget.date()
+            return "" if d == widget.minimumDate() else d.toString("yyyy-MM-dd")
+        if kind == "bools":
+            return [c.isChecked() for c in widget]
+        return None
+
+    @staticmethod
+    def _ui_profile_widget_set(widget, kind, value):
+        if kind == "text":
+            widget.setText(str(value or ""))
+        elif kind == "text_sel":
+            idx = widget.findText(str(value or ""))
+            if idx >= 0:
+                widget.setCurrentIndex(idx)
+        elif kind == "index":
+            try:
+                idx = int(value)
+            except (TypeError, ValueError):
+                idx = 0
+            widget.setCurrentIndex(max(0, min(idx, widget.count() - 1)))
+        elif kind == "bool":
+            widget.setChecked(bool(value))
+        elif kind == "time":
+            t = QTime.fromString(str(value or ""), "HH:mm")
+            if t.isValid():
+                widget.setTime(t)
+        elif kind == "date":
+            s = str(value or "")
+            if not s:
+                widget.setDate(widget.minimumDate())
+            else:
+                d = QDate.fromString(s, "yyyy-MM-dd")
+                if d.isValid():
+                    widget.setDate(d)
+        elif kind == "bools":
+            for chk, v in zip(widget, value or []):
+                chk.setChecked(bool(v))
+
+    def _collect_ui_profile(self, name: str) -> dict:
+        """把当前界面全部配置项快照为方案字典"""
+        assignees = []
+        for i in range(self.filter_assigned.count()):
+            item = self.filter_assigned.item(i)
+            if item.checkState() == Qt.Checked:
+                assignees.append(item.text())
+        fields = {}
+        for key, widget, kind in self._ui_profile_widgets():
+            fields[key] = self._ui_profile_widget_get(widget, kind)
+        fields["assignees"] = assignees
+        return {
+            "name": name,
+            "platform": ("teambition"
+                         if self.filter_platform.currentIndex() == 1
+                         else "zentao"),
+            "fields": fields,
+        }
+
+    def _on_save_profile(self):
+        from gui.qt_compat import QInputDialog
+        name, ok = QInputDialog.getText(self, "保存方案", "方案名称:")
+        if not ok:
+            return
+        name = (name or "").strip()
+        if not name:
+            return
+        exists = any(p.get("name") == name
+                     for p in getattr(self, "_ui_profiles", []))
+        if exists:
+            ret = QMessageBox.question(
+                self, "覆盖方案",
+                f"方案「{name}」已存在，是否覆盖？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                return
+        if save_profile(self._ui_profiles_path(),
+                        self._collect_ui_profile(name)):
+            self._refresh_ui_profiles(select_name=name)
+            self._log(f"[方案] 已保存: {name}")
+        else:
+            QMessageBox.warning(self, "保存失败", "方案写入失败，请查看日志")
+
+    def _on_ui_profile_selected(self, index: int):
+        profiles = getattr(self, "_ui_profiles", [])
+        if index <= 0 or index - 1 >= len(profiles):
+            return
+        profile = profiles[index - 1]
+        self._apply_ui_profile(profile)
+        self._log(f"[方案] 已恢复: {profile.get('name')}")
+
+    def _apply_ui_profile(self, profile: dict):
+        """恢复全部界面配置项。
+
+        普通筛选/连接参数只回填界面（随后续保存/同步按既有流程落盘）；
+        行为开关（重新打开/AI 各开关/定时同步）走各自的持久化处理器，
+        与手动切换一致，保证重启后仍生效。
+        """
+        fields = profile.get("fields") or {}
+        plat_idx = 1 if profile.get("platform") == "teambition" else 0
+        if self.filter_platform.currentIndex() != plat_idx:
+            # 走正常平台切换逻辑（标签、控件显隐、字段加载），随后整体覆盖
+            self.filter_platform.setCurrentIndex(plat_idx)
+
+        widgets = self._ui_profile_widgets()
+        targets = [w for _, w, _ in widgets if not isinstance(w, list)]
+        targets += list(self.chk_weekdays)
+        for w in targets:
+            w.blockSignals(True)
+        try:
+            for key, widget, kind in widgets:
+                if key in fields:
+                    self._ui_profile_widget_set(widget, kind, fields[key])
+        finally:
+            for w in targets:
+                w.blockSignals(False)
+        self._restore_profile_assignees(fields.get("assignees") or [])
+
+        # 统一触发一次联动与行为开关持久化（信号恢复期间已屏蔽）
+        self._on_executor_mode_changed(self.cmb_executor_mode.currentIndex())
+        self._on_date_mode_changed(self.filter_date_mode.currentIndex())
+        self._save_reopen_switch()
+        self._on_ai_switch_changed(self.chk_ai_analysis.checkState())
+        self._on_scheduled_switch_changed()
+        self._on_time2_changed()
+        self._on_schedule_mode_changed()
+
+    def _restore_profile_assignees(self, names):
+        """按方案恢复指派人勾选列表"""
+        self.filter_assigned.blockSignals(True)
+        self.filter_assigned.clear()
+        seen = set()
+        for name in names:
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            item = QListWidgetItem(name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable
+                          | Qt.ItemIsEditable)
+            item.setCheckState(Qt.Checked)
             self.filter_assigned.addItem(item)
         self.filter_assigned.blockSignals(False)
         self._update_toggle_btn_text()
