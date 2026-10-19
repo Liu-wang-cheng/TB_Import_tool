@@ -1,8 +1,8 @@
 {
   "version": "2.8.10",
-  "sha256": "01c63190e9bc7b43c911c59993a9e17771dff8f832010e51b9402aa5144e024a",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.9/SmartDefectPlatform.zip",
-  "release_date": "2026-09-18",
+  "sha256": "3606f6f92d3a0bad90a933cc2c3b0f295feccf19b009221ab223d0aaec764af1",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.10/SmartDefectPlatform.zip",
+  "release_date": "2026-10-19",
   "release_notes": "v2.8.10 新增：界面方案保存/恢复（源平台行右侧，保存全部界面配置项：服务器/账号密码、产品模块、状态、指派人、日期、TB执行人、AI开关、定时同步等，下拉选择即恢复；方案仅存本地不入发布包）。修复：禅道附件下载在未启用伪静态的实例上每次先探测 clean URL 失败刷告警——现记忆实例可用路径（动态优先）、session 失败缓存、中间探测不再误报；内联图片真实文件名探测支持动态路径",
   "min_version": "1.0"
 }
