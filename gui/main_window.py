@@ -28,6 +28,7 @@ from gui.workers import (
 )
 from gui.ui_profiles import (
     load_profiles, save_profile, resolve_profiles, format_profiles_summary,
+    load_last_selected, save_last_selected,
 )
 
 logger = logging.getLogger(__name__)
@@ -1079,6 +1080,9 @@ class MainWindow(QMainWindow):
         self.cmb_ui_profile.addItem("（选择方案载入…）")
         for p in self._ui_profiles:
             self.cmb_ui_profile.addItem(p.get("name", ""))
+        # 默认恢复上次选择的方案（仅恢复下拉选中状态，不重复应用）
+        if select_name is None:
+            select_name = load_last_selected(self._ui_profiles_path())
         if select_name:
             idx = self.cmb_ui_profile.findText(select_name)
             self.cmb_ui_profile.setCurrentIndex(idx if idx > 0 else 0)
@@ -1213,6 +1217,12 @@ class MainWindow(QMainWindow):
                 return
         if save_profile(self._ui_profiles_path(),
                         self._collect_ui_profile(name)):
+            # 新保存的方案即当前方案：记住选择并落盘当前界面配置
+            save_last_selected(self._ui_profiles_path(), name)
+            try:
+                self._save_config_to_yaml()
+            except Exception as e:
+                logger.warning("保存方案配置失败: %s", e)
             self._refresh_ui_profiles(select_name=name)
             self._log(f"[方案] 已保存: {name}")
         else:
@@ -1224,6 +1234,12 @@ class MainWindow(QMainWindow):
             return
         profile = profiles[index - 1]
         self._apply_ui_profile(profile)
+        # 记住选择并立即落盘：下次打开时恢复该方案并加载一致配置
+        save_last_selected(self._ui_profiles_path(), profile.get("name", ""))
+        try:
+            self._save_config_to_yaml()
+        except Exception as e:
+            logger.warning("保存方案配置失败: %s", e)
         self._log(f"[方案] 已恢复: {profile.get('name')}")
 
     # 方案中的定时同步配置项：定时任务按方案执行时必须跳过，

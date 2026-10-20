@@ -273,14 +273,19 @@ class TestMainWindowProfile:
             mw, {"name": "TB", "platform": "teambition", "fields": {}})
         mw.filter_platform.setCurrentIndex.assert_called_once_with(1)
 
-    def test_selected_ignores_placeholder(self):
+    def test_selected_ignores_placeholder(self, monkeypatch):
+        from gui import main_window as mw_mod
         from gui.main_window import MainWindow
+        saved = MagicMock()
+        monkeypatch.setattr(mw_mod, "save_last_selected", saved)
         mw = MagicMock()
         mw._ui_profiles = [{"name": "A"}, {"name": "B"}]
         MainWindow._on_ui_profile_selected(mw, 0)   # 占位项
         mw._apply_ui_profile.assert_not_called()
+        saved.assert_not_called()
         MainWindow._on_ui_profile_selected(mw, 2)   # 第二个方案
         mw._apply_ui_profile.assert_called_once_with({"name": "B"})
+        saved.assert_called_once()
         mw._log.assert_called_once()
 
     def test_refresh_loads_names_without_auto_apply(self, tmp_path,
@@ -589,3 +594,73 @@ class TestScheduledProfilesLoad:
         mw._update_schedule_profiles_button = MagicMock()
         MainWindow._load_scheduled_config(mw)
         assert mw._schedule_profiles == []
+
+
+class TestRememberLastSelected:
+    """记住上次选择：选择后持久化，重新打开下拉框恢复选中"""
+
+    def test_save_and_load_last_selected_preserves_profiles(self, tmp_path):
+        from gui.ui_profiles import (
+            save_profile, save_last_selected, load_last_selected,
+            load_profiles,
+        )
+        path = str(tmp_path / "p.yaml")
+        save_profile(path, {"name": "A", "platform": "zentao", "fields": {}})
+        assert save_last_selected(path, "A") is True
+        assert load_last_selected(path) == "A"
+        assert [p["name"] for p in load_profiles(path)] == ["A"]
+        # 再次保存方案不得丢掉 last_selected
+        save_profile(path, {"name": "B", "platform": "zentao", "fields": {}})
+        assert load_last_selected(path) == "A"
+        assert [p["name"] for p in load_profiles(path)] == ["A", "B"]
+
+    def test_missing_file_last_selected_empty(self, tmp_path):
+        from gui.ui_profiles import load_last_selected
+        assert load_last_selected(str(tmp_path / "none.yaml")) == ""
+
+    def test_selecting_profile_remembered_and_config_saved(self, monkeypatch):
+        from gui import main_window as mw_mod
+        from gui.main_window import MainWindow
+        saved = MagicMock()
+        monkeypatch.setattr(mw_mod, "save_last_selected", saved)
+        mw = MagicMock()
+        mw._ui_profiles = [{"name": "A"}, {"name": "B"}]
+        MainWindow._on_ui_profile_selected(mw, 1)
+        mw._apply_ui_profile.assert_called_once_with({"name": "A"})
+        saved.assert_called_once()
+        assert saved.call_args[0][1] == "A"
+        mw._save_config_to_yaml.assert_called_once()
+
+    def test_refresh_restores_last_selected(self, tmp_path, monkeypatch):
+        from gui import main_window as mw_mod
+        from gui.main_window import MainWindow
+
+        class _Combo:
+            def __init__(self):
+                self.items = []
+                self.idx = None
+
+            def blockSignals(self, flag):
+                pass
+
+            def clear(self):
+                self.items = []
+
+            def addItem(self, text):
+                self.items.append(text)
+
+            def findText(self, text):
+                return self.items.index(text) if text in self.items else -1
+
+            def setCurrentIndex(self, idx):
+                self.idx = idx
+
+        mw = MagicMock()
+        mw._ui_profiles_path.return_value = str(tmp_path / "p.yaml")
+        mw.cmb_ui_profile = _Combo()
+        monkeypatch.setattr(mw_mod, "load_profiles",
+                            lambda p: [{"name": "方案A"}, {"name": "方案B"}])
+        monkeypatch.setattr(mw_mod, "load_last_selected", lambda p: "方案B")
+        MainWindow._refresh_ui_profiles(mw)     # 不传 select_name
+        assert mw.cmb_ui_profile.idx == 2       # 占位(0) + A(1) + B(2)
+        mw._apply_ui_profile.assert_not_called()  # 只恢复选中，不重复应用
