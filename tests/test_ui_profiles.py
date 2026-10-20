@@ -377,3 +377,215 @@ class TestSaveProfileFlow:
         box.question.return_value = box.Yes
         MainWindow._on_save_profile(mw)
         assert load_profiles(path)[0]["fields"] == {"product": "11"}
+
+
+class TestScheduleProfileHelpers:
+    """定时方案辅助：按名解析（保序/缺失）与按钮摘要文本"""
+
+    def test_resolve_profiles_order_and_missing(self):
+        from gui.ui_profiles import resolve_profiles
+        all_p = [{"name": "A"}, {"name": "B"}, {"name": "C"}]
+        found, missing = resolve_profiles(all_p, ["C", "X", "A"])
+        assert [p["name"] for p in found] == ["C", "A"]
+        assert missing == ["X"]
+        found2, missing2 = resolve_profiles(all_p, [])
+        assert found2 == [] and missing2 == []
+
+    def test_format_profiles_summary(self):
+        from gui.ui_profiles import format_profiles_summary
+        assert format_profiles_summary([]) == "（按当前界面配置）"
+        assert format_profiles_summary(["A", "B"]) == "A → B"
+        long = format_profiles_summary(["方案" + str(i) for i in range(10)], 12)
+        assert len(long) <= 12 and long.endswith("…")
+
+
+class TestApplySkipScheduleFields:
+    """定时任务按方案执行时：方案里的定时同步项必须被跳过"""
+
+    def test_skip_schedule_fields(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw._ui_profile_widget_set = MainWindow._ui_profile_widget_set
+        mw._SCHEDULE_FIELD_KEYS = MainWindow._SCHEDULE_FIELD_KEYS
+        mw.chk_weekdays = []
+        product = _FakeLine("old")
+        sched_chk = _FakeCheck(True)      # 当前正在启用的定时
+        sched_time = _FakeTime("09:00")
+        mw._ui_profile_widgets = lambda: [
+            ("product", product, "text"),
+            ("scheduled", sched_chk, "bool"),
+            ("schedule_time", sched_time, "time"),
+        ]
+        mw.filter_platform.currentIndex.return_value = 0
+        mw.cmb_executor_mode.currentIndex.return_value = 0
+        mw.filter_date_mode.currentIndex.return_value = 0
+        mw.chk_ai_analysis.checkState.return_value = Qt.Unchecked
+        profile = {"name": "P", "platform": "zentao", "fields": {
+            "product": "20", "scheduled": False, "schedule_time": "18:30"}}
+
+        MainWindow._apply_ui_profile(mw, profile, skip_schedule_fields=True)
+        assert product.text() == "20"
+        assert sched_chk.isChecked() is True          # 定时开关未被方案覆盖
+        assert sched_time.time().toString("HH:mm") == "09:00"
+        mw._on_scheduled_switch_changed.assert_not_called()
+        mw._on_time2_changed.assert_not_called()
+        mw._on_schedule_mode_changed.assert_not_called()
+        mw._on_ai_switch_changed.assert_called_once()  # 业务开关仍按方案生效
+
+
+class TestScheduledProfileChain:
+    """多方案定时导入：按顺序执行、失败继续、结束后恢复运行前界面"""
+
+    def _mw(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw._scheduled_chain = None
+        mw._schedule_profiles = []
+        mw._ui_profiles_path.return_value = "/tmp/none.yaml"
+        mw._worker = None
+        mw.log_text = MagicMock()
+        mw.status_label = MagicMock()
+        mw.progress_bar = MagicMock()
+        mw.chk_scheduled_notify.isChecked.return_value = False
+        mw._apply_filters_to_config = MagicMock()
+        mw._apply_ui_profile = MagicMock()
+        mw._collect_ui_profile.return_value = {"name": "__pre_schedule__"}
+        mw._start_worker.return_value = True
+        mw._worker_finished = MagicMock()
+        mw._save_config_to_yaml = MagicMock()
+        mw._set_busy = MagicMock()
+        # 用真实实现驱动执行链
+        mw._run_next_scheduled_profile = (
+            lambda: MainWindow._run_next_scheduled_profile(mw))
+        mw._finish_scheduled_chain = (
+            lambda: MainWindow._finish_scheduled_chain(mw))
+        return mw
+
+    def test_profiles_run_in_order_then_restore(self, monkeypatch):
+        from gui import main_window as mw_mod
+        from gui.main_window import MainWindow
+        mw = self._mw()
+        profiles = [
+            {"name": "A", "platform": "zentao", "fields": {"product": "11"}},
+            {"name": "B", "platform": "teambition", "fields": {"module": "p1"}},
+        ]
+        monkeypatch.setattr(mw_mod, "load_profiles", lambda p: profiles)
+        monkeypatch.setattr(mw_mod, "SyncWorker", MagicMock())
+        mw._schedule_profiles = ["A", "B"]
+
+        assert MainWindow._run_scheduled_sync(mw) is True
+        assert mw._scheduled_chain is not None
+        assert mw._scheduled_chain["total"] == 2
+        mw._apply_ui_profile.assert_called_with(
+            profiles[0], skip_schedule_fields=True)
+        assert mw._start_worker.call_count == 1
+        assert mw.status_label.setText.called
+
+        # 第一个方案完成 → 自动执行第二个
+        MainWindow._on_scheduled_profile_result(mw, "A: 新建 1")
+        mw._apply_ui_profile.assert_called_with(
+            profiles[1], skip_schedule_fields=True)
+        assert mw._start_worker.call_count == 2
+
+        # 第二个完成 → 收尾：恢复运行前快照
+        MainWindow._on_scheduled_profile_result(mw, "B: 新建 2")
+        assert mw._scheduled_chain is None
+        mw._apply_ui_profile.assert_called_with(
+            {"name": "__pre_schedule__"}, skip_schedule_fields=True)
+        mw._save_config_to_yaml.assert_called_once()
+        logs = "\n".join(str(c) for c in mw._log.call_args_list)
+        assert "A: 新建 1" in logs and "B: 新建 2" in logs
+
+    def test_profile_failure_continues_to_next(self, monkeypatch):
+        from gui import main_window as mw_mod
+        from gui.main_window import MainWindow
+        mw = self._mw()
+        profiles = [{"name": "A"}, {"name": "B"}]
+        monkeypatch.setattr(mw_mod, "load_profiles", lambda p: profiles)
+        monkeypatch.setattr(mw_mod, "SyncWorker", MagicMock())
+        mw._schedule_profiles = ["A", "B"]
+        MainWindow._run_scheduled_sync(mw)
+        MainWindow._on_scheduled_profile_error(mw, "boom", "")
+        # A 失败后 B 仍启动
+        mw._apply_ui_profile.assert_called_with(
+            profiles[1], skip_schedule_fields=True)
+        assert mw._start_worker.call_count == 2
+
+    def test_empty_selection_runs_current_ui(self, monkeypatch):
+        from gui import main_window as mw_mod
+        from gui.main_window import MainWindow
+        mw = self._mw()
+        monkeypatch.setattr(mw_mod, "SyncWorker", MagicMock())
+        mw._schedule_profiles = []
+        assert MainWindow._run_scheduled_sync(mw) is True
+        assert mw._scheduled_chain is None
+        mw._apply_filters_to_config.assert_called_once()
+        mw._apply_ui_profile.assert_not_called()
+
+    def test_missing_profiles_skip_without_fallback(self, monkeypatch):
+        from gui import main_window as mw_mod
+        from gui.main_window import MainWindow
+        mw = self._mw()
+        monkeypatch.setattr(mw_mod, "load_profiles", lambda p: [])
+        mw._schedule_profiles = ["已删除的方案"]
+        assert MainWindow._run_scheduled_sync(mw) is True  # 消费去重键
+        assert mw._scheduled_chain is None
+        mw._start_worker.assert_not_called()
+        mw._apply_filters_to_config.assert_not_called()    # 不回退当前界面
+
+
+class TestScheduledProfilesConfig:
+    """定时方案选择持久化到 sync.yaml"""
+
+    def test_save_scheduled_config_includes_profiles(self, tmp_path):
+        import yaml
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw._project_root = str(tmp_path)
+        (tmp_path / "configs").mkdir()
+        (tmp_path / "configs" / "sync.yaml").write_text(
+            "scheduled_sync: null\n", encoding="utf-8")
+        mw.chk_scheduled.isChecked.return_value = True
+        t1 = MagicMock()
+        t1.toString.return_value = "09:00"
+        mw.time_schedule.time.return_value = t1
+        mw.chk_time2.isChecked.return_value = False
+        t2 = MagicMock()
+        t2.toString.return_value = "18:00"
+        mw.time_schedule2.time.return_value = t2
+        mw.chk_scheduled_notify.isChecked.return_value = True
+        mw.cmb_schedule_mode.currentIndex.return_value = 0
+        mw.chk_weekdays = []
+        mw._schedule_profiles = ["方案A", "方案B"]
+        mw.config = {}
+        MainWindow._save_scheduled_config(mw)
+        data = yaml.safe_load(
+            (tmp_path / "configs" / "sync.yaml").read_text(encoding="utf-8"))
+        assert data["scheduled_sync"]["profiles"] == ["方案A", "方案B"]
+
+
+class TestScheduledProfilesLoad:
+    """启动时从 sync.yaml 恢复定时方案选择"""
+
+    def test_load_restores_schedule_profiles(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw.config = {"sync": {"scheduled_sync": {
+            "enabled": True, "time": "10:30",
+            "profiles": ["方案A", "方案B"]}}}
+        mw.chk_weekdays = []
+        mw._update_schedule_profiles_button = MagicMock()
+        MainWindow._load_scheduled_config(mw)
+        assert mw._schedule_profiles == ["方案A", "方案B"]
+        mw._update_schedule_profiles_button.assert_called_once()
+
+    def test_load_without_profiles_defaults_empty(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw.config = {"sync": {"scheduled_sync": {
+            "enabled": False, "time": "09:00"}}}
+        mw.chk_weekdays = []
+        mw._schedule_profiles = ["旧选择"]
+        mw._update_schedule_profiles_button = MagicMock()
+        MainWindow._load_scheduled_config(mw)
+        assert mw._schedule_profiles == []

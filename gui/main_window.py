@@ -26,7 +26,9 @@ from gui.workers import (
     AuthTestWorker, CollabAutoSyncWorker, ListBugsWorker, SyncWorker,
     UpdateCheckWorker, UpdateDownloadWorker,
 )
-from gui.ui_profiles import load_profiles, save_profile
+from gui.ui_profiles import (
+    load_profiles, save_profile, resolve_profiles, format_profiles_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,10 @@ class MainWindow(QMainWindow):
         self._schedule_timer = None
         # 已触发的定时同步去重键集合（"yyyy-MM-dd:HH:mm"，每时间点当天一次）
         self._scheduled_last_run_keys = set()
+        # 定时任务按方案导入：有序方案名列表；空 = 按当前界面配置
+        self._schedule_profiles: list = []
+        # 多方案定时导入执行链（运行时状态：queue/pre/results/current）
+        self._scheduled_chain = None
         # 周期性更新检查：启动后 2 秒检查一次，之后按 check_interval_hours 周期复查
         self._last_update_check_ts = 0.0
         self._update_check_timer = None
@@ -533,6 +539,17 @@ class MainWindow(QMainWindow):
         schedule_row.addWidget(self.chk_scheduled_notify)
         schedule_row.addWidget(self.chk_time2)
         schedule_row.addWidget(self.time_schedule2)
+
+        # 定时导入方案选择框：未选择时按当前界面配置执行
+        schedule_row.addWidget(QLabel("定时导入方案:"))
+        self.btn_schedule_profiles = QPushButton("（按当前界面配置）")
+        self.btn_schedule_profiles.setToolTip(
+            "选择定时任务要导入的方案（可多选并按顺序执行）；\n"
+            "未选择时按当前界面配置导入")
+        self.btn_schedule_profiles.clicked.connect(
+            self._on_select_schedule_profiles)
+        schedule_row.addWidget(self.btn_schedule_profiles)
+
         schedule_row.addStretch()
         layout.addLayout(schedule_row)
 
@@ -1209,14 +1226,27 @@ class MainWindow(QMainWindow):
         self._apply_ui_profile(profile)
         self._log(f"[方案] 已恢复: {profile.get('name')}")
 
-    def _apply_ui_profile(self, profile: dict):
+    # 方案中的定时同步配置项：定时任务按方案执行时必须跳过，
+    # 否则会把正在运行的定时任务本身（时间/开关/周期）改掉
+    _SCHEDULE_FIELD_KEYS = (
+        "scheduled", "schedule_time", "scheduled_notify", "time2_enabled",
+        "schedule_time2", "schedule_mode", "schedule_days",
+    )
+
+    def _apply_ui_profile(self, profile: dict,
+                          skip_schedule_fields: bool = False):
         """恢复全部界面配置项。
 
         普通筛选/连接参数只回填界面（随后续保存/同步按既有流程落盘）；
         行为开关（重新打开/AI 各开关/定时同步）走各自的持久化处理器，
         与手动切换一致，保证重启后仍生效。
+        skip_schedule_fields=True 时（定时任务按方案执行）忽略方案中的
+        定时同步项，保护正在运行的定时任务配置。
         """
-        fields = profile.get("fields") or {}
+        fields = dict(profile.get("fields") or {})
+        if skip_schedule_fields:
+            for key in self._SCHEDULE_FIELD_KEYS:
+                fields.pop(key, None)
         plat_idx = 1 if profile.get("platform") == "teambition" else 0
         if self.filter_platform.currentIndex() != plat_idx:
             # 走正常平台切换逻辑（标签、控件显隐、字段加载），随后整体覆盖
@@ -1241,9 +1271,10 @@ class MainWindow(QMainWindow):
         self._on_date_mode_changed(self.filter_date_mode.currentIndex())
         self._save_reopen_switch()
         self._on_ai_switch_changed(self.chk_ai_analysis.checkState())
-        self._on_scheduled_switch_changed()
-        self._on_time2_changed()
-        self._on_schedule_mode_changed()
+        if not skip_schedule_fields:
+            self._on_scheduled_switch_changed()
+            self._on_time2_changed()
+            self._on_schedule_mode_changed()
 
     def _restore_profile_assignees(self, names):
         """按方案恢复指派人勾选列表"""
@@ -2013,6 +2044,11 @@ class MainWindow(QMainWindow):
             if not isinstance(scheduled, dict):
                 scheduled = {}
         enabled = scheduled.get("enabled", False)
+        # 定时导入方案（有序列表；空 = 按当前界面配置）
+        profiles = scheduled.get("profiles") or []
+        self._schedule_profiles = ([str(p) for p in profiles if p]
+                                   if isinstance(profiles, list) else [])
+        self._update_schedule_profiles_button()
 
         def _parse_time(value, default_h, default_m):
             """手写 YAML 的 time: 10:30 会被 PyYAML 解析为 int（六十进制，
@@ -2103,6 +2139,7 @@ class MainWindow(QMainWindow):
             "notify": self.chk_scheduled_notify.isChecked(),
             "mode": mode,
             "days": days,
+            "profiles": list(getattr(self, "_schedule_profiles", [])),
         }
         if "sync" not in self.config:
             self.config["sync"] = {}
@@ -2151,12 +2188,42 @@ class MainWindow(QMainWindow):
                     self._scheduled_last_run_keys.add(key)
 
     def _run_scheduled_sync(self) -> bool:
-        """执行定时同步（不弹确认框，静默触发）。返回是否成功启动"""
+        """执行定时同步（不弹确认框，静默触发）。返回是否成功启动/已处理"""
         if self._worker is not None and self._worker.isRunning():
             self._log("定时同步跳过：上次同步仍在进行中", "WARNING")
             return False
+        names = list(getattr(self, "_schedule_profiles", []))
+        profiles = []
+        if names:
+            all_profiles = load_profiles(self._ui_profiles_path())
+            profiles, missing = resolve_profiles(all_profiles, names)
+            if missing:
+                self._log(f"[定时方案] 方案不存在，已跳过: "
+                          f"{', '.join(missing)}", "WARNING")
+            if not profiles:
+                # 已选择方案但全部无效：不回退当前界面配置，本次跳过
+                self._log("[定时方案] 所选方案均不存在，本次定时任务跳过",
+                          "WARNING")
+                if self.chk_scheduled_notify.isChecked():
+                    QMessageBox.warning(
+                        self, "定时任务跳过",
+                        "所选定时导入方案均不存在，请重新选择。")
+                return True  # 消费去重键，避免每分钟重试
         self.log_text.clear()
         now_str = QTime.currentTime().toString("HH:mm")
+        if profiles:
+            # 只执行所选方案，不再叠加当前界面配置
+            self._log(f"=== 定时方案导入触发（{now_str}）: "
+                      f"{len(profiles)} 个方案（仅执行所选方案） ===")
+            self._scheduled_chain = {
+                "queue": list(profiles),
+                "pre": self._collect_ui_profile("__pre_schedule__"),
+                "results": [],
+                "total": len(profiles),
+                "index": 0,
+                "current": "",
+            }
+            return self._run_next_scheduled_profile()
         self._log(f"=== 定时同步触发（{now_str}）===")
         self.status_label.setText(f"定时同步执行中... ({now_str})")
         self._apply_filters_to_config()
@@ -2180,6 +2247,126 @@ class MainWindow(QMainWindow):
         self._log(f"定时同步完成: {stats_text}")
         if self.chk_scheduled_notify.isChecked():
             QMessageBox.information(self, "定时同步完成", stats_text)
+
+    # ── 定时按方案导入 ────────────────────────────────
+
+    def _update_schedule_profiles_button(self):
+        if not hasattr(self, "btn_schedule_profiles"):
+            return
+        profiles = list(getattr(self, "_schedule_profiles", []))
+        self.btn_schedule_profiles.setText(format_profiles_summary(profiles))
+        tip = ("定时导入方案: " + format_profiles_summary(profiles, 200)
+               if profiles else "未选择方案：定时任务按当前界面配置导入")
+        self.btn_schedule_profiles.setToolTip(tip + "\n点击选择/排序")
+
+    def _on_select_schedule_profiles(self):
+        """打开方案选择框：勾选并排序定时导入方案"""
+        from gui.schedule_profiles_dialog import ScheduleProfilesDialog
+        names = [p.get("name")
+                 for p in load_profiles(self._ui_profiles_path())
+                 if p.get("name")]
+        if not names:
+            QMessageBox.information(
+                self, "定时导入方案",
+                "暂无已保存的界面方案，定时任务将按当前界面配置导入。\n\n"
+                "如需按方案执行，请先在源平台行右侧「保存方案」。")
+            return
+        dlg = ScheduleProfilesDialog(names, self._schedule_profiles, self)
+        if not exec_dialog(dlg):
+            return
+        self._schedule_profiles = dlg.selected_profiles()
+        self._update_schedule_profiles_button()
+        self._save_scheduled_config()
+        self._log(f"[定时方案] 已选择: "
+                  f"{format_profiles_summary(self._schedule_profiles)}")
+
+    def _run_next_scheduled_profile(self) -> bool:
+        """执行链：按顺序启动下一个方案；队列空则收尾"""
+        chain = getattr(self, "_scheduled_chain", None)
+        if not chain:
+            return False
+        if not chain["queue"]:
+            self._finish_scheduled_chain()
+            return True
+        profile = chain["queue"].pop(0)
+        chain["index"] += 1
+        name = profile.get("name", "")
+        chain["current"] = name
+        self._log(f"=== 定时方案 [{chain['index']}/{chain['total']}] "
+                  f"{name} 开始 ===")
+        self.status_label.setText(
+            f"定时方案导入中 [{chain['index']}/{chain['total']}]: {name}")
+        # 只执行所选方案自己的配置（不叠加当前界面）；跳过方案里的
+        # 定时同步项，避免改掉正在运行的定时任务
+        self._apply_ui_profile(profile, skip_schedule_fields=True)
+        self._apply_filters_to_config()
+        worker = SyncWorker(self.config, dry_run=False,
+                            dingtalk_bot=self._dingtalk_bot, parent=self)
+        worker.progress.connect(self._on_sync_progress)
+        worker.finished.connect(self._on_scheduled_profile_result)
+        worker.error.connect(self._on_scheduled_profile_error)
+        if not self._start_worker(worker):
+            chain["results"].append((name, "", "启动失败（有任务占用）"))
+            self._log(f"[定时方案] {name} 启动失败，终止剩余方案", "WARNING")
+            self._finish_scheduled_chain()
+            return False
+        worker.start()
+        return True
+
+    def _on_scheduled_profile_result(self, stats_text):
+        chain = getattr(self, "_scheduled_chain", None)
+        if not chain:
+            self._on_scheduled_sync_result(stats_text)
+            return
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("%p%")
+        self._worker_finished(save_config=False)
+        name = chain.get("current", "")
+        chain["results"].append((name, stats_text, None))
+        self._log(f"[定时方案] {name} 完成: {stats_text}")
+        self._run_next_scheduled_profile()
+
+    def _on_scheduled_profile_error(self, msg, detail=""):
+        chain = getattr(self, "_scheduled_chain", None)
+        if not chain:
+            self._on_worker_error(msg, detail)
+            return
+        name = chain.get("current", "")
+        chain["results"].append((name, "", msg))
+        self._log(f"[定时方案] {name} 失败: {msg}", "ERROR")
+        if detail:
+            logger.warning("[定时方案] %s 错误详情: %s", name, detail)
+        self._worker = None
+        self._set_busy(False)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("%p%")
+        self._run_next_scheduled_profile()
+
+    def _finish_scheduled_chain(self):
+        """全部方案执行完毕：恢复触发前界面并汇总结果"""
+        chain = getattr(self, "_scheduled_chain", None)
+        self._scheduled_chain = None
+        if not chain:
+            return
+        pre = chain.get("pre")
+        if pre:
+            self._apply_ui_profile(pre, skip_schedule_fields=True)
+            self._apply_filters_to_config()
+            try:
+                self._save_config_to_yaml()
+            except Exception as e:
+                logger.warning("恢复运行前配置保存失败: %s", e)
+        lines = []
+        for name, stats, err in chain["results"]:
+            lines.append(f"{name}: " + (f"失败 - {err}" if err else stats))
+        summary = "\n".join(lines) if lines else "未执行任何方案"
+        self._log(f"[定时方案] 全部完成（{len(chain['results'])} 个方案）\n"
+                  f"{summary}")
+        self.status_label.setText("定时方案导入完成")
+        if self.chk_scheduled_notify.isChecked():
+            QMessageBox.information(self, "定时方案导入完成", summary)
 
     # ── 进度与结果 ──────────────────────────────────────
 

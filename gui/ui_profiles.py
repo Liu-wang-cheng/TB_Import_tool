@@ -30,6 +30,34 @@ def load_profiles(path: str) -> list:
     return [p for p in profiles if isinstance(p, dict) and p.get("name")]
 
 
+def resolve_profiles(all_profiles: list, names: list) -> tuple:
+    """按 names 顺序返回存在的方案与缺失名单。
+
+    Returns:
+        (found_profiles, missing_names)
+    """
+    by_name = {p.get("name"): p for p in all_profiles if p.get("name")}
+    found, missing = [], []
+    for name in names or []:
+        if not name:
+            continue
+        profile = by_name.get(name)
+        if profile is not None:
+            found.append(profile)
+        else:
+            missing.append(name)
+    return found, missing
+
+
+def format_profiles_summary(names: list, max_len: int = 28) -> str:
+    """定时方案按钮的显示文本"""
+    names = [n for n in (names or []) if n]
+    if not names:
+        return "（按当前界面配置）"
+    text = " → ".join(names)
+    return text if len(text) <= max_len else text[:max_len - 2] + "…"
+
+
 def save_profile(path: str, profile: dict) -> bool:
     """新增或按 name 覆盖保存方案（原子写）"""
     name = str((profile or {}).get("name", "")).strip()
