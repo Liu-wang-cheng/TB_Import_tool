@@ -1,7 +1,7 @@
 {
   "version": "2.8.11",
-  "sha256": "3606f6f92d3a0bad90a933cc2c3b0f295feccf19b009221ab223d0aaec764af1",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.10/SmartDefectPlatform.zip",
+  "sha256": "d96f702c9d8e06eafe35495f05dd6f68dc73287c6dc05cd7dd4894e4be5f71b7",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.11/SmartDefectPlatform.zip",
   "release_date": "2026-10-20",
   "release_notes": "v2.8.11 新增：定时任务按方案导入——定时同步行新增方案选择框（可多选并按顺序执行）；未选择时按当前界面配置导入；选择方案后到点只执行所选方案并逐个串行导入（不叠加当前界面），方案中的定时设置自动跳过；单个方案失败继续下一个；全部完成后恢复运行前界面并汇总提示",
   "min_version": "1.0"
