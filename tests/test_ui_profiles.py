@@ -664,3 +664,39 @@ class TestRememberLastSelected:
         MainWindow._refresh_ui_profiles(mw)     # 不传 select_name
         assert mw.cmb_ui_profile.idx == 2       # 占位(0) + A(1) + B(2)
         mw._apply_ui_profile.assert_not_called()  # 只恢复选中，不重复应用
+
+
+class TestApplyExternalTBProfile:
+    """外部TB 方案：先切平台，再恢复 URL/项目ID/账号密码等字段"""
+
+    def test_apply_teambition_profile_restores_fields(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw._ui_profile_widget_set = MainWindow._ui_profile_widget_set
+        mw._SCHEDULE_FIELD_KEYS = MainWindow._SCHEDULE_FIELD_KEYS
+        mw.chk_weekdays = []
+        url = _FakeLine("")
+        module = _FakeLine("")
+        account = _FakeLine("")
+        password = _FakeLine("")
+        mw._ui_profile_widgets = lambda: [
+            ("url", url, "text"),
+            ("module", module, "text"),
+            ("account", account, "text"),
+            ("password", password, "text"),
+        ]
+        mw.filter_platform.currentIndex.return_value = 0   # 当前在禅道
+        mw.cmb_executor_mode.currentIndex.return_value = 0
+        mw.filter_date_mode.currentIndex.return_value = 0
+        mw.chk_ai_analysis.checkState.return_value = Qt.Unchecked
+        profile = {"name": "TB方案", "platform": "teambition", "fields": {
+            "url": "https://www.teambition.com",
+            "module": "6306e205,6306e206",
+            "account": "u_tb", "password": "p_tb"}}
+
+        MainWindow._apply_ui_profile(mw, profile, skip_schedule_fields=True)
+        mw.filter_platform.setCurrentIndex.assert_called_once_with(1)
+        assert url.text() == "https://www.teambition.com"
+        assert module.text() == "6306e205,6306e206"
+        assert account.text() == "u_tb"
+        assert password.text() == "p_tb"
