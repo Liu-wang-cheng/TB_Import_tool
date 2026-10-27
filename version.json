@@ -1,7 +1,7 @@
 {
   "version": "2.8.12",
-  "sha256": "d96f702c9d8e06eafe35495f05dd6f68dc73287c6dc05cd7dd4894e4be5f71b7",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.11/SmartDefectPlatform.zip",
+  "sha256": "10c64b14be618714a19ddaee142cb946ad3d25a8a49764b7096109e56761b49a",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.12/SmartDefectPlatform.zip",
   "release_date": "2026-10-27",
   "release_notes": "v2.8.12 新增：方案「保存/另存为」分离——未关联方案时另存为置灰、保存提示新建方案；已关联方案时保存直接覆盖当前方案修改、另存为创建新方案（默认名\"当前方案 副本\"）。修复：记住上次选择的界面方案，重新打开自动恢复选中并加载对应配置",
   "min_version": "1.0"
