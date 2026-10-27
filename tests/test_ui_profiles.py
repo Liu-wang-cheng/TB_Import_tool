@@ -330,12 +330,22 @@ class TestSaveProfileFlow:
     """保存按钮流程：命名→写盘→刷新；取消不写；重名需确认"""
 
     def _mw(self, tmp_path):
+        from gui.main_window import MainWindow
         mw = MagicMock()
         mw._ui_profiles_path.return_value = str(tmp_path / "p.yaml")
         mw._ui_profiles = []
-        mw._collect_ui_profile.return_value = {
-            "name": "新方案", "platform": "zentao",
-            "fields": {"product": "11"}}
+        mw._collect_ui_profile.side_effect = (
+            lambda n: {"name": n, "platform": "zentao",
+                       "fields": {"product": "11"}})
+        # MagicMock 会遮蔽 self 方法调用，显式绑定真实实现驱动流程
+        mw._current_ui_profile_name = (
+            lambda: MainWindow._current_ui_profile_name(mw))
+        mw._prompt_profile_name = (
+            lambda title, initial="": MainWindow._prompt_profile_name(
+                mw, title, initial))
+        mw._save_profile_snapshot = (
+            lambda name, select: MainWindow._save_profile_snapshot(
+                mw, name, select))
         return mw
 
     def test_save_new_profile_writes_file(self, tmp_path, monkeypatch):
@@ -369,6 +379,7 @@ class TestSaveProfileFlow:
         save_profile(path, {"name": "新方案", "platform": "zentao",
                             "fields": {}})
         mw._ui_profiles = [{"name": "新方案"}]
+        mw.cmb_ui_profile.currentIndex.return_value = 0   # 未关联当前方案
         fake = MagicMock()
         fake.getText.return_value = ("新方案", True)
         monkeypatch.setattr(qt_compat, "QInputDialog", fake)
@@ -700,3 +711,85 @@ class TestApplyExternalTBProfile:
         assert module.text() == "6306e205,6306e206"
         assert account.text() == "u_tb"
         assert password.text() == "p_tb"
+
+
+class TestSaveVsSaveAs:
+    """保存=覆盖当前方案；另存为=新建方案；未关联方案时另存为置灰"""
+
+    def _mw(self, tmp_path, current_idx=0, profiles=None):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw._ui_profiles_path.return_value = str(tmp_path / "p.yaml")
+        mw._ui_profiles = list(profiles or [])
+        mw.cmb_ui_profile.currentIndex.return_value = current_idx
+        mw._collect_ui_profile.side_effect = (
+            lambda n: {"name": n, "platform": "zentao",
+                       "fields": {"product": "99"}})
+        mw._current_ui_profile_name = (
+            lambda: MainWindow._current_ui_profile_name(mw))
+        mw._prompt_profile_name = (
+            lambda title, initial="": MainWindow._prompt_profile_name(
+                mw, title, initial))
+        mw._save_profile_snapshot = (
+            lambda name, select: MainWindow._save_profile_snapshot(
+                mw, name, select))
+        return mw
+
+    def test_save_overwrites_current_without_dialog(self, tmp_path,
+                                                    monkeypatch):
+        from gui import qt_compat
+        from gui.main_window import MainWindow
+        save_profile(str(tmp_path / "p.yaml"),
+                     {"name": "A", "platform": "zentao", "fields": {}})
+        mw = self._mw(tmp_path, current_idx=1,
+                      profiles=[{"name": "A"}])
+        fake = MagicMock()
+        monkeypatch.setattr(qt_compat, "QInputDialog", fake)
+        MainWindow._on_save_profile(mw)
+        fake.getText.assert_not_called()          # 直接覆盖，不弹命名框
+        got = load_profiles(str(tmp_path / "p.yaml"))
+        assert [p["name"] for p in got] == ["A"]
+        assert got[0]["fields"] == {"product": "99"}
+        mw._log.assert_called_once()
+
+    def test_save_as_creates_new_profile(self, tmp_path, monkeypatch):
+        from gui import qt_compat
+        from gui.main_window import MainWindow
+        save_profile(str(tmp_path / "p.yaml"),
+                     {"name": "A", "platform": "zentao", "fields": {}})
+        mw = self._mw(tmp_path, current_idx=1,
+                      profiles=[{"name": "A"}])
+        fake = MagicMock()
+        fake.getText.return_value = ("B", True)
+        monkeypatch.setattr(qt_compat, "QInputDialog", fake)
+        MainWindow._on_save_profile_as(mw)
+        got = load_profiles(str(tmp_path / "p.yaml"))
+        assert [p["name"] for p in got] == ["A", "B"]
+        assert got[1]["fields"] == {"product": "99"}
+        mw._refresh_ui_profiles.assert_called_once_with(select_name="B")
+        mw._log.assert_called_once()
+
+    def test_save_as_noop_without_current(self, tmp_path, monkeypatch):
+        from gui import qt_compat
+        from gui.main_window import MainWindow
+        mw = self._mw(tmp_path, current_idx=0, profiles=[{"name": "A"}])
+        fake = MagicMock()
+        monkeypatch.setattr(qt_compat, "QInputDialog", fake)
+        MainWindow._on_save_profile_as(mw)
+        fake.getText.assert_not_called()
+        assert load_profiles(str(tmp_path / "p.yaml")) == []
+
+    def test_buttons_state_follows_current_profile(self, tmp_path):
+        from gui.main_window import MainWindow
+        # 未关联方案 → 另存为置灰
+        mw = self._mw(tmp_path, current_idx=0, profiles=[{"name": "A"}])
+        mw.btn_save_profile = MagicMock()
+        mw.btn_save_profile_as = MagicMock()
+        MainWindow._update_profile_buttons(mw)
+        mw.btn_save_profile_as.setEnabled.assert_called_once_with(False)
+        # 关联方案 → 另存为可用
+        mw2 = self._mw(tmp_path, current_idx=1, profiles=[{"name": "A"}])
+        mw2.btn_save_profile = MagicMock()
+        mw2.btn_save_profile_as = MagicMock()
+        MainWindow._update_profile_buttons(mw2)
+        mw2.btn_save_profile_as.setEnabled.assert_called_once_with(True)

@@ -1,8 +1,8 @@
 {
-  "version": "2.8.11",
+  "version": "2.8.12",
   "sha256": "d96f702c9d8e06eafe35495f05dd6f68dc73287c6dc05cd7dd4894e4be5f71b7",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.11/SmartDefectPlatform.zip",
-  "release_date": "2026-10-20",
-  "release_notes": "v2.8.11 新增：定时任务按方案导入——定时同步行新增方案选择框（可多选并按顺序执行）；未选择时按当前界面配置导入；选择方案后到点只执行所选方案并逐个串行导入（不叠加当前界面），方案中的定时设置自动跳过；单个方案失败继续下一个；全部完成后恢复运行前界面并汇总提示",
+  "release_date": "2026-10-27",
+  "release_notes": "v2.8.12 新增：方案「保存/另存为」分离——未关联方案时另存为置灰、保存提示新建方案；已关联方案时保存直接覆盖当前方案修改、另存为创建新方案（默认名\"当前方案 副本\"）。修复：记住上次选择的界面方案，重新打开自动恢复选中并加载对应配置",
   "min_version": "1.0"
 }

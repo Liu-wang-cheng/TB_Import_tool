@@ -197,6 +197,18 @@ class MainWindow(QMainWindow):
         self.btn_save_profile.clicked.connect(self._on_save_profile)
         platform_row.addWidget(self.btn_save_profile)
 
+        # 另存为：仅当当前已关联某个已保存方案时可用
+        self.btn_save_profile_as = QPushButton("另存为")
+        self.btn_save_profile_as.setFixedSize(64, 28)
+        self.btn_save_profile_as.setStyleSheet(
+            "QPushButton { padding: 2px; font-size: 12px; border-radius: 3px; }"
+        )
+        self.btn_save_profile_as.setToolTip(
+            "将当前界面配置另存为一个新方案")
+        self.btn_save_profile_as.clicked.connect(self._on_save_profile_as)
+        self.btn_save_profile_as.setEnabled(False)
+        platform_row.addWidget(self.btn_save_profile_as)
+
         grid.addLayout(platform_row)
 
         # 第0行：URL 自动解析
@@ -1089,6 +1101,7 @@ class MainWindow(QMainWindow):
         else:
             self.cmb_ui_profile.setCurrentIndex(0)
         self.cmb_ui_profile.blockSignals(False)
+        self._update_profile_buttons()
 
     def _ui_profile_widgets(self) -> list:
         """方案序列化控件清单：(key, widget, kind)
@@ -1197,14 +1210,40 @@ class MainWindow(QMainWindow):
             "fields": fields,
         }
 
-    def _on_save_profile(self):
-        from gui.qt_compat import QInputDialog
-        name, ok = QInputDialog.getText(self, "保存方案", "方案名称:")
-        if not ok:
+    def _current_ui_profile_name(self) -> str:
+        """当前关联的已保存方案名（方案下拉选中项；未选中返回空）"""
+        try:
+            idx = int(self.cmb_ui_profile.currentIndex())
+        except (TypeError, ValueError):
+            return ""
+        profiles = getattr(self, "_ui_profiles", [])
+        if 0 < idx <= len(profiles):
+            return profiles[idx - 1].get("name", "")
+        return ""
+
+    def _update_profile_buttons(self):
+        """有当前方案时"保存/另存为"都可用；无则仅保存（提示新建）"""
+        if not hasattr(self, "btn_save_profile_as"):
             return
+        has_current = bool(self._current_ui_profile_name())
+        self.btn_save_profile_as.setEnabled(has_current)
+        self.btn_save_profile.setToolTip(
+            "保存当前方案的配置修改" if has_current
+            else "当前未关联方案：保存时提示新建方案")
+        self.btn_save_profile_as.setToolTip(
+            "将当前界面配置另存为一个新方案" if has_current
+            else "请先在方案下拉框中选择一个已保存方案后再另存为")
+
+    def _prompt_profile_name(self, title: str, initial: str = "") -> str:
+        """弹窗输入方案名；重名需确认覆盖。返回空表示取消。"""
+        from gui.qt_compat import QInputDialog
+        kwargs = {"text": initial} if initial else {}
+        name, ok = QInputDialog.getText(self, title, "方案名称:", **kwargs)
+        if not ok:
+            return ""
         name = (name or "").strip()
         if not name:
-            return
+            return ""
         exists = any(p.get("name") == name
                      for p in getattr(self, "_ui_profiles", []))
         if exists:
@@ -1214,23 +1253,55 @@ class MainWindow(QMainWindow):
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No)
             if ret != QMessageBox.Yes:
-                return
-        if save_profile(self._ui_profiles_path(),
-                        self._collect_ui_profile(name)):
-            # 新保存的方案即当前方案：记住选择并落盘当前界面配置
-            save_last_selected(self._ui_profiles_path(), name)
-            try:
-                self._save_config_to_yaml()
-            except Exception as e:
-                logger.warning("保存方案配置失败: %s", e)
-            self._refresh_ui_profiles(select_name=name)
-            self._log(f"[方案] 已保存: {name}")
-        else:
+                return ""
+        return name
+
+    def _save_profile_snapshot(self, name: str, select: bool) -> bool:
+        """把当前界面快照写入方案文件，并落盘当前配置"""
+        if not save_profile(self._ui_profiles_path(),
+                            self._collect_ui_profile(name)):
             QMessageBox.warning(self, "保存失败", "方案写入失败，请查看日志")
+            return False
+        save_last_selected(self._ui_profiles_path(), name)
+        try:
+            self._save_config_to_yaml()
+        except Exception as e:
+            logger.warning("保存方案配置失败: %s", e)
+        if select:
+            self._refresh_ui_profiles(select_name=name)
+        else:
+            self._refresh_ui_profiles()
+        self._update_profile_buttons()
+        return True
+
+    def _on_save_profile(self):
+        """保存：已关联方案 → 直接覆盖该方案；未关联 → 提示新建方案"""
+        current = self._current_ui_profile_name()
+        if current:
+            if self._save_profile_snapshot(current, select=False):
+                self._log(f"[方案] 已更新: {current}")
+            return
+        name = self._prompt_profile_name("新建方案")
+        if not name:
+            return
+        if self._save_profile_snapshot(name, select=True):
+            self._log(f"[方案] 已保存: {name}")
+
+    def _on_save_profile_as(self):
+        """另存为：以当前配置创建新方案（需已关联方案）"""
+        current = self._current_ui_profile_name()
+        if not current:
+            return
+        name = self._prompt_profile_name("另存为", initial=f"{current} 副本")
+        if not name:
+            return
+        if self._save_profile_snapshot(name, select=True):
+            self._log(f"[方案] 已另存为: {name}")
 
     def _on_ui_profile_selected(self, index: int):
         profiles = getattr(self, "_ui_profiles", [])
         if index <= 0 or index - 1 >= len(profiles):
+            self._update_profile_buttons()
             return
         profile = profiles[index - 1]
         self._apply_ui_profile(profile)
@@ -1240,6 +1311,7 @@ class MainWindow(QMainWindow):
             self._save_config_to_yaml()
         except Exception as e:
             logger.warning("保存方案配置失败: %s", e)
+        self._update_profile_buttons()
         self._log(f"[方案] 已恢复: {profile.get('name')}")
 
     # 方案中的定时同步配置项：定时任务按方案执行时必须跳过，
