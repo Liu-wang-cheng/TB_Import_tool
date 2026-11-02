@@ -21,7 +21,8 @@ def vpn_config_from_dict(data: dict) -> dict:
         "probe_port": int(data.get("probe_port") or 0),
         "timeout": int(data.get("timeout") or 0) or 60,
         "auto_trust_cert": bool(data.get("auto_trust_cert", True)),
-        "disconnect_after": bool(data.get("disconnect_after")),
+        # 默认导入完成后断开 VPN（已显式保存为 false 的方案保持 false）
+        "disconnect_after": bool(data.get("disconnect_after", True)),
     }
 
 
@@ -59,6 +60,7 @@ class VpnDialog(QDialog):
         layout = QVBoxLayout(self)
         self.chk_enabled = QCheckBox("此方案需要先连接 VPN")
         self.chk_enabled.setChecked(cfg["enabled"])
+        self.chk_enabled.toggled.connect(self._update_enabled)
         layout.addWidget(self.chk_enabled)
 
         form = QFormLayout()
@@ -131,7 +133,7 @@ class VpnDialog(QDialog):
         self._test_worker = None
         self._update_enabled()
 
-    def _update_enabled(self):
+    def _update_enabled(self, _checked=None):
         on = self.chk_enabled.isChecked()
         for w in (self.edit_server, self.spin_port, self.edit_username,
                   self.edit_password, self.edit_probe, self.spin_timeout,
@@ -170,5 +172,4 @@ class VpnDialog(QDialog):
         })
 
     def accept(self):
-        self._update_enabled()
         super().accept()

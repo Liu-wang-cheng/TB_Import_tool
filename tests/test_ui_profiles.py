@@ -879,4 +879,4 @@ class TestVpnConfigMapping:
         assert cfg["probe_port"] == 8080
         assert cfg["timeout"] == 60          # 0 → 默认 60
         assert cfg["auto_trust_cert"] is False
-        assert cfg["disconnect_after"] is False
+        assert cfg["disconnect_after"] is True   # 默认导入后断开
