@@ -19,6 +19,10 @@ def vpn_config_from_dict(data: dict) -> dict:
         "servercert": str(data.get("servercert", "")).strip(),
         "probe_host": str(data.get("probe_host", "")).strip(),
         "probe_port": int(data.get("probe_port") or 0),
+        # 默认跟随方案服务器地址自动探测；已保存过探测地址的旧配置保持手动
+        "probe_auto": bool(data.get("probe_auto",
+                                    not (data.get("probe_host")
+                                         and data.get("probe_port")))),
         "timeout": int(data.get("timeout") or 0) or 60,
         "auto_trust_cert": bool(data.get("auto_trust_cert", True)),
         # 默认导入完成后断开 VPN（已显式保存为 false 的方案保持 false）
@@ -87,6 +91,7 @@ class VpnDialog(QDialog):
         self.edit_password.setEchoMode(QLineEdit.Password)
         form.addRow("初始密码:", self.edit_password)
 
+        self._default_probe = default_probe
         self.edit_probe = QLineEdit(
             f"{cfg['probe_host']}:{cfg['probe_port']}"
             if cfg["probe_host"] and cfg["probe_port"] else default_probe)
@@ -104,6 +109,14 @@ class VpnDialog(QDialog):
             "留空则首次连接自动记录（pin-sha256:...）")
         form.addRow("证书指纹:", self.edit_cert)
         layout.addLayout(form)
+
+        self.chk_probe_auto = QCheckBox("自动使用当前方案的服务器地址探测")
+        self.chk_probe_auto.setToolTip(
+            "勾选后，内网探测地址随方案里的服务器地址自动变化；"
+            "取消勾选可手动指定")
+        self.chk_probe_auto.setChecked(cfg["probe_auto"])
+        self.chk_probe_auto.toggled.connect(self._update_probe_state)
+        layout.addWidget(self.chk_probe_auto)
 
         self.chk_auto_trust = QCheckBox("首次连接自动信任服务器证书")
         self.chk_auto_trust.setChecked(cfg["auto_trust_cert"])
@@ -139,14 +152,24 @@ class VpnDialog(QDialog):
 
         self._test_worker = None
         self._update_enabled()
+        self._update_probe_state()
+
+    def _update_probe_state(self, _checked=None):
+        """自动探测：跟随服务器地址并禁用输入；手动：可编辑"""
+        auto = self.chk_probe_auto.isChecked()
+        if auto:
+            self.edit_probe.setText(self._default_probe)
+        self.edit_probe.setEnabled(
+            self.chk_enabled.isChecked() and not auto)
 
     def _update_enabled(self, _checked=None):
         on = self.chk_enabled.isChecked()
         for w in (self.edit_server, self.spin_port, self.edit_username,
-                  self.edit_password, self.edit_probe, self.spin_timeout,
-                  self.edit_cert, self.chk_auto_trust, self.chk_disconnect,
-                  self.btn_test):
+                  self.edit_password, self.spin_timeout,
+                  self.edit_cert, self.chk_probe_auto, self.chk_auto_trust,
+                  self.chk_disconnect, self.btn_test):
             w.setEnabled(on)
+        self._update_probe_state()
 
     def _on_test(self):
         cfg = self.current_config()
@@ -163,7 +186,10 @@ class VpnDialog(QDialog):
             self.edit_cert.setText(servercert)
 
     def current_config(self) -> dict:
-        host, port = parse_host_port(self.edit_probe.text())
+        probe_text = (self._default_probe
+                      if self.chk_probe_auto.isChecked()
+                      else self.edit_probe.text())
+        host, port = parse_host_port(probe_text)
         return vpn_config_from_dict({
             "enabled": self.chk_enabled.isChecked(),
             "server": self.edit_server.text(),
@@ -173,6 +199,7 @@ class VpnDialog(QDialog):
             "servercert": self.edit_cert.text(),
             "probe_host": host,
             "probe_port": port,
+            "probe_auto": self.chk_probe_auto.isChecked(),
             "timeout": self.spin_timeout.value(),
             "auto_trust_cert": self.chk_auto_trust.isChecked(),
             "disconnect_after": self.chk_disconnect.isChecked(),

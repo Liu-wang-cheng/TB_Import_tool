@@ -1503,7 +1503,19 @@ class MainWindow(QMainWindow):
     def _apply_filters_to_config(self):
         """将筛选面板的值写回 config dict"""
         # 方案级 VPN 配置随同步配置一起下发（worker 在后台建隧道）
-        self.config["vpn"] = dict(getattr(self, "_vpn_config", {}) or {})
+        vpn_cfg = dict(getattr(self, "_vpn_config", {}) or {})
+        if vpn_cfg.get("enabled") and (
+                vpn_cfg.get("probe_auto")
+                or not (vpn_cfg.get("probe_host")
+                        and vpn_cfg.get("probe_port"))):
+            # 自动探测：跟随当前方案的服务器地址（方案切换/地址修改后同步生效）
+            from src.vpn_client import parse_host_port
+            host, port = parse_host_port(self._current_source_server())
+            if host and port:
+                vpn_cfg["probe_host"] = host
+                vpn_cfg["probe_port"] = port
+                vpn_cfg["probe_auto"] = True
+        self.config["vpn"] = vpn_cfg
         platform_idx = self.filter_platform.currentIndex()
         is_teambition = (platform_idx == 1)
 

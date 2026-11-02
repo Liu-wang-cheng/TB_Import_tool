@@ -833,7 +833,9 @@ class TestProfileVpnIntegration:
         from gui.main_window import MainWindow
         mw = MagicMock()
         mw.config = {}
-        mw._vpn_config = {"enabled": True, "server": "vpn"}
+        mw._vpn_config = {"enabled": True, "server": "vpn",
+                          "probe_auto": True}
+        mw._current_source_server = lambda: "10.10.3.67:8080"
         mw.filter_platform.currentIndex.return_value = 0
         mw.edit_zentao_base_url.text.return_value = ""
         mw.edit_zentao_account.text.return_value = ""
@@ -849,6 +851,9 @@ class TestProfileVpnIntegration:
         MainWindow._apply_filters_to_config(mw)
         assert mw.config["vpn"]["enabled"] is True
         assert mw.config["vpn"]["server"] == "vpn"
+        # 自动探测地址跟随当前方案服务器
+        assert mw.config["vpn"]["probe_host"] == "10.10.3.67"
+        assert mw.config["vpn"]["probe_port"] == 8080
 
     def test_last_selected_persists_vpn(self, tmp_path):
         from gui.ui_profiles import (

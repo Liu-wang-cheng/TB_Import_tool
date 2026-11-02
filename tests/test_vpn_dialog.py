@@ -32,6 +32,11 @@ class TestVpnDialogEnableToggle:
         assert dlg.edit_server.isEnabled() is True
         assert dlg.edit_username.isEnabled() is True
         assert dlg.edit_password.isEnabled() is True
+        # 默认"自动探测"：探测地址跟随服务器且不可编辑
+        assert dlg.chk_probe_auto.isEnabled() is True
+        assert dlg.chk_probe_auto.isChecked() is True
+        assert dlg.edit_probe.isEnabled() is False
+        dlg.chk_probe_auto.setChecked(False)
         assert dlg.edit_probe.isEnabled() is True
         assert dlg.edit_cert.isEnabled() is True
         assert dlg.btn_test.isEnabled() is True
@@ -46,6 +51,7 @@ class TestVpnDialogEnableToggle:
 
     def test_current_config_reflects_edits(self, qapp):
         dlg = _dialog(True)
+        dlg.chk_probe_auto.setChecked(False)
         dlg.edit_server.setText("vpn.fsyxrobot.com")
         dlg.spin_port.setValue(50443)
         dlg.edit_username.setText("liuwangcheng")
@@ -71,4 +77,44 @@ class TestDisconnectDefault:
         from gui.vpn_dialog import VpnDialog
         dlg = VpnDialog({"disconnect_after": False}, default_probe="")
         assert dlg.chk_disconnect.isChecked() is False
+        dlg.deleteLater()
+
+
+class TestProbeAuto:
+    """内网探测地址默认跟随方案服务器地址"""
+
+    def test_auto_probe_uses_default(self, qapp):
+        from gui.vpn_dialog import VpnDialog
+        dlg = VpnDialog({"enabled": True},
+                        default_probe="10.10.3.67:8080")
+        assert dlg.chk_probe_auto.isChecked() is True
+        assert dlg.edit_probe.text() == "10.10.3.67:8080"
+        assert dlg.edit_probe.isEnabled() is False
+        cfg = dlg.current_config()
+        assert cfg["probe_auto"] is True
+        assert cfg["probe_host"] == "10.10.3.67"
+        assert cfg["probe_port"] == 8080
+        dlg.deleteLater()
+
+    def test_manual_probe_override(self, qapp):
+        from gui.vpn_dialog import VpnDialog
+        dlg = VpnDialog({"enabled": True},
+                        default_probe="10.10.3.67:8080")
+        dlg.chk_probe_auto.setChecked(False)
+        assert dlg.edit_probe.isEnabled() is True
+        dlg.edit_probe.setText("192.168.1.10:443")
+        cfg = dlg.current_config()
+        assert cfg["probe_auto"] is False
+        assert cfg["probe_host"] == "192.168.1.10"
+        assert cfg["probe_port"] == 443
+        dlg.deleteLater()
+
+    def test_saved_manual_probe_kept(self, qapp):
+        from gui.vpn_dialog import VpnDialog
+        dlg = VpnDialog({"enabled": True,
+                         "probe_host": "172.16.0.5", "probe_port": 8000},
+                        default_probe="10.10.3.67:8080")
+        assert dlg.chk_probe_auto.isChecked() is False
+        assert dlg.edit_probe.text() == "172.16.0.5:8000"
+        assert dlg.edit_probe.isEnabled() is True
         dlg.deleteLater()
