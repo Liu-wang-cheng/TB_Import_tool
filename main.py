@@ -168,6 +168,10 @@ def main():
     except FileNotFoundError as e:
         print(f"配置加载失败: {e}")
         sys.exit(1)
+    except Exception as e:
+        # YAML 语法/权限等错误：明确指出文件与原因，避免直接抛堆栈
+        print(f"配置加载失败: {e}")
+        sys.exit(1)
 
     setup_logging(config, args.verbose)
     logger = logging.getLogger(__name__)

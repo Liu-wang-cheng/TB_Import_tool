@@ -1340,8 +1340,8 @@ class MainWindow(QMainWindow):
 
     def _on_vpn_settings(self):
         from gui.vpn_dialog import VpnDialog, vpn_config_from_dict
-        from src.vpn_client import parse_host_port
-        default_host, default_port = parse_host_port(
+        from src.vpn_client import parse_probe_target
+        default_host, default_port = parse_probe_target(
             self._current_source_server())
         default_probe = (f"{default_host}:{default_port}"
                          if default_host and default_port else default_host)
@@ -1509,8 +1509,8 @@ class MainWindow(QMainWindow):
                 or not (vpn_cfg.get("probe_host")
                         and vpn_cfg.get("probe_port"))):
             # 自动探测：跟随当前方案的服务器地址（方案切换/地址修改后同步生效）
-            from src.vpn_client import parse_host_port
-            host, port = parse_host_port(self._current_source_server())
+            from src.vpn_client import parse_probe_target
+            host, port = parse_probe_target(self._current_source_server())
             if host and port:
                 vpn_cfg["probe_host"] = host
                 vpn_cfg["probe_port"] = port
@@ -2060,13 +2060,26 @@ class MainWindow(QMainWindow):
         # 状态接口 + 可能的浏览页预热，自建版含 api_delay），状态分组极少变化
         if getattr(self, "_status_refreshed_key", None) == cache_key:
             return
+        # 方案需要 VPN 但当前不可达：跳过 GUI 线程内的状态刷新，
+        # 否则会卡在连接/读取超时上（VPN 由后台 worker 建立）
+        vpn_cfg = getattr(self, "_vpn_config", {}) or {}
+        if vpn_cfg.get("enabled"):
+            from src.vpn_client import is_reachable, parse_probe_target
+            host, port = parse_probe_target(self._current_source_server())
+            if host and port and not is_reachable(host, port, timeout=1.5):
+                logger.info("VPN 未连接，跳过状态码刷新（避免界面卡顿）")
+                return
         # 复用 ZentaoClient 全局缓存（_cloud_browse_cache 等是 class-level 实例共享）
         # 直接通过 source_factory 单例获取 client 即可
         try:
             from src.source_factory import _CLIENT_CACHE
             from src.zentao_client import ZentaoClient
 
-            client = _CLIENT_CACHE.get(cache_key)
+            # 单例缓存 key 与 source_factory 保持一致（不含 branch）
+            store_key = (zt_cfg.get("base_url", ""),
+                         zt_cfg.get("account", ""),
+                         zt_cfg.get("password", ""))
+            client = _CLIENT_CACHE.get(store_key)
             if client is None:
                 sync_cfg = self.config.get("sync", {})
                 client = ZentaoClient(
@@ -2076,11 +2089,12 @@ class MainWindow(QMainWindow):
                     api_delay=sync_cfg.get("api_delay", 0.5),
                 )
                 client.authenticate()
-                _CLIENT_CACHE[cache_key] = client
+                _CLIENT_CACHE[store_key] = client
             # 确保 branch_id 始终同步（即使是缓存的 client）
             filters = zt_cfg.get("filters", {})
-            if "branch" in filters:
-                client.set_branch_id(int(filters["branch"]))
+            branch = filters.get("branch")
+            if branch not in (None, ""):
+                client.set_branch_id(int(branch))
 
             # 复用浏览页缓存（不主动发请求）；如果缓存空，则同步浏览一次
             if not client._cloud_browse_cache and client._cloud_session_auth:

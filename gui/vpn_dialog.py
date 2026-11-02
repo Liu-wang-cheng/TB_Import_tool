@@ -4,7 +4,7 @@ from gui.qt_compat import (
     QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QSpinBox, QVBoxLayout, QThread, pyqtSignal,
 )
-from src.vpn_client import VpnClient, parse_host_port, parse_certificate_pin
+from src.vpn_client import VpnClient, parse_probe_target, parse_certificate_pin
 
 
 def vpn_config_from_dict(data: dict) -> dict:
@@ -225,7 +225,7 @@ class VpnDialog(QDialog):
         probe_text = (self._default_probe
                       if self.chk_probe_auto.isChecked()
                       else self.edit_probe.text())
-        host, port = parse_host_port(probe_text)
+        host, port = parse_probe_target(probe_text)
         return vpn_config_from_dict({
             "enabled": self.chk_enabled.isChecked(),
             "server": self.edit_server.text(),

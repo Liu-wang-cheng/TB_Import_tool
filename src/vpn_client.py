@@ -95,6 +95,21 @@ def parse_host_port(value: str) -> tuple:
     return value, 0
 
 
+def parse_probe_target(value: str) -> tuple:
+    """解析探测地址；未写端口时按协议补默认端口（https→443 / http→80）"""
+    raw = (value or "").strip()
+    low = raw.lower()
+    scheme = ("https" if low.startswith("https://")
+              else "http" if low.startswith("http://") else "")
+    host, port = parse_host_port(raw)
+    if host and not port:
+        if scheme == "https":
+            port = 443
+        elif scheme == "http":
+            port = 80
+    return host, port
+
+
 class VpnClient:
     """单个 VPN 连接的生命周期管理（同一时间只保持一条隧道）"""
 
@@ -169,6 +184,11 @@ class VpnClient:
         ]
         # 无指纹时用占位指纹探测真实指纹（否则 openconnect 只报 signer not found）
         cmd.append(f"--servercert={self.servercert or _DUMMY_PIN}")
+        # 显式指定路由脚本：内置版默认脚本路径编译为安装目录，
+        # 未安装 OpenConnect 的机器会找不到脚本导致路由配置失败
+        script = os.path.join(os.path.dirname(exe), "vpnc-script-win.js")
+        if os.path.isfile(script):
+            cmd.append(f"--script={script}")
         self._output = []
         try:
             proc = subprocess.Popen(

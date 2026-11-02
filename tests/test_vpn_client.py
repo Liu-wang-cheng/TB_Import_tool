@@ -226,3 +226,46 @@ class TestDisconnect:
         assert ok is True
         assert proc.terminated is True
         assert client._proc is None
+
+
+class TestProbeTargetParsing:
+    def test_https_without_port_defaults_443(self):
+        from src.vpn_client import parse_probe_target
+        assert parse_probe_target("https://zentao.example.com/zentao") == (
+            "zentao.example.com", 443)
+
+    def test_http_without_port_defaults_80(self):
+        from src.vpn_client import parse_probe_target
+        assert parse_probe_target("http://10.10.3.67/index.php") == (
+            "10.10.3.67", 80)
+
+    def test_explicit_port_kept(self):
+        from src.vpn_client import parse_probe_target
+        assert parse_probe_target("http://10.10.3.67:8080/x") == (
+            "10.10.3.67", 8080)
+
+    def test_no_scheme_keeps_zero(self):
+        from src.vpn_client import parse_probe_target
+        assert parse_probe_target("10.0.0.1") == ("10.0.0.1", 0)
+
+
+class TestBundledScript:
+    def test_script_passed_when_bundled(self, tmp_path, monkeypatch):
+        import src.vpn_client as mod
+        exe = tmp_path / "openconnect.exe"
+        exe.write_text("", encoding="utf-8")
+        script = tmp_path / "vpnc-script-win.js"
+        script.write_text("// script", encoding="utf-8")
+        monkeypatch.setattr(mod, "find_openconnect", lambda: str(exe))
+        monkeypatch.setattr(mod, "is_reachable", lambda *a, **k: True)
+        procs = []
+
+        def fake_popen(cmd, **kwargs):
+            p = _FakeProc(cmd, ["Using Wintun device 'vpn'"], **kwargs)
+            procs.append(p)
+            return p
+
+        monkeypatch.setattr(mod.subprocess, "Popen", fake_popen)
+        ok, _ = _client(probe_host="", probe_port=0).connect()
+        assert ok is True
+        assert any(f"--script={script}" in p.cmd for p in procs)
