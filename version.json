@@ -1,7 +1,7 @@
 {
   "version": "2.8.14",
-  "sha256": "8b13f97bde5d022375dfa87b69c947e9fec8480050ded02ded947900b3759edd",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.13/SmartDefectPlatform.zip",
+  "sha256": "5b5f7270f455ee04411921c302c4995d0f44b51f9a2a010f10846291f457516c",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.14/SmartDefectPlatform.zip",
   "release_date": "2026-11-02",
   "release_notes": "v2.8.14 修复：VPN 未填证书指纹时无法连接（OpenConnect 不输出实际指纹导致自动信任失效，现改用占位指纹探测后自动信任重试）；VPN 内网探测地址默认自动跟随方案服务器地址（方案/地址变化后同步生效，可取消勾选手动指定）；各类提示完善（禅道账号密码/地址/网络错误、Teambition 连接测试真实校验与凭证/权限提示、外部TB登录失败提示、配置缺项明确提示、YAML 格式错误弹窗提示）；连接测试也会先确保 VPN",
   "min_version": "1.0"
