@@ -35,6 +35,10 @@ _SUCCESS_MARKERS = (
 # 证书不匹配时 openconnect 会打印实际指纹，用于首次信任（TOFU）
 _PIN_RE = re.compile(r"match server's certificate:\s*(pin-sha256:[A-Za-z0-9+/=]+)")
 
+# 占位指纹：OpenConnect 在未提供 --servercert 时只会报 "signer not found"，
+# 不会输出实际指纹；先给一个必不匹配的指纹，让它打印真实指纹后再重试
+_DUMMY_PIN = "pin-sha256:" + "A" * 43 + "="
+
 
 def _resource_root() -> str:
     """程序资源根目录（打包后为 _internal，源码环境为项目根）"""
@@ -137,6 +141,7 @@ class VpnClient:
         for attempt in (1, 2):
             ok, msg, pin = self._try_connect(exe)
             if ok:
+                logger.info("VPN 连接成功: %s", msg)
                 if pin and pin != self.servercert:
                     self.servercert = pin
                     msg += f"（已记录证书指纹 {pin[:24]}…）"
@@ -148,6 +153,7 @@ class VpnClient:
                                pin[:24] + "…")
                 self.servercert = pin
                 continue
+            logger.warning("VPN 连接失败: %s", msg)
             return False, msg
         return False, "VPN 连接失败"
 
@@ -161,8 +167,8 @@ class VpnClient:
             "--passwd-on-stdin",
             "--non-inter",
         ]
-        if self.servercert:
-            cmd.append(f"--servercert={self.servercert}")
+        # 无指纹时用占位指纹探测真实指纹（否则 openconnect 只报 signer not found）
+        cmd.append(f"--servercert={self.servercert or _DUMMY_PIN}")
         self._output = []
         try:
             proc = subprocess.Popen(

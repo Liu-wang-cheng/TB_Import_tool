@@ -34,11 +34,18 @@ class _VpnTestWorker(QThread):
         self._config = config
 
     def run(self):
+        import logging
+        log = logging.getLogger(__name__)
         client = VpnClient(self._config)
         try:
             ok, msg = client.connect()
+            if ok:
+                log.info("VPN 测试连接成功: %s", msg)
+            else:
+                log.warning("VPN 测试连接失败: %s", msg)
             self.finished_ok.emit(ok, msg, client.servercert)
         except Exception as e:  # noqa: BLE001
+            log.exception("VPN 测试连接异常")
             self.finished_ok.emit(False, f"连接异常: {e}", "")
         finally:
             # 测试完立即断开，避免占用用户网络

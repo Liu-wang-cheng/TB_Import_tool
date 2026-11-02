@@ -195,6 +195,9 @@ class TestConnect:
         assert ok is True
         assert client.servercert == "pin-sha256:AAAA="
         assert len(procs) == 2
+        # 第一次用占位指纹探测真实指纹，第二次用探测到的指纹
+        assert any("--servercert=pin-sha256:AAAAAAAAAAAA" in str(p.cmd)
+                   for p in procs[:1])
         assert any("--servercert=pin-sha256:AAAA=" in p.cmd for p in procs)
 
     def test_failure_message_hint_for_admin(self, monkeypatch):
