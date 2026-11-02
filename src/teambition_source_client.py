@@ -59,6 +59,9 @@ class TeambitionSourceClient:
 
     def authenticate(self) -> None:
         """确保 Cookie 有效；失效则尝试账号密码登录或扫码"""
+        if not self.base_url:
+            raise RuntimeError(
+                "外部TB 服务器地址未配置：请在「源平台」中填写外部TB 地址")
         cookie_str = self._load_cookie()
         if cookie_str and self._cookie_valid(cookie_str):
             self._cookies = self._parse_cookie(cookie_str)
@@ -71,9 +74,17 @@ class TeambitionSourceClient:
         else:
             # 无账号密码，打开浏览器让用户扫码
             cookie_str = self._login_via_selenium("", "")
-        if cookie_str:
-            self._cookies = self._parse_cookie(cookie_str)
-            self._save_cookie(cookie_str)
+        if not cookie_str:
+            mode = ("账号密码登录" if self.account and self.password
+                    else "扫码登录")
+            reason = getattr(self, "_last_login_error", "")
+            msg = (f"外部TB {mode}失败：未能获取有效 Cookie。"
+                   f"请检查账号/密码或服务器地址；若需要验证码/扫码请重试")
+            if reason:
+                msg += f"（原因：{reason[:160]}）"
+            raise RuntimeError(msg)
+        self._cookies = self._parse_cookie(cookie_str)
+        self._save_cookie(cookie_str)
 
     def _load_cookie(self) -> str:
         try:
@@ -123,9 +134,11 @@ class TeambitionSourceClient:
             return login_via_selenium(account, password, headless=headless)
         except ImportError as e:
             logger.error("Selenium 登录不可用（缺少依赖或 tools 模块）: %s", e)
+            self._last_login_error = f"Selenium 不可用: {e}"
             return ""
         except Exception as e:
             logger.error("Selenium 登录失败: %s", e)
+            self._last_login_error = str(e)
             return ""
 
     # ── Web API 封装 ──────────────────────────────────

@@ -260,7 +260,9 @@ def main():
     if args.auth_only:
         try:
             teambition.authenticate()
-            print("Teambition 认证成功，token 已缓存")
+            # authenticate 只生成 JWT，发一次真实请求验证凭证/组织
+            teambition.verify_connection()
+            print("Teambition 认证成功")
         except Exception as e:
             logger.error("Teambition 认证失败: %s", e)
             sys.exit(1)

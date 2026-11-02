@@ -74,8 +74,15 @@ def _load_from_dir(config_dir: str) -> dict:
             continue
         path = os.path.join(config_dir, filename)
         key = filename.rsplit(".", 1)[0]
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            raise ValueError(
+                f"配置文件 {filename} 格式错误：{e}。"
+                f"请检查缩进/冒号/引号是否正确") from e
+        except OSError as e:
+            raise ValueError(f"配置文件 {filename} 读取失败：{e}") from e
         if data is None:
             data = {}
         config[key] = data

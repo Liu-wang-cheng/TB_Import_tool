@@ -165,7 +165,13 @@ def _init_clients(config):
     from src.utils import normalize_zentao_filters
 
     sync_cfg = config.get("sync", {})
-    tb_cfg = config["teambition"]
+    tb_cfg = config.get("teambition") or {}
+    missing = [k for k in ("app_id", "app_secret", "org_id")
+               if not tb_cfg.get(k)]
+    if missing:
+        raise ValueError(
+            "Teambition 配置不完整，缺少: " + "、".join(missing)
+            + "（请在「配置」→「Teambition」中补全并保存）")
 
     # 仅禅道平台需要 normalize filters
     platform = config.get("source", {}).get("platform", "zentao")
@@ -205,8 +211,21 @@ class AuthTestWorker(QThread):
         source = None
         teambition = None
         results = []
+        vpn_client = None
+        vpn_cfg = self.config.get("vpn") or {}
 
         try:
+            # 连接测试同样需要先确保 VPN（否则内网源会误报连接失败）
+            if vpn_cfg.get("enabled"):
+                from src.vpn_client import VpnClient
+                vpn_client = VpnClient(vpn_cfg)
+                self.progress.emit("正在连接 VPN...")
+                ok, msg = vpn_client.connect()
+                if not ok:
+                    self.finished.emit(False, f"VPN 连接失败: {msg}")
+                    return
+                self.progress.emit(f"VPN 已就绪: {msg}")
+
             # 源平台认证
             try:
                 from src.source_factory import create_source_client
@@ -226,7 +245,13 @@ class AuthTestWorker(QThread):
             # Teambition 认证
             try:
                 from src.teambition_client import TeambitionClient
-                tb_cfg = self.config["teambition"]
+                tb_cfg = self.config.get("teambition") or {}
+                missing = [k for k in ("app_id", "app_secret", "org_id")
+                           if not tb_cfg.get(k)]
+                if missing:
+                    raise ValueError(
+                        "Teambition 配置不完整，缺少: " + "、".join(missing)
+                        + "（请在「配置」→「Teambition」中补全并保存）")
                 teambition = TeambitionClient(
                     app_id=tb_cfg["app_id"],
                     app_secret=tb_cfg["app_secret"],
@@ -234,6 +259,8 @@ class AuthTestWorker(QThread):
                     project_id="",
                 )
                 teambition.authenticate()
+                # authenticate 只生成 JWT，必须发一次真实请求才能验证凭证
+                teambition.verify_connection()
                 results.append(("Teambition", True, "连接成功"))
                 self.progress.emit("Teambition连接成功")
             except Exception as e:
@@ -245,6 +272,11 @@ class AuthTestWorker(QThread):
                          for name, ok, detail in results]
             self.finished.emit(all_ok, "\n".join(msg_parts))
         finally:
+            if vpn_client is not None and vpn_cfg.get("disconnect_after"):
+                try:
+                    vpn_client.disconnect()
+                except Exception as e:
+                    logger.warning("断开 VPN 失败: %s", e)
             if source:
                 source.close()
             if teambition:
@@ -475,6 +507,10 @@ class SyncWorker(QThread):
             self.progress.emit(0, 0, "解析配置...")
             resolver = ConfigResolver(self.config, source, teambition)
             resolver.resolve()
+            if not getattr(teambition, "project_id", ""):
+                raise ValueError(
+                    "未配置 Teambition 项目ID（teambition.project_id）："
+                    "请在「配置」→「Teambition」中填写项目 ID 后保存")
 
             # 解析创建人（resolver 已解析 creator_name → creator_id，
             # 此处仅需将最终结果设为 operator_id）

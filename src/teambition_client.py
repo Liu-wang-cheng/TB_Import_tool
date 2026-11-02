@@ -22,7 +22,9 @@ class TeambitionAPIError(Exception):
         self.code = code
         self.message = message
         self.path = path
-        super().__init__(f"Teambition API错误 [{code}] {path}: {message}")
+        # code=0 表示网络/业务层错误（没有有意义的 HTTP 状态）
+        prefix = f"[{code}] " if code else ""
+        super().__init__(f"Teambition API错误 {prefix}{path}: {message}")
 
 
 class TeambitionClient:
@@ -159,16 +161,21 @@ class TeambitionClient:
                 err_code = body.get("errorCode", "")
                 err_msg = body.get("errorMessage", "")
                 if resp.status_code >= 400 or (isinstance(code, int) and code >= 400):
+                    # HTTP 200 + 业务 code>=400 时不要把 200 显示成错误码
+                    err_status = (resp.status_code
+                                  if resp.status_code >= 400 else 0)
                     raise TeambitionAPIError(
-                        resp.status_code,
-                        err_msg or resp.text[:500],
+                        err_status,
+                        self._friendly_error(resp.status_code,
+                                             err_msg or resp.text[:500], path),
                         path,
                     )
                 # Teambition 常返回 HTTP 200 + code:0 但 errorCode 非空表示业务错误
                 if err_code and str(err_code) != "0":
                     raise TeambitionAPIError(
-                        resp.status_code,
-                        f"{err_msg} (errorCode={err_code})",
+                        0,
+                        self._friendly_error(resp.status_code, err_msg, path,
+                                             err_code=err_code),
                         path,
                     )
                 time.sleep(self.api_delay)
@@ -178,11 +185,65 @@ class TeambitionClient:
             except requests.exceptions.RequestException as e:
                 last_error = e
                 if attempt == 2:
-                    raise
+                    # 不把底层 requests 异常直接抛给界面，转换成可读提示
+                    kind = type(e).__name__
+                    if isinstance(e, requests.exceptions.Timeout):
+                        reason = "请求超时"
+                    elif isinstance(e, requests.exceptions.ConnectionError):
+                        reason = "无法建立连接"
+                    else:
+                        reason = kind
+                    raise TeambitionAPIError(
+                        0,
+                        f"无法连接 Teambition 开放平台（{reason}）："
+                        f"请检查网络/代理/防火墙，或确认 VPN 已连接",
+                        path,
+                    )
                 wait = 2 ** attempt
                 logger.warning("请求失败，%d秒后重试: %s", wait, e)
                 time.sleep(wait)
         raise TeambitionAPIError(0, "请求失败：多次重试后仍无法完成请求", path)
+
+    @staticmethod
+    def _friendly_error(status: int, raw: str, path: str = "",
+                        err_code: str = "") -> str:
+        """把 TB API 错误转成可操作的中文提示"""
+        text = (raw or "").strip()
+        low = text.lower()
+        # 业务错误（HTTP 200 + errorCode）：凭证/签名类优先识别
+        if ("应用凭证" in text or "signature is invalid" in low
+                or "verify token" in low or "authbase" in low):
+            return ("Teambition 认证失败：app_id/app_secret 错误或应用凭证已失效"
+                    "，请在「配置」→「Teambition」中检查应用凭证")
+        if "未安装" in text or "not installed" in low:
+            return ("Teambition 应用未在该企业安装/发布："
+                    "请先在开放平台发布并安装该应用")
+        if status == 401:
+            return ("Teambition 认证失败：app_id/app_secret 无效或应用未授权"
+                    "（HTTP 401），请在「配置」中检查应用凭证")
+        if status == 403:
+            if "未安装" in text or "not installed" in low:
+                return ("Teambition 应用未在该企业安装/发布（HTTP 403）："
+                        "请先在开放平台发布并安装该应用")
+            return f"Teambition 无权限访问（HTTP 403）：{text[:200]}"
+        if status == 404:
+            return f"Teambition 资源不存在（HTTP 404）：请检查项目/任务 ID：{text[:200]}"
+        if status >= 500:
+            return f"Teambition 服务端异常（HTTP {status}）：{text[:200]}，请稍后重试"
+        return text or f"Teambition 请求失败（HTTP {status}）"
+
+    def verify_connection(self):
+        """真正验证 app 凭证/组织是否可用（authenticate 只生成 JWT，不访问网络）"""
+        if not self.app_id or not self.app_secret:
+            raise TeambitionAPIError(
+                0, "Teambition 配置不完整：缺少 app_id 或 app_secret，"
+                   "请在「配置」中补全", "/org/member/list")
+        if not self.org_id:
+            raise TeambitionAPIError(
+                0, "Teambition 配置不完整：缺少 org_id，请在「配置」中补全",
+                "/org/member/list")
+        self._request("GET", "/org/member/list",
+                      params={"orgId": self.org_id, "pageSize": 1})
 
     # ── 任务操作 ──────────────────────────────────────
 

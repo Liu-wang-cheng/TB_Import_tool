@@ -168,13 +168,48 @@ class ZentaoClient:
         if self._token:
             return
         url = f"{self.base_url}/api.php/v1/tokens"
-        resp = self._http.post(url, json={
-            "account": self.account,
-            "password": self.password,
-        }, timeout=30)
+        try:
+            resp = self._http.post(url, json={
+                "account": self.account,
+                "password": self.password,
+            }, timeout=30)
+        except requests.exceptions.Timeout:
+            raise ZentaoAPIError(
+                0, "连接禅道服务器超时：请检查服务器地址/网络，"
+                   "如需 VPN 请确认已连接", "/tokens")
+        except requests.exceptions.RequestException as e:
+            raise ZentaoAPIError(
+                0, f"无法连接禅道服务器（{type(e).__name__}）："
+                   f"请检查服务器地址/网络，如需 VPN 请确认已连接", "/tokens")
         if resp.status_code not in (200, 201):
-            raise ZentaoAPIError(resp.status_code, resp.text, "/tokens")
-        data = resp.json()
+            if resp.status_code in (400, 401, 403):
+                detail = ""
+                try:
+                    body = resp.json()
+                    if isinstance(body, dict):
+                        detail = str(body.get("error")
+                                     or body.get("message") or "")
+                except ValueError:
+                    pass
+                msg = "禅道认证失败：账号或密码错误（或账号无 API 权限）"
+                if detail:
+                    msg += f"（服务器提示：{detail[:120]}）"
+                raise ZentaoAPIError(resp.status_code, msg, "/tokens")
+            if resp.status_code == 404:
+                raise ZentaoAPIError(
+                    404, "禅道 API 入口不存在：请检查服务器地址是否缺少 "
+                         "/zentao 路径（如 https://host/zentao）", "/tokens")
+            raise ZentaoAPIError(
+                resp.status_code,
+                f"禅道认证失败（HTTP {resp.status_code}）：{resp.text[:200]}",
+                "/tokens")
+        try:
+            data = resp.json()
+        except ValueError:
+            raise ZentaoAPIError(
+                resp.status_code,
+                "禅道返回的不是 JSON：服务器地址可能不正确"
+                "（指向了网页而非 API）", "/tokens")
 
         # 检测各种认证失败的响应格式
         if isinstance(data, dict):
@@ -222,13 +257,31 @@ class ZentaoClient:
             "/api-getsessionid.json",
             "/index.php?m=api&f=getsessionid")
         url = f"{self.base_url}{session_path}"
-        resp = self._http.get(url, timeout=30)
+        try:
+            resp = self._http.get(url, timeout=30)
+        except requests.exceptions.Timeout:
+            raise ZentaoAPIError(
+                0, "连接禅道服务器超时：请检查服务器地址/网络，"
+                   "如需 VPN 请确认已连接", session_path)
+        except requests.exceptions.RequestException as e:
+            raise ZentaoAPIError(
+                0, f"无法连接禅道服务器（{type(e).__name__}）："
+                   f"请检查服务器地址/网络，如需 VPN 请确认已连接",
+                session_path)
         if resp.status_code != 200:
-            raise ZentaoAPIError(resp.status_code, "获取session失败", session_path)
+            if resp.status_code == 404:
+                raise ZentaoAPIError(
+                    404, "禅道 Session 入口不存在：请检查服务器地址是否缺少 "
+                         "/zentao 路径", session_path)
+            raise ZentaoAPIError(
+                resp.status_code,
+                f"获取 session 失败（HTTP {resp.status_code}）", session_path)
         try:
             data = resp.json()
         except Exception:
-            raise ZentaoAPIError(resp.status_code, "获取session失败(非JSON)", session_path)
+            raise ZentaoAPIError(
+                resp.status_code,
+                "禅道返回的不是 JSON：服务器地址可能不正确", session_path)
         # data["data"] 可能是 JSON 字符串或 dict
         inner = data.get("data", {})
         if isinstance(inner, str):
@@ -247,17 +300,34 @@ class ZentaoClient:
             "/user-login.json",
             "/index.php?m=user&f=login")
         url = f"{self.base_url}{login_path}"
-        resp = self._http.post(url, data={
-            "account": self.account,
-            "password": self.password,
-            "zentaosid": self._session_id,
-        }, headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=30)
+        try:
+            resp = self._http.post(url, data={
+                "account": self.account,
+                "password": self.password,
+                "zentaosid": self._session_id,
+            }, headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=30)
+        except requests.exceptions.RequestException as e:
+            raise ZentaoAPIError(
+                0, f"禅道登录请求失败（{type(e).__name__}）："
+                   f"请检查网络/服务器地址", "/user-login")
         if resp.status_code != 200:
-            raise ZentaoAPIError(resp.status_code, "session登录失败", "/user-login")
+            if resp.status_code in (400, 401, 403):
+                raise ZentaoAPIError(
+                    resp.status_code,
+                    "禅道登录失败：账号或密码错误", "/user-login")
+            raise ZentaoAPIError(
+                resp.status_code,
+                f"禅道登录失败（HTTP {resp.status_code}）", "/user-login")
 
         # 云版登录失败时可能仍返回 HTTP 200，需检查响应体
-        login_data = resp.json()
+        try:
+            login_data = resp.json()
+        except ValueError:
+            raise ZentaoAPIError(
+                resp.status_code,
+                "禅道登录返回的不是 JSON：服务器地址可能不正确",
+                "/user-login")
         if isinstance(login_data, dict):
             fail_reason = (
                 login_data.get("message")

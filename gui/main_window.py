@@ -640,6 +640,19 @@ class MainWindow(QMainWindow):
         except FileNotFoundError as e:
             self.status_label.setText(f"配置未找到: {e}")
             self._log(f"配置加载失败: {e}", "ERROR")
+            QMessageBox.critical(
+                self, "配置未找到",
+                f"找不到配置文件：\n{e}\n\n"
+                f"请检查程序目录下的 configs/ 是否完整。")
+        except Exception as e:
+            # YAML 语法/权限错误等：明确提示，避免启动崩溃且无信息
+            logger.exception("配置加载失败")
+            self.status_label.setText("配置加载失败")
+            self._log(f"配置加载失败: {e}", "ERROR")
+            QMessageBox.critical(
+                self, "配置加载失败",
+                f"无法加载配置文件：\n{e}\n\n"
+                f"请检查 configs/ 目录下的 YAML 格式（缩进/冒号/引号）。")
 
     def _check_classifier_config(self):
         """检查分类器 LLM 配置是否完整，缺失则提示并打开配置界面"""
