@@ -45,6 +45,20 @@ if exist "data\classifier_model.pkl" (
 )
 echo.
 
+REM Bundle OpenConnect for the VPN feature (copied from local install)
+if exist "tools\vpn\openconnect.exe" (
+    echo [OK] OpenConnect already bundled
+) else (
+    if exist "C:\Program Files\OpenConnect\openconnect.exe" (
+        if not exist "tools\vpn" mkdir "tools\vpn"
+        xcopy /y /q "C:\Program Files\OpenConnect\*" "tools\vpn\" >nul
+        echo [OK] OpenConnect bundled for VPN feature
+    ) else (
+        echo [WARN] OpenConnect not found, VPN feature will require manual install
+    )
+)
+echo.
+
 if exist "dist" rmdir /s /q dist
 if exist "build" rmdir /s /q build
 

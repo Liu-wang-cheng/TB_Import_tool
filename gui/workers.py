@@ -125,9 +125,16 @@ if %errorlevel% equ 0 (
 )
 echo.
 
-REM 启动新版本
+REM 启动新版本（优先走免 UAC 计划任务，存在且可运行时不再弹 UAC）
 echo 正在启动新版本...
+schtasks /query /tn "SmartDefectPlatform_Elevated" >nul 2>&1
+if %errorlevel% neq 0 goto :plain_start
+schtasks /run /tn "SmartDefectPlatform_Elevated" >nul 2>&1
+if %errorlevel% neq 0 goto :plain_start
+goto :started
+:plain_start
 start "" "%EXE_NAME%"
+:started
 
 REM 等待新版本启动，然后清理旧 _internal_old（多次重试，杀毒扫描可能锁定）
 timeout /t 3 /nobreak >nul
@@ -257,11 +264,24 @@ class ListBugsWorker(QThread):
 
     def run(self):
         source = None
+        vpn_client = None
+        vpn_cfg = self.config.get("vpn") or {}
         try:
             from src.source_factory import create_source_client
             from src.utils import (
                 apply_module_filter, normalize_zentao_filters, resolve_assigned_to,
             )
+
+            # 方案级 VPN：列出缺陷前先确保内网可达
+            if vpn_cfg.get("enabled"):
+                from src.vpn_client import VpnClient
+                vpn_client = VpnClient(vpn_cfg)
+                self.progress.emit("正在连接 VPN...")
+                ok, msg = vpn_client.connect()
+                if not ok:
+                    self.error.emit(f"VPN 连接失败: {msg}", "")
+                    return
+                self.progress.emit(f"VPN 已就绪: {msg}")
 
             sync_cfg = self.config.get("sync", {})
             source = create_source_client(self.config)
@@ -396,6 +416,11 @@ class ListBugsWorker(QThread):
             logger.exception("列出缺陷失败")
             self.error.emit(str(e), traceback.format_exc())
         finally:
+            if vpn_client is not None and vpn_cfg.get("disconnect_after"):
+                try:
+                    vpn_client.disconnect()
+                except Exception as e:
+                    logger.warning("断开 VPN 失败: %s", e)
             if source:
                 source.close()
 
@@ -415,9 +440,22 @@ class SyncWorker(QThread):
     def run(self):
         source = None
         teambition = None
+        vpn_client = None
+        vpn_cfg = self.config.get("vpn") or {}
         try:
             from src.config_resolver import ConfigResolver
             from src.sync_engine import SyncEngine
+
+            # 方案级 VPN：先建隧道（阻塞直到连通或超时），失败则中止本次同步
+            if vpn_cfg.get("enabled"):
+                from src.vpn_client import VpnClient
+                vpn_client = VpnClient(vpn_cfg)
+                self.progress.emit(0, 0, "正在连接 VPN...")
+                ok, msg = vpn_client.connect()
+                if not ok:
+                    self.error.emit(f"VPN 连接失败: {msg}", "")
+                    return
+                self.progress.emit(0, 0, f"VPN 已就绪: {msg}")
 
             source, teambition = _init_clients(self.config)
 
@@ -464,6 +502,12 @@ class SyncWorker(QThread):
             logger.exception("同步失败")
             self.error.emit(str(e), traceback.format_exc())
         finally:
+            if vpn_client is not None and (vpn_cfg.get("disconnect_after")):
+                try:
+                    vpn_client.disconnect()
+                    self.progress.emit(0, 0, "VPN 已断开")
+                except Exception as e:
+                    logger.warning("断开 VPN 失败: %s", e)
             if source:
                 source.close()
             if teambition:

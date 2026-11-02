@@ -4,8 +4,11 @@ import logging
 import logging.handlers
 import os
 import shutil
+import subprocess
 import sys
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 # 确保项目根目录在 sys.path 中
 _project_root = os.path.dirname(os.path.abspath(__file__))
@@ -325,6 +328,66 @@ def _repair_update_state() -> bool:
     return False
 
 
+# 免 UAC 启动：创建"最高权限"计划任务 + 桌面快捷方式
+_ELEVATED_TASK = "SmartDefectPlatform_Elevated"
+_ELEVATED_LNK = "智能缺陷管理平台.lnk"
+
+
+def _is_admin() -> bool:
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _ensure_elevated_launcher() -> bool:
+    """创建/更新最高权限计划任务与桌面快捷方式。
+
+    程序本身 requireAdministrator，直接双击 exe 每次都会弹 UAC；
+    通过该计划任务启动可免 UAC（首次创建时已由管理员授权）。
+    返回是否新建了快捷方式（用于首次提示）。
+    """
+    if not _is_frozen() or not _is_admin():
+        return False
+    exe = sys.executable
+    try:
+        result = subprocess.run(
+            ["schtasks", "/create", "/tn", _ELEVATED_TASK,
+             "/tr", f'"{exe}"', "/sc", "ONCE", "/st", "23:59",
+             "/RL", "HIGHEST", "/IT", "/F"],
+            capture_output=True, timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if getattr(result, "returncode", 0) != 0:
+            logger.warning("创建免 UAC 计划任务失败（策略限制？）")
+            return False
+    except Exception as e:
+        logger.warning("创建免 UAC 计划任务失败: %s", e)
+        return False
+
+    lnk_path = os.path.join(
+        os.path.expanduser("~"), "Desktop", _ELEVATED_LNK)
+    existed = os.path.exists(lnk_path)
+    try:
+        from win32com.client import Dispatch
+        shell = Dispatch("WScript.Shell")
+        lnk = shell.CreateShortCut(lnk_path)
+        lnk.TargetPath = os.path.join(
+            os.environ.get("WINDIR", r"C:\Windows"), "System32",
+            "schtasks.exe")
+        lnk.Arguments = f'/run /tn "{_ELEVATED_TASK}"'
+        lnk.WorkingDirectory = os.path.dirname(exe)
+        lnk.IconLocation = f"{exe},0"
+        lnk.Description = "以管理员权限启动（免 UAC 提示）"
+        lnk.Save()
+        logger.info("已创建免 UAC 启动快捷方式: %s", lnk_path)
+        return not existed
+    except Exception as e:
+        logger.warning("创建免 UAC 快捷方式失败: %s", e)
+        return False
+
+
 def main():
     # 先装日志，确保后续异常 / 启动信息都能落盘
     _setup_file_logging()
@@ -345,8 +408,19 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("智能缺陷管理平台")
 
+    # 免 UAC 启动：首次（管理员）运行创建计划任务与快捷方式
+    launcher_created = _ensure_elevated_launcher()
+
     window = MainWindow()
     window.show()
+
+    if launcher_created:
+        from gui.qt_compat import QMessageBox, QTimer
+        QTimer.singleShot(1500, lambda: QMessageBox.information(
+            window, "免 UAC 启动",
+            "已创建桌面快捷方式「智能缺陷管理平台」。\n\n"
+            "以后请使用该快捷方式启动，将不再弹出 UAC 提示。\n"
+            "（VPN 功能需要管理员权限，普通启动方式仍会每次询问）"))
 
     sys.exit(exec_app(app))
 

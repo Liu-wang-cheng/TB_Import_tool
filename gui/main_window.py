@@ -28,7 +28,7 @@ from gui.workers import (
 )
 from gui.ui_profiles import (
     load_profiles, save_profile, resolve_profiles, format_profiles_summary,
-    load_last_selected, save_last_selected,
+    load_last_selected, save_last_selected, load_last_vpn,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,8 @@ class MainWindow(QMainWindow):
         self._schedule_profiles: list = []
         # 多方案定时导入执行链（运行时状态：queue/pre/results/current）
         self._scheduled_chain = None
+        # 当前方案的 VPN 配置（OpenConnect / Fortinet）
+        self._vpn_config: dict = {}
         # 周期性更新检查：启动后 2 秒检查一次，之后按 check_interval_hours 周期复查
         self._last_update_check_ts = 0.0
         self._update_check_timer = None
@@ -208,6 +210,16 @@ class MainWindow(QMainWindow):
         self.btn_save_profile_as.clicked.connect(self._on_save_profile_as)
         self.btn_save_profile_as.setEnabled(False)
         platform_row.addWidget(self.btn_save_profile_as)
+
+        # VPN：方案级配置（需要 VPN 才能读取的方案）
+        self.btn_vpn = QPushButton("VPN: 关闭")
+        self.btn_vpn.setFixedSize(88, 28)
+        self.btn_vpn.setStyleSheet(
+            "QPushButton { padding: 2px; font-size: 12px; border-radius: 3px; }"
+        )
+        self.btn_vpn.setToolTip("为当前方案配置 VPN（OpenConnect / Fortinet）")
+        self.btn_vpn.clicked.connect(self._on_vpn_settings)
+        platform_row.addWidget(self.btn_vpn)
 
         grid.addLayout(platform_row)
 
@@ -1095,6 +1107,9 @@ class MainWindow(QMainWindow):
         # 默认恢复上次选择的方案（仅恢复下拉选中状态，不重复应用）
         if select_name is None:
             select_name = load_last_selected(self._ui_profiles_path())
+            # 同步恢复该方案的 VPN 配置（其余界面字段已由 configs 保存）
+            self._vpn_config = load_last_vpn(self._ui_profiles_path())
+            self._update_vpn_button()
         if select_name:
             idx = self.cmb_ui_profile.findText(select_name)
             self.cmb_ui_profile.setCurrentIndex(idx if idx > 0 else 0)
@@ -1208,6 +1223,7 @@ class MainWindow(QMainWindow):
                          if self.filter_platform.currentIndex() == 1
                          else "zentao"),
             "fields": fields,
+            "vpn": dict(getattr(self, "_vpn_config", {}) or {}),
         }
 
     def _current_ui_profile_name(self) -> str:
@@ -1262,7 +1278,8 @@ class MainWindow(QMainWindow):
                             self._collect_ui_profile(name)):
             QMessageBox.warning(self, "保存失败", "方案写入失败，请查看日志")
             return False
-        save_last_selected(self._ui_profiles_path(), name)
+        save_last_selected(self._ui_profiles_path(), name,
+                           vpn=getattr(self, "_vpn_config", {}) or {})
         try:
             self._save_config_to_yaml()
         except Exception as e:
@@ -1287,6 +1304,43 @@ class MainWindow(QMainWindow):
         if self._save_profile_snapshot(name, select=True):
             self._log(f"[方案] 已保存: {name}")
 
+    # ── 方案级 VPN 配置 ───────────────────────────────
+
+    def _current_source_server(self) -> str:
+        """当前源平台的服务器地址（用于默认内网探测地址）"""
+        if self.filter_platform.currentIndex() == 1:
+            return self.filter_url.text().strip()
+        return self.edit_zentao_base_url.text().strip()
+
+    def _update_vpn_button(self):
+        if not hasattr(self, "btn_vpn"):
+            return
+        cfg = getattr(self, "_vpn_config", {}) or {}
+        if cfg.get("enabled"):
+            self.btn_vpn.setText("VPN: 启用")
+            tip = (f"VPN: {cfg.get('server', '')}:{cfg.get('port', '')}\n"
+                   f"探测: {cfg.get('probe_host', '')}:{cfg.get('probe_port', '')}")
+        else:
+            self.btn_vpn.setText("VPN: 关闭")
+            tip = "为当前方案配置 VPN（OpenConnect / Fortinet）"
+        self.btn_vpn.setToolTip(tip + "\n点击编辑")
+
+    def _on_vpn_settings(self):
+        from gui.vpn_dialog import VpnDialog, vpn_config_from_dict
+        from src.vpn_client import parse_host_port
+        default_host, default_port = parse_host_port(
+            self._current_source_server())
+        default_probe = (f"{default_host}:{default_port}"
+                         if default_host and default_port else default_host)
+        dlg = VpnDialog(vpn_config_from_dict(self._vpn_config),
+                        default_probe=default_probe, parent=self)
+        if not exec_dialog(dlg):
+            return
+        self._vpn_config = dlg.current_config()
+        self._update_vpn_button()
+        self._log("[VPN] 当前方案 VPN 配置已更新: "
+                  + ("启用" if self._vpn_config.get("enabled") else "关闭"))
+
     def _on_save_profile_as(self):
         """另存为：以当前配置创建新方案（需已关联方案）"""
         current = self._current_ui_profile_name()
@@ -1306,7 +1360,8 @@ class MainWindow(QMainWindow):
         profile = profiles[index - 1]
         self._apply_ui_profile(profile)
         # 记住选择并立即落盘：下次打开时恢复该方案并加载一致配置
-        save_last_selected(self._ui_profiles_path(), profile.get("name", ""))
+        save_last_selected(self._ui_profiles_path(), profile.get("name", ""),
+                           vpn=profile.get("vpn") or {})
         try:
             self._save_config_to_yaml()
         except Exception as e:
@@ -1335,6 +1390,9 @@ class MainWindow(QMainWindow):
         if skip_schedule_fields:
             for key in self._SCHEDULE_FIELD_KEYS:
                 fields.pop(key, None)
+        # VPN 随方案一起恢复（定时多方案时每个方案各自的 VPN 配置生效）
+        self._vpn_config = dict(profile.get("vpn") or {})
+        self._update_vpn_button()
         plat_idx = 1 if profile.get("platform") == "teambition" else 0
         if self.filter_platform.currentIndex() != plat_idx:
             # 走正常平台切换逻辑（标签、控件显隐、字段加载），随后整体覆盖
@@ -1431,6 +1489,8 @@ class MainWindow(QMainWindow):
 
     def _apply_filters_to_config(self):
         """将筛选面板的值写回 config dict"""
+        # 方案级 VPN 配置随同步配置一起下发（worker 在后台建隧道）
+        self.config["vpn"] = dict(getattr(self, "_vpn_config", {}) or {})
         platform_idx = self.filter_platform.currentIndex()
         is_teambition = (platform_idx == 1)
 

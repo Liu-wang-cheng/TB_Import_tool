@@ -80,3 +80,4 @@ tools/generate_tutorial.py
 tools/generate_tutorial_simple.py
 tools/generate_tutorial_word.py
 tools/translate_mrt.py
+tools/vpn/

@@ -793,3 +793,90 @@ class TestSaveVsSaveAs:
         mw2.btn_save_profile_as = MagicMock()
         MainWindow._update_profile_buttons(mw2)
         mw2.btn_save_profile_as.setEnabled.assert_called_once_with(True)
+
+
+class TestProfileVpnIntegration:
+    """VPN 配置随方案保存/恢复，并写入同步配置"""
+
+    def test_collect_profile_includes_vpn(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw._ui_profile_widgets = lambda: []
+        mw.filter_platform.currentIndex.return_value = 0
+        mw.filter_assigned.count.return_value = 0
+        mw._vpn_config = {"enabled": True, "server": "vpn.fsyxrobot.com",
+                          "port": 50443, "probe_host": "10.10.3.67",
+                          "probe_port": 8080}
+        prof = MainWindow._collect_ui_profile(mw, "P")
+        assert prof["vpn"]["enabled"] is True
+        assert prof["vpn"]["server"] == "vpn.fsyxrobot.com"
+        assert prof["vpn"]["probe_port"] == 8080
+
+    def test_apply_profile_restores_vpn(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw._ui_profile_widgets = lambda: []
+        mw._SCHEDULE_FIELD_KEYS = MainWindow._SCHEDULE_FIELD_KEYS
+        mw.chk_weekdays = []
+        mw.filter_platform.currentIndex.return_value = 0
+        mw.cmb_executor_mode.currentIndex.return_value = 0
+        mw.filter_date_mode.currentIndex.return_value = 0
+        mw.chk_ai_analysis.checkState.return_value = Qt.Unchecked
+        vpn = {"enabled": True, "server": "vpn.fsyxrobot.com", "port": 50443}
+        MainWindow._apply_ui_profile(
+            mw, {"name": "P", "platform": "zentao",
+                 "fields": {}, "vpn": vpn})
+        assert mw._vpn_config == vpn
+        mw._update_vpn_button.assert_called()
+
+    def test_apply_filters_writes_vpn_to_config(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw.config = {}
+        mw._vpn_config = {"enabled": True, "server": "vpn"}
+        mw.filter_platform.currentIndex.return_value = 0
+        mw.edit_zentao_base_url.text.return_value = ""
+        mw.edit_zentao_account.text.return_value = ""
+        mw.edit_zentao_password.text.return_value = ""
+        mw.filter_product.text.return_value = ""
+        mw.filter_module.text.return_value = ""
+        mw.filter_status.currentText.return_value = "激活"
+        mw.filter_date_mode.currentIndex.return_value = 0
+        mw.filter_assigned = MagicMock()
+        mw.filter_assigned.count.return_value = 0
+        mw._collect_assignee_selection = MagicMock()
+        mw._selected_status_codes = lambda: ["active"]
+        MainWindow._apply_filters_to_config(mw)
+        assert mw.config["vpn"]["enabled"] is True
+        assert mw.config["vpn"]["server"] == "vpn"
+
+    def test_last_selected_persists_vpn(self, tmp_path):
+        from gui.ui_profiles import (
+            save_profile, save_last_selected, load_last_vpn,
+        )
+        path = str(tmp_path / "p.yaml")
+        save_profile(path, {"name": "A", "platform": "zentao", "fields": {}})
+        vpn = {"enabled": True, "server": "vpn.fsyxrobot.com", "port": 50443,
+               "username": "u", "password": "p"}
+        save_last_selected(path, "A", vpn=vpn)
+        assert load_last_vpn(path) == vpn
+        # 保存方案不应丢掉 last_vpn
+        save_profile(path, {"name": "B", "platform": "zentao", "fields": {}})
+        assert load_last_vpn(path) == vpn
+
+
+class TestVpnConfigMapping:
+    def test_normalize_dict(self):
+        from gui.vpn_dialog import vpn_config_from_dict
+        cfg = vpn_config_from_dict({
+            "enabled": 1, "server": " vpn.x ", "port": "50443",
+            "probe_host": "10.0.0.1", "probe_port": "8080",
+            "timeout": "0", "auto_trust_cert": 0,
+        })
+        assert cfg["enabled"] is True
+        assert cfg["server"] == "vpn.x"
+        assert cfg["port"] == 50443
+        assert cfg["probe_port"] == 8080
+        assert cfg["timeout"] == 60          # 0 → 默认 60
+        assert cfg["auto_trust_cert"] is False
+        assert cfg["disconnect_after"] is False

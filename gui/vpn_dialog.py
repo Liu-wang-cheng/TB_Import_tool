@@ -1,0 +1,174 @@
+"""方案级 VPN 配置对话框（OpenConnect / Fortinet）。"""
+
+from gui.qt_compat import (
+    QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QSpinBox, QVBoxLayout, QThread, pyqtSignal,
+)
+from src.vpn_client import VpnClient, parse_host_port, parse_certificate_pin
+
+
+def vpn_config_from_dict(data: dict) -> dict:
+    """规范化 VPN 配置（供 UI 与测试复用）"""
+    data = data or {}
+    return {
+        "enabled": bool(data.get("enabled")),
+        "server": str(data.get("server", "")).strip(),
+        "port": int(data.get("port") or 0),
+        "username": str(data.get("username", "")).strip(),
+        "password": str(data.get("password", "")),
+        "servercert": str(data.get("servercert", "")).strip(),
+        "probe_host": str(data.get("probe_host", "")).strip(),
+        "probe_port": int(data.get("probe_port") or 0),
+        "timeout": int(data.get("timeout") or 0) or 60,
+        "auto_trust_cert": bool(data.get("auto_trust_cert", True)),
+        "disconnect_after": bool(data.get("disconnect_after")),
+    }
+
+
+class _VpnTestWorker(QThread):
+    finished_ok = pyqtSignal(bool, str, str)  # ok, message, servercert
+
+    def __init__(self, config: dict, parent=None):
+        super().__init__(parent)
+        self._config = config
+
+    def run(self):
+        client = VpnClient(self._config)
+        try:
+            ok, msg = client.connect()
+            self.finished_ok.emit(ok, msg, client.servercert)
+        except Exception as e:  # noqa: BLE001
+            self.finished_ok.emit(False, f"连接异常: {e}", "")
+        finally:
+            # 测试完立即断开，避免占用用户网络
+            try:
+                client.disconnect()
+            except Exception:
+                pass
+
+
+class VpnDialog(QDialog):
+    """编辑当前方案的 VPN 配置"""
+
+    def __init__(self, config: dict, default_probe: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("VPN 设置（OpenConnect / Fortinet）")
+        self.resize(480, 420)
+        cfg = vpn_config_from_dict(config)
+
+        layout = QVBoxLayout(self)
+        self.chk_enabled = QCheckBox("此方案需要先连接 VPN")
+        self.chk_enabled.setChecked(cfg["enabled"])
+        layout.addWidget(self.chk_enabled)
+
+        form = QFormLayout()
+        self.edit_server = QLineEdit(cfg["server"])
+        self.edit_server.setPlaceholderText("vpn.example.com")
+        form.addRow("服务器地址:", self.edit_server)
+
+        self.spin_port = QSpinBox()
+        self.spin_port.setRange(0, 65535)
+        self.spin_port.setValue(cfg["port"] or 50443)
+        form.addRow("端口:", self.spin_port)
+
+        self.edit_username = QLineEdit(cfg["username"])
+        form.addRow("登录账号:", self.edit_username)
+
+        self.edit_password = QLineEdit(cfg["password"])
+        self.edit_password.setEchoMode(QLineEdit.Password)
+        form.addRow("初始密码:", self.edit_password)
+
+        self.edit_probe = QLineEdit(
+            f"{cfg['probe_host']}:{cfg['probe_port']}"
+            if cfg["probe_host"] and cfg["probe_port"] else default_probe)
+        self.edit_probe.setPlaceholderText(
+            "用于判断 VPN 是否生效，如 10.10.3.67:8080")
+        form.addRow("内网探测地址:", self.edit_probe)
+
+        self.spin_timeout = QSpinBox()
+        self.spin_timeout.setRange(10, 600)
+        self.spin_timeout.setValue(cfg["timeout"] or 60)
+        form.addRow("连接超时(秒):", self.spin_timeout)
+
+        self.edit_cert = QLineEdit(cfg["servercert"])
+        self.edit_cert.setPlaceholderText(
+            "留空则首次连接自动记录（pin-sha256:...）")
+        form.addRow("证书指纹:", self.edit_cert)
+        layout.addLayout(form)
+
+        self.chk_auto_trust = QCheckBox("首次连接自动信任服务器证书")
+        self.chk_auto_trust.setChecked(cfg["auto_trust_cert"])
+        layout.addWidget(self.chk_auto_trust)
+
+        self.chk_disconnect = QCheckBox("导入完成后断开 VPN")
+        self.chk_disconnect.setChecked(cfg["disconnect_after"])
+        layout.addWidget(self.chk_disconnect)
+
+        self.lbl_hint = QLabel(
+            "说明：使用 OpenConnect（Fortinet 协议）独立建隧道，"
+            "不依赖 FortiClient；首次使用需管理员权限创建虚拟网卡。")
+        self.lbl_hint.setWordWrap(True)
+        self.lbl_hint.setStyleSheet("color: #666; font-size: 11px;")
+        layout.addWidget(self.lbl_hint)
+
+        self.lbl_status = QLabel("")
+        self.lbl_status.setWordWrap(True)
+        layout.addWidget(self.lbl_status)
+
+        btn_row = QHBoxLayout()
+        self.btn_test = QPushButton("测试连接")
+        self.btn_test.clicked.connect(self._on_test)
+        btn_row.addWidget(self.btn_test)
+        btn_row.addStretch()
+        btn_ok = QPushButton("确定")
+        btn_cancel = QPushButton("取消")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(btn_ok)
+        btn_row.addWidget(btn_cancel)
+        layout.addLayout(btn_row)
+
+        self._test_worker = None
+        self._update_enabled()
+
+    def _update_enabled(self):
+        on = self.chk_enabled.isChecked()
+        for w in (self.edit_server, self.spin_port, self.edit_username,
+                  self.edit_password, self.edit_probe, self.spin_timeout,
+                  self.edit_cert, self.chk_auto_trust, self.chk_disconnect,
+                  self.btn_test):
+            w.setEnabled(on)
+
+    def _on_test(self):
+        cfg = self.current_config()
+        self.lbl_status.setText("正在连接 VPN…")
+        self.btn_test.setEnabled(False)
+        self._test_worker = _VpnTestWorker(cfg, self)
+        self._test_worker.finished_ok.connect(self._on_test_done)
+        self._test_worker.start()
+
+    def _on_test_done(self, ok, message, servercert):
+        self.btn_test.setEnabled(True)
+        self.lbl_status.setText(("✅ " if ok else "❌ ") + message)
+        if servercert and not self.edit_cert.text().strip():
+            self.edit_cert.setText(servercert)
+
+    def current_config(self) -> dict:
+        host, port = parse_host_port(self.edit_probe.text())
+        return vpn_config_from_dict({
+            "enabled": self.chk_enabled.isChecked(),
+            "server": self.edit_server.text(),
+            "port": self.spin_port.value(),
+            "username": self.edit_username.text(),
+            "password": self.edit_password.text(),
+            "servercert": self.edit_cert.text(),
+            "probe_host": host,
+            "probe_port": port,
+            "timeout": self.spin_timeout.value(),
+            "auto_trust_cert": self.chk_auto_trust.isChecked(),
+            "disconnect_after": self.chk_disconnect.isChecked(),
+        })
+
+    def accept(self):
+        self._update_enabled()
+        super().accept()

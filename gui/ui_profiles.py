@@ -55,11 +55,19 @@ def load_last_selected(path: str) -> str:
     return str(name) if name else ""
 
 
-def save_last_selected(path: str, name: str) -> bool:
-    """记录上次选择的方案名（保留已有方案列表）"""
+def save_last_selected(path: str, name: str, vpn: dict = None) -> bool:
+    """记录上次选择的方案名（及该方案的 VPN 配置，供启动时恢复）"""
     doc = _read_doc(path)
     doc["last_selected"] = name or ""
+    if vpn is not None:
+        doc["last_vpn"] = dict(vpn or {})
     return _write_doc(path, doc)
+
+
+def load_last_vpn(path: str) -> dict:
+    """读取上次选择方案的 VPN 配置（启动时恢复用）"""
+    vpn = _read_doc(path).get("last_vpn")
+    return dict(vpn) if isinstance(vpn, dict) else {}
 
 
 def resolve_profiles(all_profiles: list, names: list) -> tuple:

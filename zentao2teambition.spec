@@ -24,6 +24,11 @@ _DATA_RUNTIME = [
 extra_datas = [(f, 'data') for f in _DATA_RUNTIME
                if os.path.isfile(os.path.join(SPECPATH, f))]
 
+# VPN：内置 OpenConnect（存在才打包），新用户无需另行安装
+_vpn_dir = os.path.join(SPECPATH, 'tools', 'vpn')
+if os.path.isfile(os.path.join(_vpn_dir, 'openconnect.exe')):
+    extra_datas.append((_vpn_dir, 'tools/vpn'))
+
 a = Analysis(
     ['gui_main.py'],
     pathex=[],
@@ -59,6 +64,7 @@ a = Analysis(
         'src.vision_analyzer',
         'src.vision_integration',
         'src.tb_web_downloader',
+        'src.vpn_client',
         'src.zentao_video_downloader',
         'gui.updater',
         'gui.workers',
@@ -69,6 +75,8 @@ a = Analysis(
         'tools',
         'tools.query_ids',
         'tools.export_bugs',
+        'win32com.client',
+        'pythoncom',
         'PyQt6',
         'PyQt6.QtCore',
         'PyQt6.QtWidgets',
@@ -126,6 +134,8 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    # VPN（OpenConnect）创建虚拟网卡需要管理员权限，默认以管理员身份启动
+    uac_admin=True,
 )
 
 coll = COLLECT(
