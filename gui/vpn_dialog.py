@@ -41,22 +41,26 @@ class _VpnTestWorker(QThread):
         import logging
         log = logging.getLogger(__name__)
         client = VpnClient(self._config)
+        ok, msg, cert = False, "", ""
         try:
             ok, msg = client.connect()
-            if ok:
-                log.info("VPN 测试连接成功: %s", msg)
-            else:
-                log.warning("VPN 测试连接失败: %s", msg)
-            self.finished_ok.emit(ok, msg, client.servercert)
+            cert = client.servercert
         except Exception as e:  # noqa: BLE001
             log.exception("VPN 测试连接异常")
-            self.finished_ok.emit(False, f"连接异常: {e}", "")
+            ok, msg = False, f"连接异常: {e}"
         finally:
             # 测试完立即断开，避免占用用户网络
             try:
                 client.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("测试后断开 VPN 失败: %s", e)
+        # 所有工作（含断开）完成后再通知 UI：若先发信号，用户可能立刻关闭
+        # 弹窗，导致仍在运行的 QThread 被销毁 → Qt 直接崩溃
+        if ok:
+            log.info("VPN 测试连接成功: %s", msg)
+        else:
+            log.warning("VPN 测试连接失败: %s", msg)
+        self.finished_ok.emit(ok, msg, cert)
 
 
 class VpnDialog(QDialog):
@@ -142,15 +146,16 @@ class VpnDialog(QDialog):
         self.btn_test.clicked.connect(self._on_test)
         btn_row.addWidget(self.btn_test)
         btn_row.addStretch()
-        btn_ok = QPushButton("确定")
-        btn_cancel = QPushButton("取消")
-        btn_ok.clicked.connect(self.accept)
-        btn_cancel.clicked.connect(self.reject)
-        btn_row.addWidget(btn_ok)
-        btn_row.addWidget(btn_cancel)
+        self.btn_ok = QPushButton("确定")
+        self.btn_cancel = QPushButton("取消")
+        self.btn_ok.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(self.btn_ok)
+        btn_row.addWidget(self.btn_cancel)
         layout.addLayout(btn_row)
 
         self._test_worker = None
+        self._testing = False
         self._update_enabled()
         self._update_probe_state()
 
@@ -174,16 +179,47 @@ class VpnDialog(QDialog):
     def _on_test(self):
         cfg = self.current_config()
         self.lbl_status.setText("正在连接 VPN…")
+        self._testing = True
         self.btn_test.setEnabled(False)
+        self.btn_ok.setEnabled(False)
+        self.btn_cancel.setEnabled(False)
         self._test_worker = _VpnTestWorker(cfg, self)
         self._test_worker.finished_ok.connect(self._on_test_done)
+        self._test_worker.finished.connect(self._on_test_worker_finished)
         self._test_worker.start()
 
+    def _on_test_worker_finished(self):
+        self._test_worker = None
+
     def _on_test_done(self, ok, message, servercert):
-        self.btn_test.setEnabled(True)
+        self._testing = False
+        self.btn_test.setEnabled(self.chk_enabled.isChecked())
+        self.btn_ok.setEnabled(True)
+        self.btn_cancel.setEnabled(True)
         self.lbl_status.setText(("✅ " if ok else "❌ ") + message)
         if servercert and not self.edit_cert.text().strip():
             self.edit_cert.setText(servercert)
+
+    def _test_running(self) -> bool:
+        worker = self._test_worker
+        return self._testing or (worker is not None and worker.isRunning())
+
+    def reject(self):
+        # 测试线程未结束时禁止关闭：QThread 运行中被销毁会导致闪退
+        if self._test_running():
+            return
+        super().reject()
+
+    def accept(self):
+        if self._test_running():
+            return
+        super().accept()
+
+    def closeEvent(self, event):
+        if self._test_running():
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def current_config(self) -> dict:
         probe_text = (self._default_probe
@@ -204,6 +240,3 @@ class VpnDialog(QDialog):
             "auto_trust_cert": self.chk_auto_trust.isChecked(),
             "disconnect_after": self.chk_disconnect.isChecked(),
         })
-
-    def accept(self):
-        super().accept()

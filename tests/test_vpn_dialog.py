@@ -118,3 +118,57 @@ class TestProbeAuto:
         assert dlg.edit_probe.text() == "172.16.0.5:8000"
         assert dlg.edit_probe.isEnabled() is True
         dlg.deleteLater()
+
+
+class TestTestWorkerLifecycle:
+    """测试连接期间禁止关闭弹窗；断开完成后再通知 UI"""
+
+    def test_worker_disconnects_before_emit(self, qapp, monkeypatch):
+        import gui.vpn_dialog as mod
+        events = []
+
+        class FakeClient:
+            def __init__(self, cfg):
+                self.servercert = "pin-sha256:TEST="
+
+            def connect(self):
+                events.append("connect")
+                return True, "ok"
+
+            def disconnect(self):
+                events.append("disconnect")
+                return True, ""
+
+        monkeypatch.setattr(mod, "VpnClient", FakeClient)
+        worker = mod._VpnTestWorker({})
+        worker.finished_ok.connect(
+            lambda ok, msg, cert: events.append("emit"))
+        worker.run()
+        assert events == ["connect", "disconnect", "emit"]
+
+    def test_accept_blocked_while_testing(self, qapp):
+        from gui.vpn_dialog import VpnDialog
+        dlg = VpnDialog({"enabled": True}, default_probe="10.0.0.1:80")
+        dlg._testing = True
+        dlg.accept()
+        assert dlg.result() == 0          # 未被接受
+        dlg._testing = False
+        dlg.accept()
+        assert dlg.result() == 1
+        dlg.deleteLater()
+
+    def test_done_resets_controls(self, qapp):
+        from gui.vpn_dialog import VpnDialog
+        dlg = VpnDialog({"enabled": True}, default_probe="10.0.0.1:80")
+        dlg._testing = True
+        dlg.btn_ok.setEnabled(False)
+        dlg.btn_cancel.setEnabled(False)
+        dlg.btn_test.setEnabled(False)
+        dlg._on_test_done(True, "已连接", "pin-sha256:X=")
+        assert dlg._testing is False
+        assert dlg.btn_ok.isEnabled() is True
+        assert dlg.btn_cancel.isEnabled() is True
+        assert dlg.btn_test.isEnabled() is True
+        assert "✅" in dlg.lbl_status.text()
+        assert dlg.edit_cert.text() == "pin-sha256:X="
+        dlg.deleteLater()
