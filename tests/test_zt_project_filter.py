@@ -120,3 +120,25 @@ class TestBugUrlParsedCallback:
         mw.filter_module.setText.assert_called_with("12")
         mw.filter_zt_project.clear.assert_called_once()
         assert "project" not in mw.config["zentao"]["filters"]
+
+
+class TestBuildFetchCombos:
+    """项目/执行ID只做补全：产品维度与项目维度都要拉取"""
+
+    def test_product_with_project_adds_product_only(self):
+        from src.utils import build_fetch_combos
+        combos = build_fetch_combos([413, 419], [649])
+        assert (413, 649) in combos and (419, 649) in combos
+        assert (413, None) in combos and (419, None) in combos
+
+    def test_product_only(self):
+        from src.utils import build_fetch_combos
+        assert build_fetch_combos([413], []) == [(413, None)]
+
+    def test_project_only(self):
+        from src.utils import build_fetch_combos
+        assert build_fetch_combos([], [649]) == [(None, 649)]
+
+    def test_both_empty(self):
+        from src.utils import build_fetch_combos
+        assert build_fetch_combos([], []) == [(None, None)]

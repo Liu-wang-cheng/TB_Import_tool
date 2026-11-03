@@ -367,16 +367,16 @@ class ListBugsWorker(QThread):
                     [int(filters["project_id"])]
                     if filters.get("project_id") else [])
             bugs = []
-            for pid in product_ids or [None]:
-                for jid in project_ids or [None]:
-                    bugs.extend(source.fetch_all_bugs(
-                        product_id=pid,
-                        project_id=jid,
-                        statuses=list_statuses,
-                        date_from=filters.get("date_from"),
-                        date_to=filters.get("date_to"),
-                        assigned_to=list_assigned_to,
-                    ))
+            from src.utils import build_fetch_combos
+            for pid, jid in build_fetch_combos(product_ids, project_ids):
+                bugs.extend(source.fetch_all_bugs(
+                    product_id=pid,
+                    project_id=jid,
+                    statuses=list_statuses,
+                    date_from=filters.get("date_from"),
+                    date_to=filters.get("date_to"),
+                    assigned_to=list_assigned_to,
+                ))
             seen = set()
             dedup = []
             for b in bugs:

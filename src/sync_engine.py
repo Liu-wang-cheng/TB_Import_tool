@@ -212,26 +212,26 @@ class SyncEngine:
         # 单个组合失败不中断整体（记录后继续，保证已拉取数据正常同步）
         bugs = []
         failed_combos = []
-        for pid in product_ids or [None]:
-            for jid in project_ids or [None]:
-                combo = (pid, jid)
-                try:
-                    batch = self.source.fetch_all_bugs(
-                        product_id=pid,
-                        project_id=jid,
-                        statuses=filters.get("statuses"),
-                        date_from=filters.get("date_from"),
-                        date_to=filters.get("date_to"),
-                        assigned_to=assigned_to,
-                    )
-                except Exception as e:
-                    logger.error("拉取失败 (产品=%s, 项目=%s): %s", pid, jid, e)
-                    failed_combos.append(combo)
-                    continue
-                for b in batch:
-                    # 标记来源产品，供模块过滤在"部分产品解析失败"时保留其缺陷
-                    b._src_pid = pid
-                bugs.extend(batch)
+        from src.utils import build_fetch_combos
+        for pid, jid in build_fetch_combos(product_ids, project_ids):
+            combo = (pid, jid)
+            try:
+                batch = self.source.fetch_all_bugs(
+                    product_id=pid,
+                    project_id=jid,
+                    statuses=filters.get("statuses"),
+                    date_from=filters.get("date_from"),
+                    date_to=filters.get("date_to"),
+                    assigned_to=assigned_to,
+                )
+            except Exception as e:
+                logger.error("拉取失败 (产品=%s, 项目=%s): %s", pid, jid, e)
+                failed_combos.append(combo)
+                continue
+            for b in batch:
+                # 标记来源产品，供模块过滤在"部分产品解析失败"时保留其缺陷
+                b._src_pid = pid
+            bugs.extend(batch)
         if failed_combos:
             logger.warning("共 %d 个产品/项目组合拉取失败，其余继续同步",
                            len(failed_combos))

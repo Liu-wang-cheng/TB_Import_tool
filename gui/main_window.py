@@ -2104,8 +2104,19 @@ class MainWindow(QMainWindow):
             self.filter_module.clear()
         zt_filters = self.config.setdefault("zentao", {}).setdefault("filters", {})
         if project and project != "0":
-            self.filter_zt_project.setText(project)
-            zt_filters["project"] = int(project)
+            # 合并已有项目/执行ID（支持解析多个缺陷逐步补全）
+            existing = zt_filters.get("project")
+            if isinstance(existing, (list, tuple)):
+                vals = [int(x) for x in existing if str(x).isdigit()]
+            elif existing and str(existing).isdigit():
+                vals = [int(existing)]
+            else:
+                vals = []
+            pv = int(project)
+            if pv not in vals:
+                vals.append(pv)
+            zt_filters["project"] = vals[0] if len(vals) == 1 else vals
+            self.filter_zt_project.setText(",".join(str(x) for x in vals))
         else:
             self.filter_zt_project.clear()
             zt_filters.pop("project", None)

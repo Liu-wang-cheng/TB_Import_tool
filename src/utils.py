@@ -308,6 +308,23 @@ def resolve_module_filter_ids(source, product_ids: list,
     return combined, api_ok, failed_pids
 
 
+def build_fetch_combos(product_ids, project_ids) -> list:
+    """构建拉取组合 (product_id, project_id)。
+
+    项目/执行ID 仅用于"补全"：禅道产品接口只返回未挂项目的缺陷，
+    因此同时保留产品维度（project=None）与项目/执行维度，最后按
+    bug.id 去重合并，避免补项目后反而漏掉未挂项目的缺陷。
+    """
+    products = list(product_ids or [])
+    projects = list(project_ids or [])
+    if products:
+        combos = [(p, j) for p in products for j in (projects or [None])]
+        if projects:
+            combos += [(p, None) for p in products]
+        return combos
+    return [(None, j) for j in (projects or [None])]
+
+
 def parse_zentao_url(url: str) -> dict:
     """从禅道 Bug 页面 URL 中解析产品ID、项目ID、模块ID、分支ID
 

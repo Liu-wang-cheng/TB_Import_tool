@@ -51,17 +51,17 @@ def list_bugs(source, filters: dict, severity_map: dict = None,
         [int(filters["product_id"])] if filters.get("product_id") else [])
     project_ids = filters.get("project_ids") or (
         [int(filters["project_id"])] if filters.get("project_id") else [])
+    from src.utils import build_fetch_combos
     bugs = []
-    for pid in product_ids or [None]:
-        for jid in project_ids or [None]:
-            bugs.extend(source.fetch_all_bugs(
-                product_id=pid,
-                project_id=jid,
-                statuses=filters.get("statuses"),
-                date_from=filters.get("date_from"),
-                date_to=filters.get("date_to"),
-                assigned_to=assigned_to,
-            ))
+    for pid, jid in build_fetch_combos(product_ids, project_ids):
+        bugs.extend(source.fetch_all_bugs(
+            product_id=pid,
+            project_id=jid,
+            statuses=filters.get("statuses"),
+            date_from=filters.get("date_from"),
+            date_to=filters.get("date_to"),
+            assigned_to=assigned_to,
+        ))
     seen = set()
     dedup = []
     for b in bugs:
