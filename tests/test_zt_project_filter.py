@@ -79,3 +79,44 @@ class TestProjectFilterApply:
         mw._apply_filters_to_config()
         assert mw.config["zentao"]["filters"]["project"] is None
         assert "project_ids" not in mw.config["zentao"]["filters"]
+
+
+class TestBugUrlParsedCallback:
+    """缺陷查看地址解析结果：自动回填产品/模块/项目，无需手动填写"""
+
+    def _mw(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw.config = {}
+        mw.progress_bar = MagicMock()
+        mw._worker_finished = MagicMock()
+        mw._log = MagicMock()
+        mw.status_label = MagicMock()
+        mw._save_config_to_yaml = MagicMock()
+        mw.filter_product = MagicMock()
+        mw.filter_module = MagicMock()
+        mw.filter_zt_project = MagicMock()
+        mw._on_bug_url_parsed = (
+            lambda info: MainWindow._on_bug_url_parsed(mw, info))
+        return mw
+
+    def test_fills_product_module_project(self):
+        mw = self._mw()
+        mw._on_bug_url_parsed({"id": 65579, "product": "413",
+                               "module": "0", "project": "649"})
+        mw.filter_product.setText.assert_called_with("413")
+        mw.filter_module.clear.assert_called_once()
+        mw.filter_zt_project.setText.assert_called_with("649")
+        f = mw.config["zentao"]["filters"]
+        assert f["project"] == 649
+        assert "project_ids" not in f
+        mw._save_config_to_yaml.assert_called_once()
+
+    def test_no_project_clears(self):
+        mw = self._mw()
+        mw.config = {"zentao": {"filters": {"project": 649}}}
+        mw._on_bug_url_parsed({"id": 1, "product": "413",
+                               "module": "12", "project": "0"})
+        mw.filter_module.setText.assert_called_with("12")
+        mw.filter_zt_project.clear.assert_called_once()
+        assert "project" not in mw.config["zentao"]["filters"]

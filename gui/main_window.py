@@ -23,8 +23,8 @@ from dingtalk.bot import DingTalkBot
 from gui.config_dialog import ConfigDialog
 from gui.log_handler import QtLogHandler
 from gui.workers import (
-    AuthTestWorker, CollabAutoSyncWorker, ListBugsWorker, SyncWorker,
-    UpdateCheckWorker, UpdateDownloadWorker,
+    AuthTestWorker, CollabAutoSyncWorker, ListBugsWorker, ParseBugWorker,
+    SyncWorker, UpdateCheckWorker, UpdateDownloadWorker,
 )
 from gui.ui_profiles import (
     load_profiles, save_profile, resolve_profiles, format_profiles_summary,
@@ -265,14 +265,15 @@ class MainWindow(QMainWindow):
 
         # 项目/执行ID（可选）：禅道产品接口只返回未挂项目的缺陷，
         # 填写项目/执行ID 可把挂在该项目下的缺陷一起拉取
-        self.lbl_zt_project = QLabel("项目/执行ID:")
+        self.lbl_zt_project = QLabel("项目/执行(自动):")
         row1.addWidget(self.lbl_zt_project)
         self.filter_zt_project = QLineEdit()
-        self.filter_zt_project.setPlaceholderText("可选，如 649，逗号分隔多个")
+        self.filter_zt_project.setPlaceholderText("自动解析")
         self.filter_zt_project.setMaximumWidth(120)
+        self.filter_zt_project.setReadOnly(True)
         self.filter_zt_project.setToolTip(
-            "禅道项目/执行ID（可选）。产品接口只返回未挂项目的缺陷，"
-            "填写后可包含该项目/执行下的缺陷；从项目页 URL 解析时会自动填入")
+            "自动解析：粘贴缺陷查看地址/项目缺陷列表地址后自动填入。"
+            "产品接口只返回未挂项目的缺陷，解析出项目/执行后会一并拉取")
         row1.addWidget(self.filter_zt_project)
 
         # 状态：固定三个选项，对应 status_code 动态获取
@@ -1962,6 +1963,20 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # 禅道缺陷查看地址（m=bug&f=view&bugID=xxx / bug-view-xxx.html）：
+        # 自动拉取该缺陷，解析其产品/项目/模块
+        m_bug = (re.search(r'[?&]bugID=(\d+)', url, re.I)
+                 or re.search(r'bug-view-(\d+)', url, re.I))
+        if m_bug:
+            self._apply_filters_to_config()
+            self.status_label.setText("正在解析缺陷所属产品/项目...")
+            worker = ParseBugWorker(self.config, int(m_bug.group(1)), self)
+            worker.finished.connect(self._on_bug_url_parsed)
+            worker.error.connect(self._on_worker_error)
+            if self._start_worker(worker):
+                worker.start()
+            return
+
         parsed = parse_zentao_url(url)
         filled = []
         zt_filters = self.config.setdefault("zentao", {}).setdefault("filters", {})
@@ -2070,6 +2085,37 @@ class MainWindow(QMainWindow):
             return
 
         # 将解析结果持久化到 YAML，避免重启后恢复旧值
+        self._save_config_to_yaml()
+
+    def _on_bug_url_parsed(self, info):
+        """缺陷查看地址解析完成：回填产品/模块与项目/执行"""
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("%p%")
+        self._worker_finished(save_config=False)
+        product = str(info.get("product") or "")
+        project = str(info.get("project") or "")
+        module = str(info.get("module") or "")
+        if product:
+            self.filter_product.setText(product)
+        if module and module != "0":
+            self.filter_module.setText(module)
+        else:
+            self.filter_module.clear()
+        zt_filters = self.config.setdefault("zentao", {}).setdefault("filters", {})
+        if project and project != "0":
+            self.filter_zt_project.setText(project)
+            zt_filters["project"] = int(project)
+        else:
+            self.filter_zt_project.clear()
+            zt_filters.pop("project", None)
+        zt_filters.pop("project_id", None)
+        zt_filters.pop("project_ids", None)
+        self.status_label.setText(
+            f"已解析缺陷 #{info.get('id')}: 产品={product or '-'} "
+            f"项目/执行={project or '-'} 模块={module or '-'}")
+        self._log(f"[解析] 缺陷 #{info.get('id')} -> 产品 {product}, "
+                  f"项目/执行 {project}, 模块 {module}")
         self._save_config_to_yaml()
 
     def _on_test_auth(self):

@@ -825,3 +825,52 @@ class CollabAutoSyncWorker(QThread):
                 self.log.emit("[协同学习] 知识库模型已重建", "INFO")
         except Exception as e:
             logger.warning("协同学习模型重建失败: %s", e)
+
+
+class ParseBugWorker(QThread):
+    """解析禅道缺陷查看地址：拉取该缺陷的产品/项目/模块"""
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str, str)
+
+    def __init__(self, config, bug_id: int, parent=None):
+        super().__init__(parent)
+        self.config = copy.deepcopy(config)
+        self.bug_id = bug_id
+
+    def run(self):
+        source = None
+        vpn_client = None
+        vpn_cfg = self.config.get("vpn") or {}
+        try:
+            if vpn_cfg.get("enabled"):
+                from src.vpn_client import VpnClient
+                vpn_client = VpnClient(vpn_cfg)
+                ok, msg = vpn_client.connect()
+                if not ok:
+                    self.error.emit(f"VPN 连接失败: {msg}", "")
+                    return
+
+            from src.source_factory import create_source_client
+            source = create_source_client(self.config)
+            source.authenticate()
+            bug = source.fetch_bug_detail(self.bug_id)
+            self.finished.emit({
+                "id": bug.id,
+                "title": bug.title,
+                "product": bug.product,
+                "module": bug.module,
+                "moduleName": bug.moduleName,
+                "project": bug.project,
+                "projectName": bug.projectName,
+            })
+        except Exception as e:
+            logger.exception("解析缺陷地址失败")
+            self.error.emit(str(e), traceback.format_exc())
+        finally:
+            if vpn_client is not None and vpn_cfg.get("disconnect_after"):
+                try:
+                    vpn_client.disconnect()
+                except Exception as e:
+                    logger.warning("断开 VPN 失败: %s", e)
+            if source:
+                source.close()
