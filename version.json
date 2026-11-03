@@ -1,6 +1,6 @@
 {
   "version": "2.8.18",
-  "sha256": "",
+  "sha256": "8284ff02e05877cad52797373c59149c0702d9d78c6b64c2f4fe08f6d23fd4ea",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.18/SmartDefectPlatform.zip",
   "release_date": "2026-11-03",
   "release_notes": "v2.8.18 修复：自动更新提示成功后重启仍是旧版本——发布窗口内 version.json 先写入新版本号、下载地址与 sha256 仍指向上一个 Release，更新器按旧地址下载旧包且 SHA 校验恰好通过。现在更新检查会拒绝版本号与下载地址不一致的元数据；下载前校验地址 tag，解压后核对包内 VERSION，不一致立即取消并清理；build.bat 发布前强制校验 version.json 与 VERSION/下载地址 tag 一致。测试 602 个通过（排除需真实服务器的网络集成测试）",
