@@ -1998,6 +1998,7 @@ class MainWindow(QMainWindow):
                               "project_id", "project_ids"):
                         _f.pop(k, None)
             self._apply_filters_to_config()
+            logger.info("[解析] 缺陷查看地址: %s", url)
             self.status_label.setText("正在解析缺陷所属产品/项目...")
             worker = ParseBugWorker(self.config, int(m_bug.group(1)), self)
             worker.finished.connect(self._on_bug_url_parsed)
@@ -2151,6 +2152,9 @@ class MainWindow(QMainWindow):
             zt_filters.pop("project", None)
         zt_filters.pop("project_id", None)
         zt_filters.pop("project_ids", None)
+        logger.info("[解析] 缺陷 #%s -> 产品=%s 项目/执行=%s 模块=%s",
+                    info.get("id"), product or "-", project or "-",
+                    module or "-")
         self.status_label.setText(
             f"已解析缺陷 #{info.get('id')}: 产品={product or '-'} "
             f"项目/执行={project or '-'} 模块={module or '-'}")
@@ -2349,12 +2353,33 @@ class MainWindow(QMainWindow):
     # ── 定时同步 ──────────────────────────────────────
 
     def _start_schedule_timer(self):
-        """启动定时同步检查器（每分钟检查一次）"""
+        """启动定时同步检查器（每分钟检查一次）+ 进度条看门狗"""
         if self._schedule_timer is None:
             from gui.qt_compat import QTimer
             self._schedule_timer = QTimer(self)
             self._schedule_timer.timeout.connect(self._check_scheduled_sync)
             self._schedule_timer.start(60000)
+            # 看门狗：没有任何任务运行时，清掉残留的"不确定模式"滚动条
+            self._progress_watchdog = QTimer(self)
+            self._progress_watchdog.timeout.connect(self._reset_stuck_progress)
+            self._progress_watchdog.start(2000)
+
+    def _reset_stuck_progress(self):
+        """空闲状态下若进度条仍为不确定模式（滚动），强制复位"""
+        running = [
+            w for w in (getattr(self, "_worker", None),
+                        getattr(self, "_update_download_worker", None),
+                        getattr(self, "_update_check_worker", None),
+                        getattr(self, "_collab_worker", None))
+            if w is not None and w.isRunning()
+        ]
+        if running:
+            return
+        if self.progress_bar.maximum() == 0:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("%p%")
+            logger.info("进度条空闲残留已复位")
 
     def _load_scheduled_config(self):
         """启动时从 sync.yaml 加载定时同步配置"""

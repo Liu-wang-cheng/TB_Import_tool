@@ -847,6 +847,7 @@ class ParseBugWorker(QThread):
                 vpn_client = VpnClient(vpn_cfg)
                 ok, msg = vpn_client.connect()
                 if not ok:
+                    logger.warning("解析缺陷地址失败（VPN）: %s", msg)
                     self.error.emit(f"VPN 连接失败: {msg}", "")
                     return
 

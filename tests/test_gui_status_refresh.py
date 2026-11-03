@@ -98,3 +98,32 @@ class TestProgressBarReset:
         mw.status_label = MagicMock()
         MainWindow._on_list_result(mw, [])
         mw.progress_bar.setRange.assert_called_with(0, 100)
+
+
+class TestProgressWatchdog:
+    """空闲看门狗：没有任务运行时强制清掉滚动状态"""
+
+    def test_resets_when_idle(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw._worker = None
+        mw._update_download_worker = None
+        mw._update_check_worker = None
+        mw._collab_worker = None
+        mw.progress_bar.maximum.return_value = 0
+        MainWindow._reset_stuck_progress(mw)
+        mw.progress_bar.setRange.assert_called_with(0, 100)
+        mw.progress_bar.setValue.assert_called_with(0)
+
+    def test_keeps_scrolling_while_worker_running(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        w = MagicMock()
+        w.isRunning.return_value = True
+        mw._worker = w
+        mw._update_download_worker = None
+        mw._update_check_worker = None
+        mw._collab_worker = None
+        mw.progress_bar.maximum.return_value = 0
+        MainWindow._reset_stuck_progress(mw)
+        mw.progress_bar.setRange.assert_not_called()
