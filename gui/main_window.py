@@ -1968,6 +1968,35 @@ class MainWindow(QMainWindow):
         m_bug = (re.search(r'[?&]bugID=(\d+)', url, re.I)
                  or re.search(r'bug-view-(\d+)', url, re.I))
         if m_bug:
+            # 地址里带了服务器：与当前配置不一致时切换（否则会拿错服务器查询）
+            m_origin = re.match(r'(https?://[^/]+)', url)
+            if m_origin:
+                new_base = m_origin.group(1).rstrip("/")
+                cur_base = self.edit_zentao_base_url.text().strip().rstrip("/")
+                if cur_base and cur_base != new_base:
+                    ret = QMessageBox.question(
+                        self, "服务器地址不同",
+                        "URL 指向的服务器与当前配置不一致：\n\n"
+                        f"当前配置: {cur_base}\n"
+                        f"URL 指向: {new_base}\n\n"
+                        "是否切换到该服务器并解析？",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                    if ret != QMessageBox.Yes:
+                        self.status_label.setText("已取消解析（服务器地址不同）")
+                        return
+                self.edit_zentao_base_url.setText(new_base)
+                zt_cfg = self.config.setdefault("zentao", {})
+                zt_cfg["base_url"] = new_base
+                if cur_base and cur_base != new_base:
+                    # 切换服务器：清空旧的产品/模块/项目，避免串用
+                    self.filter_product.clear()
+                    self.filter_module.clear()
+                    self.filter_zt_project.clear()
+                    _f = zt_cfg.setdefault("filters", {})
+                    for k in ("product", "project", "module_filter",
+                              "product_id", "product_ids",
+                              "project_id", "project_ids"):
+                        _f.pop(k, None)
             self._apply_filters_to_config()
             self.status_label.setText("正在解析缺陷所属产品/项目...")
             worker = ParseBugWorker(self.config, int(m_bug.group(1)), self)

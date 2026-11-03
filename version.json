@@ -1,8 +1,8 @@
 {
-  "version": "2.8.15",
+  "version": "2.8.16",
   "sha256": "aa2b42d0f20ab09b01b8445d89de513394a6dfa918e29b0d17664b9df7fe2c73",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.15/SmartDefectPlatform.zip",
-  "release_date": "2026-11-02",
-  "release_notes": "v2.8.15 修复：VPN 测试连接成功后闪退（测试线程先发成功信号、UI 关闭弹窗时后台仍在断开，QThread 运行中被销毁；改为断开完成后再通知并禁止测试中关闭）；VPN 启用后点击列出Bug/试运行界面卡顿（状态码刷新在 GUI 线程连接未就绪的内网服务器导致超时等待，现检测到 VPN 未连通即跳过）；内置 OpenConnect 显式指定随包路由脚本（未安装 OpenConnect 的机器也能配置路由）；探测地址无端口时按 http/https 补 80/443；CLI 配置 YAML 错误明确提示",
+  "release_date": "2026-11-03",
+  "release_notes": "v2.8.16 修复/新增：禅道缺陷导入补全——产品接口只返回未挂项目的缺陷，现粘贴缺陷查看地址自动解析产品/模块/项目（执行）ID，项目ID与产品维度同时拉取并按id去重（补项目不再漏掉未挂项目的缺陷），项目接口不可用时自动回退 /executions/{id}/bugs；粘贴内网缺陷地址会提示切换服务器；进度条在无任务/任务结束后不再残留滚动；项目/执行字段为只读自动解析",
   "min_version": "1.0"
 }
