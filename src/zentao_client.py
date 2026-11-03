@@ -880,7 +880,21 @@ class ZentaoClient:
         params = {"page": page, "limit": limit}
         if server_status:
             params["status"] = server_status
-        data = self._request("GET", path, params=params)
+        try:
+            data = self._request("GET", path, params=params)
+        except ZentaoAPIError as e:
+            # 部分版本把项目/执行统一到 executions 端点：项目接口 400/403/404 时
+            # 回退到 /executions/{id}/bugs（可按 product 过滤），避免漏拉缺陷
+            if (project_id and path.startswith("/api.php/v1/projects/")
+                    and e.status_code in (400, 403, 404)):
+                exec_path = f"/api.php/v1/executions/{project_id}/bugs"
+                exec_params = dict(params)
+                if product_id:
+                    exec_params["product"] = product_id
+                logger.info("项目接口不可用，回退执行接口: %s", exec_path)
+                data = self._request("GET", exec_path, params=exec_params)
+            else:
+                raise
 
         bugs_data = data.get("bugs", [])
         total = data.get("total", 0)

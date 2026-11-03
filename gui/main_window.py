@@ -263,6 +263,18 @@ class MainWindow(QMainWindow):
         self.filter_module.setToolTip("禅道模块ID（网页 byModule-{ID}），自动包含全部子模块")
         row1.addWidget(self.filter_module)
 
+        # 项目/执行ID（可选）：禅道产品接口只返回未挂项目的缺陷，
+        # 填写项目/执行ID 可把挂在该项目下的缺陷一起拉取
+        self.lbl_zt_project = QLabel("项目/执行ID:")
+        row1.addWidget(self.lbl_zt_project)
+        self.filter_zt_project = QLineEdit()
+        self.filter_zt_project.setPlaceholderText("可选，如 649，逗号分隔多个")
+        self.filter_zt_project.setMaximumWidth(120)
+        self.filter_zt_project.setToolTip(
+            "禅道项目/执行ID（可选）。产品接口只返回未挂项目的缺陷，"
+            "填写后可包含该项目/执行下的缺陷；从项目页 URL 解析时会自动填入")
+        row1.addWidget(self.filter_zt_project)
+
         # 状态：固定三个选项，对应 status_code 动态获取
         # "激活" = 任务为打开状态（active/confirmed/opened 等所有未关闭状态）
         # "已关闭" = 任务为关闭/已解决（closed/resolved）
@@ -912,6 +924,8 @@ class MainWindow(QMainWindow):
             # 隐藏产品ID（禅道专属）；状态、指派人保留
             self.lbl_product.setVisible(False)
             self.filter_product.setVisible(False)
+            self.lbl_zt_project.setVisible(False)
+            self.filter_zt_project.setVisible(False)
             self.lbl_status.setVisible(True)
             self.filter_status.setVisible(True)
             # 状态选项与禅道一致（激活/已关闭/激活+已关闭）
@@ -924,6 +938,8 @@ class MainWindow(QMainWindow):
             self.lbl_url.setText("禅道Bug页面地址:")
             self.lbl_product.setVisible(True)
             self.filter_product.setVisible(True)
+            self.lbl_zt_project.setVisible(True)
+            self.filter_zt_project.setVisible(True)
             self.lbl_status.setVisible(True)
             self.filter_status.setVisible(True)
             # 恢复禅道状态选项
@@ -991,6 +1007,12 @@ class MainWindow(QMainWindow):
             _prod = re.sub(r"[\[\]'\"]", "", str(_prod))
             self.filter_product.setText(_prod.strip())
             self.filter_module.setText(str(filters.get("module_filter", "") or ""))
+            _proj = filters.get("project")
+            if isinstance(_proj, (list, tuple)):
+                self.filter_zt_project.setText(
+                    ",".join(str(x) for x in _proj if x not in (None, "")))
+            else:
+                self.filter_zt_project.setText(str(_proj) if _proj else "")
             self.filter_url.setText("")
 
             # 加载状态：始终默认"激活"，不从 YAML 恢复状态选项
@@ -1038,6 +1060,7 @@ class MainWindow(QMainWindow):
                 _pid = ",".join(str(x) for x in _pid)
             _pid = re.sub(r"[\[\]'\"]", "", str(_pid))
             self.filter_module.setText(_pid.strip())
+            self.filter_zt_project.setText("")
             self.filter_url.setText(str(tb_src_cfg.get("url", "") or ""))
             # 恢复状态筛选：外部TB 的关闭同步依赖 sync_closed_status，
             # 不回读会导致界面固定显示"激活"，任意一次保存都把它静默改写为关
@@ -1141,6 +1164,7 @@ class MainWindow(QMainWindow):
             ("url", self.filter_url, "text"),
             ("product", self.filter_product, "text"),
             ("module", self.filter_module, "text"),
+            ("zt_project", self.filter_zt_project, "text"),
             ("status", self.filter_status, "text_sel"),
             ("date_mode", self.filter_date_mode, "text_sel"),
             ("date_from", self.filter_date_from, "date"),
@@ -1546,6 +1570,21 @@ class MainWindow(QMainWindow):
                             self.filter_module.text()).strip()
             filters["module_filter"] = module if module else ""
 
+            # 项目/执行ID（可选，逗号分隔多值）：产品接口不返回挂项目的缺陷时使用
+            project_text = re.sub(r"[\[\]'\"]", "",
+                                  self.filter_zt_project.text()).strip()
+            projects = [int(x) for x in project_text.replace("，", ",").split(",")
+                        if x.strip().isdigit()]
+            if len(projects) == 1:
+                filters["project"] = projects[0]
+            elif projects:
+                filters["project"] = projects
+            else:
+                filters["project"] = None
+            # 清空时避免残留旧的 project_id/project_ids
+            filters.pop("project_id", None)
+            filters.pop("project_ids", None)
+
             status_text = self.filter_status.currentText().strip()
             if status_text and self._status_code_map.get(status_text):
                 # 动态获取的 status_code 列表
@@ -1850,6 +1889,11 @@ class MainWindow(QMainWindow):
     def _worker_finished(self, save_config=False):
         self._worker = None
         self._set_busy(False)
+        # 兜底：任何任务结束后都不应残留"不确定模式"滚动条
+        if self.progress_bar.maximum() == 0:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(100)
+            self.progress_bar.setFormat("%p%")
         if save_config:
             try:
                 self._save_config_to_yaml()
@@ -1995,6 +2039,14 @@ class MainWindow(QMainWindow):
         if parsed["branch_id"] is not None:
             zt_filters["branch"] = parsed["branch_id"]
             filled.append(f"分支ID={parsed['branch_id']}")
+
+        # 同步"项目/执行ID"输入框（解析结果可能是单个或列表）
+        _proj = zt_filters.get("project")
+        if isinstance(_proj, (list, tuple)):
+            self.filter_zt_project.setText(
+                ",".join(str(x) for x in _proj if x not in (None, "")))
+        else:
+            self.filter_zt_project.setText(str(_proj) if _proj else "")
         # 模块ID：直接填入数字（不做名称转换）
         if parsed["module_id"]:
             self.filter_module.setText(str(parsed["module_id"]))
@@ -2032,7 +2084,9 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _on_auth_result(self, success, message):
+        self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("%p%")
         self._worker_finished(save_config=success)
         self.status_label.setText(message.replace("\n", " | "))
         if not success:
@@ -2138,7 +2192,9 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _on_list_result(self, bugs):
+        self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("%p%")
         # 先取 worker 的 severity_labels 再调 _worker_finished（其内置空 _worker）
         sev_labels = getattr(self._worker, 'severity_labels', {}) if self._worker else {}
         self._worker_finished(save_config=True)

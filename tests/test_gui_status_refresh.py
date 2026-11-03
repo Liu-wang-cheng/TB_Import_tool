@@ -75,3 +75,26 @@ class TestStatusRefreshVpnGuard:
         mw = _make_mw(vpn_enabled=False)
         mw._refresh_status_codes()
         assert ("http://10.10.3.67:8080", "u", "p") in fake_cache
+
+
+class TestProgressBarReset:
+    """任务结束后不得残留不确定模式（滚动）"""
+
+    def test_worker_finished_resets_indeterminate(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw.progress_bar.maximum.return_value = 0
+        MainWindow._worker_finished(mw, save_config=False)
+        mw.progress_bar.setRange.assert_called_with(0, 100)
+        mw.progress_bar.setValue.assert_called_with(100)
+
+    def test_list_result_resets_range(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw._worker = None
+        mw._worker_finished = MagicMock()
+        mw.config = {}
+        mw._log = MagicMock()
+        mw.status_label = MagicMock()
+        MainWindow._on_list_result(mw, [])
+        mw.progress_bar.setRange.assert_called_with(0, 100)

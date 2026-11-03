@@ -842,6 +842,7 @@ class TestProfileVpnIntegration:
         mw.edit_zentao_password.text.return_value = ""
         mw.filter_product.text.return_value = ""
         mw.filter_module.text.return_value = ""
+        mw.filter_zt_project.text.return_value = ""
         mw.filter_status.currentText.return_value = "激活"
         mw.filter_date_mode.currentIndex.return_value = 0
         mw.filter_assigned = MagicMock()
