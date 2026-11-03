@@ -11,6 +11,10 @@ from gui.qt_compat import QThread, pyqtSignal
 logger = logging.getLogger(__name__)
 
 
+class _VpnUnavailable(Exception):
+    """VPN 建立失败：中止任务，由 run() 统一在清理后发 error 信号"""
+
+
 def _generate_updater_bat(current_dir: str, new_dir: str, pid: int,
                           extract_dir: str = "") -> str:
     """生成目录模式的更新 bat：等进程退出 → 只更新 _internal/ 和 exe → 重启
@@ -213,6 +217,7 @@ class AuthTestWorker(QThread):
         results = []
         vpn_client = None
         vpn_cfg = self.config.get("vpn") or {}
+        outcome = None
 
         try:
             # 连接测试同样需要先确保 VPN（否则内网源会误报连接失败）
@@ -222,8 +227,7 @@ class AuthTestWorker(QThread):
                 self.progress.emit("正在连接 VPN...")
                 ok, msg = vpn_client.connect()
                 if not ok:
-                    self.finished.emit(False, f"VPN 连接失败: {msg}")
-                    return
+                    raise _VpnUnavailable(f"VPN 连接失败: {msg}")
                 self.progress.emit(f"VPN 已就绪: {msg}")
 
             # 源平台认证
@@ -270,7 +274,13 @@ class AuthTestWorker(QThread):
             all_ok = all(ok for _, ok, _ in results)
             msg_parts = [f"{name}: {'✓' if ok else '✗ ' + detail}"
                          for name, ok, detail in results]
-            self.finished.emit(all_ok, "\n".join(msg_parts))
+            outcome = (all_ok, "\n".join(msg_parts))
+        except _VpnUnavailable as e:
+            logger.warning("连接测试中止（VPN）: %s", e)
+            outcome = (False, str(e))
+        except Exception as e:
+            logger.exception("连接测试失败")
+            outcome = (False, f"连接测试失败: {e}")
         finally:
             if vpn_client is not None and vpn_cfg.get("disconnect_after"):
                 try:
@@ -281,6 +291,9 @@ class AuthTestWorker(QThread):
                 source.close()
             if teambition:
                 teambition.close()
+        # 清理（断开 VPN/关闭客户端）完成后再通知界面，避免 GUI 提前解除
+        # 忙碌状态，导致新任务与旧线程清理并发
+        self.finished.emit(*outcome)
 
 
 class ListBugsWorker(QThread):
@@ -298,6 +311,8 @@ class ListBugsWorker(QThread):
         source = None
         vpn_client = None
         vpn_cfg = self.config.get("vpn") or {}
+        outcome = None
+        error_info = None
         try:
             from src.source_factory import create_source_client
             from src.utils import (
@@ -311,8 +326,7 @@ class ListBugsWorker(QThread):
                 self.progress.emit("正在连接 VPN...")
                 ok, msg = vpn_client.connect()
                 if not ok:
-                    self.error.emit(f"VPN 连接失败: {msg}", "")
-                    return
+                    raise _VpnUnavailable(f"VPN 连接失败: {msg}")
                 self.progress.emit(f"VPN 已就绪: {msg}")
 
             sync_cfg = self.config.get("sync", {})
@@ -443,10 +457,13 @@ class ListBugsWorker(QThread):
                     f"模块过滤后剩余 {len(bugs)} 条Bug (耗时 {elapsed:.1f}s)"
                 )
 
-            self.finished.emit(bugs)
+            outcome = bugs
+        except _VpnUnavailable as e:
+            logger.warning("列出缺陷中止（VPN）: %s", e)
+            error_info = (str(e), "")
         except Exception as e:
             logger.exception("列出缺陷失败")
-            self.error.emit(str(e), traceback.format_exc())
+            error_info = (str(e), traceback.format_exc())
         finally:
             if vpn_client is not None and vpn_cfg.get("disconnect_after"):
                 try:
@@ -455,6 +472,11 @@ class ListBugsWorker(QThread):
                     logger.warning("断开 VPN 失败: %s", e)
             if source:
                 source.close()
+        # 清理完成后再通知界面，避免新任务与旧线程清理并发
+        if error_info is not None:
+            self.error.emit(*error_info)
+        else:
+            self.finished.emit(outcome)
 
 
 class SyncWorker(QThread):
@@ -474,6 +496,8 @@ class SyncWorker(QThread):
         teambition = None
         vpn_client = None
         vpn_cfg = self.config.get("vpn") or {}
+        outcome = None
+        error_info = None
         try:
             from src.config_resolver import ConfigResolver
             from src.sync_engine import SyncEngine
@@ -485,8 +509,7 @@ class SyncWorker(QThread):
                 self.progress.emit(0, 0, "正在连接 VPN...")
                 ok, msg = vpn_client.connect()
                 if not ok:
-                    self.error.emit(f"VPN 连接失败: {msg}", "")
-                    return
+                    raise _VpnUnavailable(f"VPN 连接失败: {msg}")
                 self.progress.emit(0, 0, f"VPN 已就绪: {msg}")
 
             source, teambition = _init_clients(self.config)
@@ -533,10 +556,13 @@ class SyncWorker(QThread):
                 dry_run=self.dry_run,
                 progress_callback=lambda c, t, m: self.progress.emit(c, t, m),
             )
-            self.finished.emit(str(stats))
+            outcome = str(stats)
+        except _VpnUnavailable as e:
+            logger.warning("同步中止（VPN）: %s", e)
+            error_info = (str(e), "")
         except Exception as e:
             logger.exception("同步失败")
-            self.error.emit(str(e), traceback.format_exc())
+            error_info = (str(e), traceback.format_exc())
         finally:
             if vpn_client is not None and (vpn_cfg.get("disconnect_after")):
                 try:
@@ -548,6 +574,12 @@ class SyncWorker(QThread):
                 source.close()
             if teambition:
                 teambition.close()
+        # 清理（断开 VPN/关闭客户端）完成后再通知界面：避免任务结束后
+        # GUI 提前解除忙碌、开启新任务时被旧线程断开 VPN
+        if error_info is not None:
+            self.error.emit(*error_info)
+        else:
+            self.finished.emit(outcome)
 
 
 class ExportExcelWorker(QThread):
@@ -841,21 +873,21 @@ class ParseBugWorker(QThread):
         source = None
         vpn_client = None
         vpn_cfg = self.config.get("vpn") or {}
+        outcome = None
+        error_info = None
         try:
             if vpn_cfg.get("enabled"):
                 from src.vpn_client import VpnClient
                 vpn_client = VpnClient(vpn_cfg)
                 ok, msg = vpn_client.connect()
                 if not ok:
-                    logger.warning("解析缺陷地址失败（VPN）: %s", msg)
-                    self.error.emit(f"VPN 连接失败: {msg}", "")
-                    return
+                    raise _VpnUnavailable(f"VPN 连接失败: {msg}")
 
             from src.source_factory import create_source_client
             source = create_source_client(self.config)
             source.authenticate()
             bug = source.fetch_bug_detail(self.bug_id)
-            self.finished.emit({
+            outcome = {
                 "id": bug.id,
                 "title": bug.title,
                 "product": bug.product,
@@ -863,10 +895,13 @@ class ParseBugWorker(QThread):
                 "moduleName": bug.moduleName,
                 "project": bug.project,
                 "projectName": bug.projectName,
-            })
+            }
+        except _VpnUnavailable as e:
+            logger.warning("解析缺陷地址中止（VPN）: %s", e)
+            error_info = (str(e), "")
         except Exception as e:
             logger.exception("解析缺陷地址失败")
-            self.error.emit(str(e), traceback.format_exc())
+            error_info = (str(e), traceback.format_exc())
         finally:
             if vpn_client is not None and vpn_cfg.get("disconnect_after"):
                 try:
@@ -875,3 +910,8 @@ class ParseBugWorker(QThread):
                     logger.warning("断开 VPN 失败: %s", e)
             if source:
                 source.close()
+        # 清理完成后再通知界面，避免新任务与旧线程清理并发
+        if error_info is not None:
+            self.error.emit(*error_info)
+        else:
+            self.finished.emit(outcome)

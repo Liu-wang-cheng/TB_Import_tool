@@ -459,6 +459,11 @@ class TestScheduledProfileChain:
         mw._schedule_profiles = []
         mw._ui_profiles_path.return_value = "/tmp/none.yaml"
         mw._worker = None
+        mw._update_download_worker = None
+        mw._update_check_worker = None
+        mw._collab_worker = None
+        # 用真实实现判断是否有任务在跑（MagicMock 属性默认为真值）
+        mw._has_running_task = lambda: MainWindow._has_running_task(mw)
         mw.log_text = MagicMock()
         mw.status_label = MagicMock()
         mw.progress_bar = MagicMock()

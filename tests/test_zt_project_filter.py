@@ -102,6 +102,7 @@ class TestBugUrlParsedCallback:
 
     def test_fills_product_module_project(self):
         mw = self._mw()
+        mw.filter_product.text.return_value = ""
         mw._on_bug_url_parsed({"id": 65579, "product": "413",
                                "module": "0", "project": "649"})
         mw.filter_product.setText.assert_called_with("413")
@@ -112,14 +113,22 @@ class TestBugUrlParsedCallback:
         assert "project_ids" not in f
         mw._save_config_to_yaml.assert_called_once()
 
-    def test_no_project_clears(self):
+    def test_product_merges_with_existing(self):
+        mw = self._mw()
+        mw.filter_product.text.return_value = "419"
+        mw._on_bug_url_parsed({"id": 1, "product": "413",
+                               "module": "0", "project": "649"})
+        mw.filter_product.setText.assert_called_with("419,413")
+
+    def test_no_project_keeps_existing(self):
+        """缺陷未关联项目时保留已累计解析的项目ID，不因单个缺陷清空"""
         mw = self._mw()
         mw.config = {"zentao": {"filters": {"project": 649}}}
         mw._on_bug_url_parsed({"id": 1, "product": "413",
                                "module": "12", "project": "0"})
         mw.filter_module.setText.assert_called_with("12")
-        mw.filter_zt_project.clear.assert_called_once()
-        assert "project" not in mw.config["zentao"]["filters"]
+        mw.filter_zt_project.clear.assert_not_called()
+        assert mw.config["zentao"]["filters"]["project"] == 649
 
 
 class TestBuildFetchCombos:

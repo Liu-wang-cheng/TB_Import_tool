@@ -127,3 +127,48 @@ class TestProgressWatchdog:
         mw.progress_bar.maximum.return_value = 0
         MainWindow._reset_stuck_progress(mw)
         mw.progress_bar.setRange.assert_not_called()
+
+
+class TestProgressSignalGuards:
+    """迟到的进度信号不得把已复位/已完成的任务重新置为滚动模式"""
+
+    def test_progress_message_shows_indeterminate(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        w = MagicMock()
+        w.isRunning.return_value = True
+        mw._worker = w
+        MainWindow._on_progress_message(mw, "获取到 100 条缺陷")
+        mw.status_label.setText.assert_called_with("获取到 100 条缺陷")
+        mw.progress_bar.setRange.assert_called_with(0, 0)
+        mw.progress_bar.setFormat.assert_called_with("获取到 100 条缺陷")
+
+    def test_stale_sync_progress_ignored_after_finish(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw._worker = None
+        MainWindow._on_sync_progress(mw, 0, 0, "VPN 已断开")
+        mw.progress_bar.setRange.assert_not_called()
+        mw.progress_bar.setFormat.assert_not_called()
+
+    def test_stale_update_progress_ignored_after_finish(self):
+        from gui.main_window import MainWindow
+        mw = MagicMock()
+        mw._update_download_worker = None
+        MainWindow._on_update_download_progress(mw, 0, 0, "下载完成")
+        mw.progress_bar.setRange.assert_not_called()
+
+    def test_start_worker_refuses_while_update_check_running(
+            self, monkeypatch):
+        import gui.main_window as mw_mod
+        from gui.main_window import MainWindow
+        monkeypatch.setattr(mw_mod.QMessageBox, "information",
+                            lambda *a, **k: None)
+        mw = MagicMock()
+        mw._worker = None
+        mw._update_download_worker = None
+        checker = MagicMock()
+        checker.isRunning.return_value = True
+        mw._update_check_worker = checker
+        assert MainWindow._start_worker(mw, MagicMock()) is False
+        assert mw._worker is None

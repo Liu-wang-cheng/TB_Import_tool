@@ -73,6 +73,11 @@ class MainWindow(QMainWindow):
         self.config = {}
         self._worker = None
         self._log_handler = None
+        # 忙碌状态快照：任务结束后按任务前的状态恢复各控件（避免把
+        # 依赖开关的控件一律重新启用）
+        self._busy_active = False
+        self._busy_states = {}
+        self._progress_watchdog = None
         self._collab_worker = None  # 协同学习后台同步线程
         self._update_check_worker = None
         self._update_download_worker = None
@@ -94,6 +99,7 @@ class MainWindow(QMainWindow):
         self._update_check_timer = None
 
         self._build_ui()
+        self._start_progress_watchdog()
         self._load_style()
         self._load_config()
         # 方案下拉框：只加载列表，不自动应用任何方案
@@ -1461,18 +1467,31 @@ class MainWindow(QMainWindow):
             self._on_schedule_mode_changed()
 
     def _restore_profile_assignees(self, names):
-        """按方案恢复指派人勾选列表"""
-        self.filter_assigned.blockSignals(True)
-        self.filter_assigned.clear()
+        """按方案恢复指派人勾选状态（保留其他可选人员，避免列表越用越少）"""
+        checked = [n for n in (names or [])
+                   if n and n != "null" and not str(n).startswith("null-")]
+        checked_set = set(checked)
+        existing = [self.filter_assigned.item(i).text()
+                    for i in range(self.filter_assigned.count())]
+        known = (self.config.get("assignee") or {}).get(
+            "assigned_to_known") or []
+        if isinstance(known, str):
+            known = [known]
+        merged = []
         seen = set()
-        for name in names:
+        for name in list(existing) + list(known) + checked:
             if not name or name in seen:
                 continue
             seen.add(name)
+            merged.append(name)
+        self.filter_assigned.blockSignals(True)
+        self.filter_assigned.clear()
+        for name in merged:
             item = QListWidgetItem(name)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable
                           | Qt.ItemIsEditable)
-            item.setCheckState(Qt.Checked)
+            item.setCheckState(
+                Qt.Checked if name in checked_set else Qt.Unchecked)
             self.filter_assigned.addItem(item)
         self.filter_assigned.blockSignals(False)
         self._update_toggle_btn_text()
@@ -1770,12 +1789,18 @@ class MainWindow(QMainWindow):
             # 去掉部门前缀只存名字；仅限白名单部门前缀（普通名字不误切）
             from src.utils import normalize_assignee_input
             clean = normalize_assignee_input(name)
+            existing = {self.filter_assigned.item(i).text()
+                        for i in range(self.filter_assigned.count())}
+            if clean in existing:
+                self.status_label.setText(f"指派人已存在: {clean}")
+                return
             self.filter_assigned.blockSignals(True)
             item = QListWidgetItem(clean)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
             item.setCheckState(Qt.Checked)
             self.filter_assigned.addItem(item)
             self.filter_assigned.blockSignals(False)
+            self._update_toggle_btn_text()
             self._save_config_to_yaml()
 
     def _on_del_assigned(self):
@@ -1783,6 +1808,7 @@ class MainWindow(QMainWindow):
         row = self.filter_assigned.currentRow()
         if row >= 0:
             self.filter_assigned.takeItem(row)
+            self._update_toggle_btn_text()
             self._save_config_to_yaml()
 
     def _on_toggle_assigned(self):
@@ -1843,34 +1869,68 @@ class MainWindow(QMainWindow):
     # ── Worker 管理 ───────────────────────────────────
 
     def _set_busy(self, busy):
-        """操作进行中禁用所有按钮、输入框和开关"""
-        enabled = not busy
-        # 主操作按钮
-        for btn in [self.btn_list, self.btn_dryrun, self.btn_sync,
-                     self.btn_test, self.btn_config, self.btn_update]:
-            btn.setEnabled(enabled)
-        # 筛选面板
-        for w in [self.filter_url, self.btn_parse_url, self.filter_product,
-                  self.filter_module, self.filter_status,
-                  self.filter_assigned, self.filter_platform,
-                  self.btn_add_assigned, self.btn_del_assigned, self.btn_toggle_assigned,
-                  self.filter_date_mode, self.filter_date_from, self.filter_date_to]:
-            w.setEnabled(enabled)
-        # 凭证输入
-        for w in [self.edit_zentao_base_url, self.edit_zentao_account,
-                  self.edit_zentao_password, self.cmb_executor_mode,
-                  self.edit_executor_name, self.edit_tb_creator,
-                  self.edit_tb_creator_id, self.edit_tb_participants,
-                  self.edit_tb_belong_project]:
-            w.setEnabled(enabled)
-        # 同步/AI 开关
-        for chk in [self.chk_reopen, self.chk_ai_analysis]:
-            chk.setEnabled(enabled)
-        # AI 子开关：仅当 AI 总开关开启时才可启用
-        ai_on = self.chk_ai_analysis.isChecked()
-        for chk in [self.chk_fault_pattern, self.chk_specialized_prompt,
-                     self.chk_knowledge_base]:
-            chk.setEnabled(enabled and ai_on)
+        """操作进行中禁用控件；结束后恢复各控件任务前的可用状态。
+
+        按快照恢复而不是一律启用：执行人输入框、AI 子开关、定时时间
+        等控件的可用性依赖其他开关，不能简单置 True。
+        """
+        widgets = [
+            # 主操作按钮
+            self.btn_list, self.btn_dryrun, self.btn_sync,
+            self.btn_test, self.btn_config, self.btn_update,
+            # 筛选面板
+            self.filter_url, self.btn_parse_url, self.filter_product,
+            self.filter_module, self.filter_status,
+            self.filter_assigned, self.filter_platform,
+            self.btn_add_assigned, self.btn_del_assigned,
+            self.btn_toggle_assigned,
+            self.filter_date_mode, self.filter_date_from, self.filter_date_to,
+            # 凭证输入
+            self.edit_zentao_base_url, self.edit_zentao_account,
+            self.edit_zentao_password, self.cmb_executor_mode,
+            self.edit_executor_name, self.edit_tb_creator,
+            self.edit_tb_creator_id, self.edit_tb_participants,
+            self.edit_tb_belong_project,
+            # 同步/AI 开关
+            self.chk_reopen, self.chk_ai_analysis,
+            self.chk_fault_pattern, self.chk_specialized_prompt,
+            self.chk_knowledge_base,
+            # 界面方案 / VPN / 定时同步
+            self.cmb_ui_profile, self.btn_save_profile,
+            self.btn_save_profile_as, self.btn_vpn,
+            self.btn_schedule_profiles, self.chk_scheduled,
+            self.time_schedule, self.chk_scheduled_notify,
+            self.chk_time2, self.time_schedule2, self.cmb_schedule_mode,
+        ] + list(self.chk_weekdays)
+        if busy:
+            if not self._busy_active:
+                self._busy_states = {w: w.isEnabled() for w in widgets}
+                self._busy_active = True
+            for w in widgets:
+                w.setEnabled(False)
+            return
+        # 未处于忙碌状态时不要"恢复"（空快照会把联动的禁用控件错误启用）
+        if not self._busy_active:
+            return
+        self._busy_active = False
+        states = self._busy_states
+        self._busy_states = {}
+        for w in widgets:
+            w.setEnabled(states.get(w, True))
+        # AI 子开关受总开关约束
+        if not self.chk_ai_analysis.isChecked():
+            for chk in (self.chk_fault_pattern, self.chk_specialized_prompt,
+                        self.chk_knowledge_base):
+                chk.setEnabled(False)
+
+    def _has_running_task(self) -> bool:
+        """是否有会占用界面/网络的主任务在运行（不含协同学习）"""
+        for w in (getattr(self, "_worker", None),
+                  getattr(self, "_update_download_worker", None),
+                  getattr(self, "_update_check_worker", None)):
+            if w is not None and w.isRunning():
+                return True
+        return False
 
     def _start_worker(self, worker):
         # 防止并发：已有任务运行中时拒绝新任务
@@ -1879,6 +1939,9 @@ class MainWindow(QMainWindow):
             return False
         if self._update_download_worker is not None and self._update_download_worker.isRunning():
             QMessageBox.information(self, "提示", "正在下载更新，请等待完成")
+            return False
+        if self._update_check_worker is not None and self._update_check_worker.isRunning():
+            QMessageBox.information(self, "提示", "正在检查更新，请稍后再试")
             return False
         self._worker = worker
         self._setup_logging()
@@ -2127,7 +2190,14 @@ class MainWindow(QMainWindow):
         project = str(info.get("project") or "")
         module = str(info.get("module") or "")
         if product:
-            self.filter_product.setText(product)
+            # 合并到已配置的产品ID（多产品场景下解析单个缺陷不得覆盖其他产品）
+            cur = re.sub(r"[\[\]'\"]", "",
+                         str(self.filter_product.text() or "")).strip()
+            items = [x.strip() for x in cur.replace("，", ",").split(",")
+                     if x.strip()]
+            if product not in items:
+                items.append(product)
+            self.filter_product.setText(",".join(items))
         if module and module != "0":
             self.filter_module.setText(module)
         else:
@@ -2148,8 +2218,9 @@ class MainWindow(QMainWindow):
             zt_filters["project"] = vals[0] if len(vals) == 1 else vals
             self.filter_zt_project.setText(",".join(str(x) for x in vals))
         else:
-            self.filter_zt_project.clear()
-            zt_filters.pop("project", None)
+            # 缺陷未关联项目/执行：保留已累计解析的项目ID，不因单个缺陷清空
+            logger.info("[解析] 缺陷 #%s 未关联项目/执行，保留现有项目ID",
+                        info.get("id"))
         zt_filters.pop("project_id", None)
         zt_filters.pop("project_ids", None)
         logger.info("[解析] 缺陷 #%s -> 产品=%s 项目/执行=%s 模块=%s",
@@ -2353,16 +2424,21 @@ class MainWindow(QMainWindow):
     # ── 定时同步 ──────────────────────────────────────
 
     def _start_schedule_timer(self):
-        """启动定时同步检查器（每分钟检查一次）+ 进度条看门狗"""
+        """启动定时同步检查器（每分钟检查一次）"""
         if self._schedule_timer is None:
             from gui.qt_compat import QTimer
             self._schedule_timer = QTimer(self)
             self._schedule_timer.timeout.connect(self._check_scheduled_sync)
             self._schedule_timer.start(60000)
-            # 看门狗：没有任何任务运行时，清掉残留的"不确定模式"滚动条
-            self._progress_watchdog = QTimer(self)
-            self._progress_watchdog.timeout.connect(self._reset_stuck_progress)
-            self._progress_watchdog.start(2000)
+
+    def _start_progress_watchdog(self):
+        """进度条看门狗：与配置加载解耦，配置加载失败时也能兜底复位"""
+        if self._progress_watchdog is not None:
+            return
+        from gui.qt_compat import QTimer
+        self._progress_watchdog = QTimer(self)
+        self._progress_watchdog.timeout.connect(self._reset_stuck_progress)
+        self._progress_watchdog.start(2000)
 
     def _reset_stuck_progress(self):
         """空闲状态下若进度条仍为不确定模式（滚动），强制复位"""
@@ -2543,8 +2619,8 @@ class MainWindow(QMainWindow):
 
     def _run_scheduled_sync(self) -> bool:
         """执行定时同步（不弹确认框，静默触发）。返回是否成功启动/已处理"""
-        if self._worker is not None and self._worker.isRunning():
-            self._log("定时同步跳过：上次同步仍在进行中", "WARNING")
+        if self._has_running_task():
+            self._log("定时同步跳过：有其他任务正在执行", "WARNING")
             return False
         names = list(getattr(self, "_schedule_profiles", []))
         profiles = []
@@ -2725,6 +2801,10 @@ class MainWindow(QMainWindow):
     # ── 进度与结果 ──────────────────────────────────────
 
     def _on_sync_progress(self, current, total, message):
+        # 任务已结束/已切换：忽略迟到的进度信号，避免把已复位的进度条
+        # 再次置为滚动模式
+        if getattr(self, "_worker", None) is None:
+            return
         if total > 0:
             # 确定模式：显示百分比
             if self.progress_bar.maximum() == 0:
@@ -2760,6 +2840,12 @@ class MainWindow(QMainWindow):
 
     def _on_progress_message(self, msg):
         self.status_label.setText(msg)
+        # 列出/连接测试只发阶段文字、没有数量进度：用不确定模式表明
+        # 程序仍在工作（否则进度条会长时间停在 0%）
+        worker = getattr(self, "_worker", None)
+        if worker is not None and worker.isRunning():
+            self.progress_bar.setRange(0, 0)
+            self.progress_bar.setFormat(msg)
 
     # ── 自动更新 ──────────────────────────────────────
 
@@ -2797,6 +2883,11 @@ class MainWindow(QMainWindow):
 
     def _check_for_updates(self, manual=False):
         """后台检查更新（非阻塞）"""
+        if getattr(self, "_scheduled_chain", None):
+            if manual:
+                QMessageBox.information(
+                    self, "提示", "定时导入任务正在执行，请稍后再检查更新")
+            return
         if self._worker and self._worker.isRunning():
             if manual:
                 QMessageBox.information(self, "提示", "有任务正在执行，请稍后再检查更新")
@@ -2923,6 +3014,8 @@ class MainWindow(QMainWindow):
         self._update_download_worker.start()
 
     def _on_update_download_progress(self, downloaded, total, speed_msg):
+        if getattr(self, "_update_download_worker", None) is None:
+            return
         if total > 0:
             if self.progress_bar.maximum() == 0:
                 self.progress_bar.setRange(0, 100)
