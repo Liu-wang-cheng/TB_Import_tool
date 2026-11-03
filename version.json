@@ -1,7 +1,7 @@
 {
   "version": "2.8.17",
-  "sha256": "9453fd88dc95b4733c861afd991e1d1348e098d49d1ad6be0b72c403b316c660",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.16/SmartDefectPlatform.zip",
+  "sha256": "816eb1fa6ead694c39dd526d6651862bf6ec90ef40cfe822ce6617fe9bc05f64",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.17/SmartDefectPlatform.zip",
   "release_date": "2026-11-03",
   "release_notes": "v2.8.17 修复：任务结束后进度条仍残留滚动（Worker 改为清理断开 VPN/关闭客户端完成后才通知界面，迟到进度信号不再回切滚动模式；看门狗独立启动；列出Bug/连接测试显示不确定进度）；任务结束瞬间启动新任务可能被旧线程断开 VPN 的竞态；任务期间方案/VPN/定时控件未锁定，结束后改按任务前状态恢复；更新检查与同步/定时任务并发互抢忙碌状态；解析缺陷地址覆盖多产品配置、未挂项目缺陷清空已累计项目ID；切换方案后指派人可选列表变少、重复添加无提示、全选/反选文字不刷新。测试 593 个通过（排除需真实服务器的网络集成测试）",
   "min_version": "1.0"
