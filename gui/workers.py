@@ -3,6 +3,7 @@
 import copy
 import logging
 import os
+import re
 import sys
 import traceback
 
@@ -13,6 +14,52 @@ logger = logging.getLogger(__name__)
 
 class _VpnUnavailable(Exception):
     """VPN 建立失败：中止任务，由 run() 统一在清理后发 error 信号"""
+
+
+def _release_tag_from_url(url: str) -> str:
+    """从 Release 下载地址提取版本 tag；非标准地址返回空串"""
+    m = re.search(r"/download/v([^/]+)/", url or "")
+    return m.group(1) if m else ""
+
+
+def _read_package_version(extract_dir: str) -> str:
+    """读取更新包内的 VERSION（兼容 _internal/VERSION 与顶层/子目录 VERSION）"""
+    candidates = [
+        os.path.join(extract_dir, "_internal", "VERSION"),
+        os.path.join(extract_dir, "VERSION"),
+    ]
+    for root, _dirs, files in os.walk(extract_dir):
+        if "VERSION" in files:
+            candidates.append(os.path.join(root, "VERSION"))
+            break
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except OSError:
+                return ""
+    return ""
+
+
+def _validate_update_version(download_url: str, expected: str,
+                             extract_dir: str = "") -> str:
+    """校验版本元数据与下载地址/更新包一致，返回错误文本（空串=通过）。
+
+    发布窗口内 version.json 可能先更新版本号、下载地址仍指向旧 Release
+    （raw/CDN 缓存导致），直接安装会把旧包当成新版本。
+    """
+    tag = _release_tag_from_url(download_url)
+    if tag and expected and tag != expected:
+        return (f"版本信息不一致：version.json 声明 v{expected}，"
+                f"但下载地址指向 v{tag}。可能是镜像/CDN 缓存了旧版本，"
+                f"请稍后重试更新。")
+    if extract_dir:
+        actual = _read_package_version(extract_dir)
+        if actual and expected and actual != expected:
+            return (f"更新包版本不匹配：期望 v{expected}，实际 v{actual}。"
+                    f"可能是镜像/CDN 缓存了旧版本，已取消本次更新。")
+    return ""
 
 
 def _generate_updater_bat(current_dir: str, new_dir: str, pid: int,
@@ -669,6 +716,15 @@ class UpdateCheckWorker(QThread):
                 return
 
             info, best_mirror = info_tuple
+            # 发布窗口内 version.json 可能已被 CDN 缓存为"新版本号+旧下载
+            # 地址"，此时绝不能提示更新（会装回旧版本）
+            version_err = _validate_update_version(
+                info.download_url, info.version)
+            if version_err:
+                logger.warning("暂不提示更新: %s", version_err)
+                self.finished.emit({"has_update": False,
+                                    "message": "版本信息尚未同步，请稍后重试"})
+                return
             current = read_current_version()
             has_update = compare_versions(current, info.version) > 0
 
@@ -710,6 +766,11 @@ class UpdateDownloadWorker(QThread):
             import shutil
 
             info = self.version_info
+            version_err = _validate_update_version(
+                info.download_url, info.version)
+            if version_err:
+                self.error.emit(version_err, "")
+                return
 
             if not getattr(sys, 'frozen', False):
                 self.error.emit("仅在打包模式下支持自动更新", "")
@@ -785,6 +846,16 @@ class UpdateDownloadWorker(QThread):
 
                 if not new_exe:
                     self.error.emit("更新包中未找到 exe 文件", "")
+                    return
+
+                # 解压后再次核对包内 VERSION，防止镜像/CDN 返回旧包
+                version_err = _validate_update_version(
+                    info.download_url, info.version, extract_dir)
+                if version_err:
+                    shutil.rmtree(extract_dir, ignore_errors=True)
+                    if os.path.exists(dest_path):
+                        os.remove(dest_path)
+                    self.error.emit(version_err, "")
                     return
 
                 # 生成替换 bat：覆盖整个目录

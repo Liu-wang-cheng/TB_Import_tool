@@ -12,6 +12,11 @@ echo.
 
 cd /d "%~dp0"
 
+REM 防呆：version.json 不得出现"新版本号 + 旧下载地址"
+REM （发布窗口内客户端会按旧地址下载旧包并校验通过，更新后仍是旧版）
+python -c "import json,re,sys;v=open('VERSION',encoding='utf-8').read().strip();d=json.load(open('version.json',encoding='utf-8'));m=re.search(r'/download/v([^/]+)/',d.get('download_url',''));ok=d.get('version')==v and (m is None or m.group(1)==v);print('[ERROR] version.json 与 VERSION 不一致: version=%s, url_tag=%s, VERSION=%s'%(d.get('version'),m.group(1) if m else '-',v)) if not ok else print('[OK] version.json 版本元数据一致');sys.exit(0 if ok else 1)"
+if %errorlevel% neq 0 goto :fail
+
 where python >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] Python not found
