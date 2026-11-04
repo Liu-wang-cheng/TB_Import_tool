@@ -316,8 +316,9 @@ class TestMainWindowProfile:
                 self.idx = idx
 
         mw.cmb_ui_profile = _Combo()
-        monkeypatch.setattr(mw_mod, "load_profiles",
-                            lambda p: [{"name": "方案A"}, {"name": "方案B"}])
+        monkeypatch.setattr(
+            mw_mod, "load_profiles_ex",
+            lambda p: ([{"name": "方案A"}, {"name": "方案B"}], ""))
         MainWindow._refresh_ui_profiles(mw)
         assert mw.cmb_ui_profile.items == ["（选择方案载入…）", "方案A", "方案B"]
         assert mw.cmb_ui_profile.idx == 0
@@ -674,8 +675,9 @@ class TestRememberLastSelected:
         mw = MagicMock()
         mw._ui_profiles_path.return_value = str(tmp_path / "p.yaml")
         mw.cmb_ui_profile = _Combo()
-        monkeypatch.setattr(mw_mod, "load_profiles",
-                            lambda p: [{"name": "方案A"}, {"name": "方案B"}])
+        monkeypatch.setattr(
+            mw_mod, "load_profiles_ex",
+            lambda p: ([{"name": "方案A"}, {"name": "方案B"}], ""))
         monkeypatch.setattr(mw_mod, "load_last_selected", lambda p: "方案B")
         MainWindow._refresh_ui_profiles(mw)     # 不传 select_name
         assert mw.cmb_ui_profile.idx == 2       # 占位(0) + A(1) + B(2)

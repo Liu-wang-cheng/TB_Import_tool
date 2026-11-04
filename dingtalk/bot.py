@@ -82,22 +82,44 @@ class DingTalkBot:
                                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                                    timeout=15)
             if resp.status_code != 200:
-                logger.warning("钉钉消息发送失败: HTTP %d %s",
-                               resp.status_code, resp.text[:200])
+                logger.warning(
+                    "钉钉消息发送失败: HTTP %d %s（请检查 Webhook 地址与本机网络）",
+                    resp.status_code, resp.text[:200])
             else:
                 data = resp.json()
                 if data.get("errcode") != 0:
-                    logger.warning("钉钉消息发送失败: %s %s",
-                                   data.get("errcode"), data.get("errmsg"))
+                    errcode = data.get("errcode")
+                    errmsg = data.get("errmsg", "")
+                    logger.warning(
+                        "钉钉消息发送失败: %s %s（%s）",
+                        errcode, errmsg,
+                        self._errcode_hint(errcode, errmsg))
                 else:
                     logger.info("钉钉消息发送成功")
                     ok = True
         except Exception as e:
-            logger.warning("钉钉消息发送异常: %s", e)
+            logger.warning(
+                "钉钉消息发送异常: %s（请检查本机网络/代理能否访问 "
+                "oapi.dingtalk.com）", e)
         # 发送完成后记录真实结果（失败不会被后续重发误判为成功）
         with self._recent_sent_lock:
             self._recent_sent[msg_key] = (now, ok)
         return ok
+
+    @staticmethod
+    def _errcode_hint(code, errmsg: str = "") -> str:
+        """把钉钉错误码翻译成可操作的中文提示"""
+        hints = {
+            310000: "加签校验失败、关键词不匹配或 IP 不在白名单，"
+                    "请检查钉钉机器人的安全设置",
+            130101: "发送频率超限（自定义机器人限制 20 条/分钟），请稍后重试",
+            400013: "机器人已被停用或 Webhook 地址无效",
+        }
+        try:
+            key = int(code)
+        except (TypeError, ValueError):
+            key = code
+        return hints.get(key, errmsg or "请检查 Webhook、加签密钥与机器人安全设置")
 
     # ── 消息发送 ──────────────────────────────────────
 

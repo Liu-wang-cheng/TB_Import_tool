@@ -96,5 +96,12 @@ def _load_from_dir(config_dir: str) -> dict:
 
 
 def _load_single(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except yaml.YAMLError as e:
+        raise ValueError(
+            f"配置文件 {path} 格式错误：{e}。"
+            f"请检查缩进/冒号/引号是否正确") from e
+    except OSError as e:
+        raise ValueError(f"配置文件 {path} 读取失败：{e}") from e

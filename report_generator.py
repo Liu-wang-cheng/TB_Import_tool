@@ -187,6 +187,9 @@ def generate_report(mem_records, top_records, drc_result, drc_total, report_path
         alert_html = f'<div class="alert alert-danger"><span class="alert-dot">&#9679;</span> 检测到 <strong>{fault_count}</strong> 次故障 | 根因: {root_causes}</div>'
     elif err_count > 0:
         alert_html = f'<div class="alert alert-warning"><span class="alert-dot">&#9679;</span> 检测到 {err_count} 条警告/错误日志（无故障状态转换）</div>'
+    elif not (mem_times or top_times or fault_contexts):
+        alert_html = ('<div class="alert alert-warning"><span class="alert-dot">&#9679;</span> '
+                      '未采集到有效数据，请检查 SN、时间范围与日志服务器</div>')
     else:
         alert_html = '<div class="alert alert-ok"><span class="alert-dot">&#9679;</span> 该时段运行正常，未检测到故障或异常</div>'
 

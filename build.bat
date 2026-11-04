@@ -14,6 +14,14 @@ cd /d "%~dp0"
 
 REM 防呆：version.json 不得出现"新版本号 + 旧下载地址"
 REM （发布窗口内客户端会按旧地址下载旧包并校验通过，更新后仍是旧版）
+if not exist "VERSION" (
+    echo [ERROR] VERSION 文件缺失
+    goto :fail
+)
+if not exist "version.json" (
+    echo [ERROR] version.json 文件缺失
+    goto :fail
+)
 python -c "import json,re,sys;v=open('VERSION',encoding='utf-8').read().strip();d=json.load(open('version.json',encoding='utf-8'));m=re.search(r'/download/v([^/]+)/',d.get('download_url',''));ok=d.get('version')==v and (m is None or m.group(1)==v);print('[OK] version.json 版本元数据一致') if ok else print('[ERROR] version.json 与 VERSION/下载地址 tag 不一致，请先更新 version.json');sys.exit(0 if ok else 1)"
 if %errorlevel% neq 0 goto :fail
 
@@ -86,6 +94,13 @@ copy /y "configs\ai_analysis.yaml" "%STRIP_BAK%\ai_analysis.yaml.bak" >nul
 REM 兜底：清掉历史构建可能残留在 configs 的 .bak
 del /q "configs\classifier.yaml.bak" "configs\ai_analysis.yaml.bak" 2>nul
 python strip_api_key.py
+if %errorlevel% neq 0 (
+    echo [ERROR] api_key strip failed - aborting to avoid leaking secrets
+    copy /y "%STRIP_BAK%\classifier.yaml.bak" "configs\classifier.yaml" >nul
+    copy /y "%STRIP_BAK%\ai_analysis.yaml.bak" "configs\ai_analysis.yaml" >nul
+    del /q "%STRIP_BAK%\classifier.yaml.bak" "%STRIP_BAK%\ai_analysis.yaml.bak" >nul 2>&1
+    goto :fail
+)
 echo [OK] api_key stripped
 echo.
 

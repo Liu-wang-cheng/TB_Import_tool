@@ -47,6 +47,28 @@ def get_repo_from_config() -> str:
     return ""
 
 
+def _raise_github_error(resp, action: str):
+    """GitHub API 失败时给出中文原因与下一步，而不是裸 HTTP 异常"""
+    if resp.status_code == 401:
+        print(f"[ERROR] {action}失败：GitHub token 无效或已过期")
+        print("  请更新 ~/.github_token 或环境变量 GITHUB_TOKEN")
+        sys.exit(1)
+    if resp.status_code == 403:
+        print(f"[ERROR] {action}失败：GitHub token 无权限或触发限流")
+        print("  请检查 token 的 repo 权限，稍后重试")
+        sys.exit(1)
+    if resp.status_code == 422:
+        print(f"[ERROR] {action}失败：请求被 GitHub 拒绝（资产已存在/文件过大）")
+        print(f"  响应: {resp.text[:300]}")
+        sys.exit(1)
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError:
+        print(f"[ERROR] {action}失败：HTTP {resp.status_code} "
+              f"{resp.text[:300]}")
+        sys.exit(1)
+
+
 def compute_sha256(filepath: str) -> str:
     """计算文件 SHA256"""
     sha = hashlib.sha256()
@@ -84,7 +106,7 @@ def create_release(repo: str, token: str, version: str, notes: str) -> int:
         )
         if r2.status_code == 200:
             return r2.json()["id"]
-    r.raise_for_status()
+    _raise_github_error(r, "创建 Release")
     return r.json()["id"]
 
 
@@ -126,7 +148,7 @@ def upload_asset(repo: str, token: str, release_id: int,
             data=f,
             timeout=(10, 600),
         )
-    r.raise_for_status()
+    _raise_github_error(r, "上传 Release 资产")
     return r.json()["browser_download_url"]
 
 
@@ -188,8 +210,15 @@ def update_version_json(repo: str, token: str, version: str,
 
         subprocess.run(["git", "tag", "-f", f"v{version}"],
                        cwd=tmpdir, check=True, capture_output=True, timeout=30)
-        subprocess.run(["git", "push", "-f", "origin", f"v{version}"],
-                       cwd=tmpdir, capture_output=True, timeout=180)
+        tag_push = subprocess.run(
+            ["git", "push", "-f", "origin", f"v{version}"],
+            cwd=tmpdir, capture_output=True, timeout=180)
+        if tag_push.returncode != 0:
+            stderr = tag_push.stderr.decode("utf-8", errors="replace")
+            print(f"[ERROR] 推送 tag v{version} 失败：{stderr.strip()}")
+            print("  请检查 SSH key/仓库权限后，手动执行：")
+            print(f"  git push -f origin v{version}")
+            sys.exit(1)
 
     print(f"  [GIT] version.json + README pushed, tag v{version} pushed")
 

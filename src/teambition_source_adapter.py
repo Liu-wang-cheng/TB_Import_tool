@@ -369,9 +369,11 @@ class TeambitionSourceAdapter:
         """
         task = self._task_cache.get(bug_id)
         if task is None:
-            # 缓存未命中，返回最小 bug（id 保真）
-            logger.debug("外部 TB 任务 %d 缓存未命中", bug_id)
-            return ZentaoBug(id=bug_id, title=f"任务 {bug_id}")
+            # 缓存未命中说明该任务不是本次拉取结果：宁可报错跳过，
+            # 也不要生成 "任务 <id>" 这样的垃圾缺陷导入内部 TB
+            raise RuntimeError(
+                f"外部TB任务 {bug_id} 不在本次拉取缓存中，"
+                f"已跳过以避免创建错误任务；请重新点击「列出缺陷」后重试")
         bug = self._task_to_bug(task)
         # 收集评论附件到 files（附件在评论里，需单独拉 activities）
         bug.files = self._collect_comment_attachments(task)

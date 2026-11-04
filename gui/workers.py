@@ -814,7 +814,7 @@ class UpdateDownloadWorker(QThread):
                         downloaded = True
                         break
                     logger.warning("SHA256 校验失败（镜像 %s），尝试下一个", mirror_name)
-                    last_error = f"SHA256 mismatch from {mirror_name}"
+                    last_error = f"{mirror_name} 下载的文件校验失败（SHA256 不一致）"
                     if os.path.exists(dest_path):
                         os.remove(dest_path)
                 except Exception as e:
@@ -822,7 +822,10 @@ class UpdateDownloadWorker(QThread):
                     logger.warning("从 %s 下载失败: %s", mirror_name, e)
 
             if not downloaded:
-                self.error.emit(f"下载失败: {last_error}", "")
+                self.error.emit(
+                    f"更新包下载失败：{last_error or '未知原因'}。\n"
+                    f"请检查网络/镜像是否可用，稍后重试；"
+                    f"也可以手动下载发布包解压覆盖。", "")
                 return
 
             if is_zip:
@@ -831,8 +834,16 @@ class UpdateDownloadWorker(QThread):
                 extract_dir = os.path.join(exe_dir, "_update_extracted")
                 if os.path.isdir(extract_dir):
                     shutil.rmtree(extract_dir)
-                with zipfile.ZipFile(dest_path, 'r') as zf:
-                    zf.extractall(extract_dir)
+                try:
+                    with zipfile.ZipFile(dest_path, 'r') as zf:
+                        zf.extractall(extract_dir)
+                except zipfile.BadZipFile:
+                    if os.path.exists(dest_path):
+                        os.remove(dest_path)
+                    self.error.emit(
+                        "更新包损坏或下载不完整（不是有效的 zip 文件）。\n"
+                        "请重试下载，或手动下载发布包解压覆盖。", "")
+                    return
 
                 # 找到解压后的 exe（可能在子目录中）
                 new_exe = None
@@ -845,7 +856,12 @@ class UpdateDownloadWorker(QThread):
                         break
 
                 if not new_exe:
-                    self.error.emit("更新包中未找到 exe 文件", "")
+                    shutil.rmtree(extract_dir, ignore_errors=True)
+                    if os.path.exists(dest_path):
+                        os.remove(dest_path)
+                    self.error.emit(
+                        "更新包内容不完整：未找到程序文件（exe）。\n"
+                        "请重新下载更新包，或手动下载发布包覆盖安装。", "")
                     return
 
                 # 解压后再次核对包内 VERSION，防止镜像/CDN 返回旧包
@@ -880,7 +896,10 @@ class UpdateDownloadWorker(QThread):
                 self.finished.emit(bat_path)
         except Exception as e:
             logger.exception("下载更新失败")
-            self.error.emit(str(e), traceback.format_exc())
+            self.error.emit(
+                f"更新过程中发生异常：{e}\n"
+                f"请查看日志中的详细信息，或手动下载发布包覆盖安装。",
+                traceback.format_exc())
 
 
 class CollabAutoSyncWorker(QThread):

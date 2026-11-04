@@ -157,9 +157,20 @@ def run_sync(reply_webhook: str, dry_run: bool = False):
     except Exception as e:
         elapsed = time.time() - start_time
         logger.error("钉钉指令执行失败: %s", e, exc_info=True)
+        msg = str(e)[:500]
+        low = msg.lower()
+        if any(k in low for k in ("timeout", "timed out", "connection",
+                                   "network", "超时", "连接")):
+            hint = "（请检查服务器地址/网络/VPN）"
+        elif any(k in low for k in ("401", "403", "认证", "登录",
+                                     "password", "token")):
+            hint = "（请检查禅道/Teambition 账号密码与权限）"
+        else:
+            hint = ""
         DingTalkBot.reply_text(
             reply_webhook,
-            f"执行失败 ({'试运行' if dry_run else '正式同步'})\n错误: {str(e)[:500]}"
+            f"执行失败 ({'试运行' if dry_run else '正式同步'})\n"
+            f"错误: {msg}{hint}"
         )
     finally:
         # 长驻服务：每次指令新建的客户端必须显式关闭（连接池不随 GC 及时释放）
@@ -193,6 +204,7 @@ def run_list_bugs(reply_webhook: str):
         project_ids = filters.get("project_ids") or (
             [int(filters["project_id"])] if filters.get("project_id") else [])
         bugs = []
+        failed_combos = []
         for pid in product_ids or [None]:
             for jid in project_ids or [None]:
                 try:
@@ -208,6 +220,7 @@ def run_list_bugs(reply_webhook: str):
                 except Exception as e:
                     logger.warning("列出Bug: 组合(产品=%s, 项目=%s)失败: %s",
                                    pid, jid, e)
+                    failed_combos.append(f"产品{pid or '-'}/项目{jid or '-'}: {e}")
         seen = set()
         dedup = []
         for b in bugs:
@@ -219,6 +232,10 @@ def run_list_bugs(reply_webhook: str):
         sev_map = config.get("teambition", {}).get("severity_map", {})
         sev_labels = source.fetch_severity_labels(filters.get("product_id"))
         lines = [f"共 {len(bugs)} 条 Bug:", ""]
+        if failed_combos:
+            lines.insert(0, f"> ⚠️ 有 {len(failed_combos)} 个产品/项目组合拉取失败，"
+                            f"结果可能不完整（详情见服务器日志）")
+            lines.insert(1, "")
         lines.append("| ID | 状态 | 严重程度 | 指派给 | 标题 |")
         lines.append("| --- | --- | --- | --- | --- |")
         for bug in bugs[:30]:

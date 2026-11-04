@@ -14,17 +14,29 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-def _read_doc(path: str) -> dict:
-    """读取方案文件完整内容；不存在/损坏时返回空 dict（静默降级）"""
+def _read_doc_ex(path: str) -> tuple:
+    """读取方案文件，返回 (data, error)；error 非空表示文件损坏。"""
     if not os.path.exists(path):
-        return {}
+        return {}, ""
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
     except Exception as e:
-        logger.warning("界面方案文件读取失败（忽略）: %s", e)
-        return {}
-    return data if isinstance(data, dict) else {}
+        logger.warning("界面方案文件读取失败: %s", e)
+        return {}, (
+            f"界面方案文件读取失败：\n{path}\n\n{e}\n\n"
+            f"方案列表将暂时显示为空。请检查 YAML 格式，"
+            f"或先备份该文件；保存方案会覆盖此文件。")
+    if not isinstance(data, dict):
+        return {}, (
+            f"界面方案文件格式异常：\n{path}\n\n"
+            f"文件内容不是 YAML 对象，方案列表将暂时显示为空。")
+    return data, ""
+
+
+def _read_doc(path: str) -> dict:
+    """读取方案文件完整内容；不存在/损坏时返回空 dict（调用方可看错误）"""
+    return _read_doc_ex(path)[0]
 
 
 def _write_doc(path: str, doc: dict) -> bool:
@@ -43,10 +55,18 @@ def _write_doc(path: str, doc: dict) -> bool:
 
 def load_profiles(path: str) -> list:
     """读取方案列表；文件不存在/损坏时返回空列表（静默降级）"""
-    profiles = _read_doc(path).get("profiles")
+    return load_profiles_ex(path)[0]
+
+
+def load_profiles_ex(path: str) -> tuple:
+    """读取方案列表，返回 (profiles, error)；error 非空时供 GUI 弹窗提醒。"""
+    doc, error = _read_doc_ex(path)
+    if error:
+        return [], error
+    profiles = doc.get("profiles")
     if not isinstance(profiles, list):
-        return []
-    return [p for p in profiles if isinstance(p, dict) and p.get("name")]
+        return [], ""
+    return [p for p in profiles if isinstance(p, dict) and p.get("name")], ""
 
 
 def load_last_selected(path: str) -> str:

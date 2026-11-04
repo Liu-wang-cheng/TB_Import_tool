@@ -672,8 +672,13 @@ def main():
 
     # Step 1: List
     print('\n[1/5] Listing remote files...')
-    memfiles = filter_by_utc_hour(list_memfiles(), UTC_START_HOUR, UTC_END_HOUR)
-    drc_files = filter_by_utc_hour(list_drc_files(), UTC_START_HOUR, UTC_END_HOUR)
+    try:
+        memfiles = filter_by_utc_hour(list_memfiles(), UTC_START_HOUR, UTC_END_HOUR)
+        drc_files = filter_by_utc_hour(list_drc_files(), UTC_START_HOUR, UTC_END_HOUR)
+    except Exception as e:
+        print(f'  [ERROR] 获取日志文件列表失败：{e}')
+        print('  请检查 DRC 服务器地址/账号密码/网络连接后重试。')
+        raise SystemExit(1)
     print(f'  MemFile/TopFile/FdFile: {len(memfiles)}')
     print(f'  DRC files: {len(drc_files)} (sample every {DRC_SAMPLE_EVERY})')
 

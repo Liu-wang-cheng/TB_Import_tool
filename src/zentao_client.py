@@ -373,7 +373,9 @@ class ZentaoClient:
         if resp.status_code >= 400:
             raise ZentaoAPIError(resp.status_code, resp.text[:500], f"/{path}")
         if not resp.text:
-            logger.error("云版响应为空: %s params=%s status=%s", path, params, resp.status_code)
+            logger.error(
+                "云版响应为空: %s params=%s status=%s（请检查登录状态/服务器地址）",
+                path, params, resp.status_code)
             return {}
         time.sleep(self.api_delay)
         # 截取第一个完整 JSON 对象（应对响应体拼接多个 JSON 的情况）
@@ -392,7 +394,10 @@ class ZentaoClient:
         try:
             data = json.loads(text)
         except (ValueError, json.JSONDecodeError) as e:
-            logger.error("云版JSON解析失败: %s, body前200字: %s", e, resp.text[:200])
+            logger.error(
+                "云版JSON解析失败: %s, body前200字: %s"
+                "（请检查登录状态/服务器地址）",
+                e, resp.text[:200])
             return {}
         inner = data.get("data", {})
         if isinstance(inner, str):
@@ -420,7 +425,11 @@ class ZentaoClient:
                         break
         try:
             inner = json.loads(text)
-        except (ValueError, json.JSONDecodeError):
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.error(
+                "云版POST响应无法解析: %s path=/%s body前200字: %s"
+                "（该操作可能未生效，请检查登录状态）",
+                e, path, resp.text[:200])
             return {}
         result = inner.get("data", inner)
         if isinstance(result, str):
@@ -1062,7 +1071,9 @@ class ZentaoClient:
             matches = re.findall(r'(?:VLNS|CPAX)-(\d+)', str(actions))
             return list(dict.fromkeys(matches))  # 去重保序
         except Exception as e:
-            logger.debug("提取 Bug#%d VLNS/CPAX 编号失败: %s", bug_id, e)
+            logger.warning(
+                "提取 Bug#%d 的 VLNS/CPAX 编号失败，可能导致重复创建/去重误判：%s",
+                bug_id, e)
         return []
 
     def fetch_bug_comments(self, bug_id: int) -> List[dict]:

@@ -311,4 +311,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n已取消")
+        sys.exit(130)
+    except Exception as e:
+        logging.getLogger(__name__).exception("程序执行失败")
+        print(f"\n执行失败：{e}")
+        print("请查看日志，或检查 configs/ 配置与网络后重试。")
+        sys.exit(1)

@@ -151,9 +151,20 @@ class TeambitionSourceClient:
                                timeout=timeout)
             if r.status_code == 200:
                 return r.json()
-            logger.debug("外部 TB API %s HTTP %d: %s", path, r.status_code, r.text[:200])
+            if r.status_code in (401, 403):
+                logger.warning(
+                    "外部TB接口 %s 返回 HTTP %d：登录状态可能失效或无权访问，"
+                    "请重新登录/检查项目权限", path, r.status_code)
+            elif r.status_code >= 500:
+                logger.warning(
+                    "外部TB服务异常 %s（HTTP %d），请稍后重试",
+                    path, r.status_code)
+            else:
+                logger.debug("外部 TB API %s HTTP %d: %s",
+                             path, r.status_code, r.text[:200])
         except Exception as e:
-            logger.debug("外部 TB API %s 失败: %s", path, e)
+            logger.warning("外部TB接口 %s 请求失败：%s（请检查网络/登录状态）",
+                           path, e)
         return None
 
     # ── 数据拉取 ──────────────────────────────────────
@@ -182,13 +193,19 @@ class TeambitionSourceClient:
             return cache[status_id]
         data = self._get(f"/taskflowstatus/{status_id}")
         name = data.get("name", "") if isinstance(data, dict) else ""
-        cache[status_id] = name
+        if name:
+            cache[status_id] = name
+        else:
+            logger.warning("外部TB状态名查询失败: status_id=%s", status_id)
         return name
 
     def find_bug_scenariofield_id(self, project_id: str) -> str:
         """找到 name='缺陷' 的 scenariofieldconfigId"""
         tasks = self._get(f"/projects/{project_id}/tasks")
         if not isinstance(tasks, list):
+            logger.warning(
+                "无法获取项目 %s 的任务列表，无法识别缺陷场景类型，"
+                "请检查登录状态/项目权限", project_id)
             return ""
         sfc_ids = {t.get("_scenariofieldconfigId") for t in tasks
                    if t.get("_scenariofieldconfigId")}
@@ -218,6 +235,9 @@ class TeambitionSourceClient:
             params["isDone"] = "true" if is_done else "false"
         tasks = self._get(f"/projects/{project_id}/tasks", params=params)
         if not isinstance(tasks, list):
+            logger.warning(
+                "拉取外部TB项目 %s 的任务列表失败，本次返回 0 条；"
+                "请检查网络/登录状态/项目权限", project_id)
             return []
         if scenariofield_id:
             tasks = [t for t in tasks
@@ -232,7 +252,8 @@ class TeambitionSourceClient:
             return self._user_cache[user_id]
         data = self._get(f"/users/{user_id}")
         name = data.get("name", "") if isinstance(data, dict) else ""
-        self._user_cache[user_id] = name
+        if name:
+            self._user_cache[user_id] = name
         return name
 
     def fetch_customfield_name(self, cf_id: str) -> str:
@@ -247,9 +268,13 @@ class TeambitionSourceClient:
             return self._cf_name_cache[cf_id]
         data = self._get(f"/customfields/{cf_id}")
         if not isinstance(data, dict):
+            logger.warning("外部TB自定义字段名查询失败: cf_id=%s", cf_id)
             return ""
         name = data.get("name", "")
-        self._cf_name_cache[cf_id] = name
+        if name:
+            self._cf_name_cache[cf_id] = name
+        else:
+            logger.warning("外部TB自定义字段名为空: cf_id=%s", cf_id)
         return name
 
     # ── 备注媒体签名 URL（Selenium 抓取前端渲染结果）─────────────
@@ -326,6 +351,9 @@ class TeambitionSourceClient:
             return self._comments_cache[task_id]
         acts = self._get(f"/tasks/{task_id}/activities")
         if not isinstance(acts, list):
+            logger.warning(
+                "拉取任务 %s 的评论失败，本次评论/内联附件可能缺失；"
+                "请检查登录状态/网络", task_id)
             return []
         comments = []
         for a in acts:

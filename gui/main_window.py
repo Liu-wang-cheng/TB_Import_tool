@@ -27,8 +27,9 @@ from gui.workers import (
     SyncWorker, UpdateCheckWorker, UpdateDownloadWorker,
 )
 from gui.ui_profiles import (
-    load_profiles, save_profile, resolve_profiles, format_profiles_summary,
-    load_last_selected, save_last_selected, load_last_vpn,
+    load_profiles, load_profiles_ex, save_profile, resolve_profiles,
+    format_profiles_summary, load_last_selected, save_last_selected,
+    load_last_vpn,
 )
 from gui.feature_flags import AI_ANALYSIS_UI_ENABLED
 
@@ -788,6 +789,8 @@ class MainWindow(QMainWindow):
             self.config.setdefault("sync", {})["reactivate_closed"] = enabled
         except Exception as e:
             logger.warning("保存重新打开任务开关失败: %s", e)
+            self.status_label.setText(
+                f"设置保存失败：重新打开任务开关未写入 sync.yaml（{e}）")
 
     def _force_ai_analysis_ui_off(self):
         """AI 分析暂时停用：强制关闭总开关并禁用相关控件。"""
@@ -1177,7 +1180,15 @@ class MainWindow(QMainWindow):
 
     def _refresh_ui_profiles(self, select_name: str = None):
         """从磁盘重载方案列表并刷新下拉框（不自动应用）"""
-        self._ui_profiles = load_profiles(self._ui_profiles_path())
+        self._ui_profiles, profile_error = load_profiles_ex(
+            self._ui_profiles_path())
+        if profile_error:
+            # 文件损坏时提醒一次，避免用户误以为方案全部丢失
+            if not getattr(self, "_profiles_error_shown", False):
+                self._profiles_error_shown = True
+                QMessageBox.warning(self, "界面方案读取失败", profile_error)
+        else:
+            self._profiles_error_shown = False
         self.cmb_ui_profile.blockSignals(True)
         self.cmb_ui_profile.clear()
         self.cmb_ui_profile.addItem("（选择方案载入…）")
@@ -1356,7 +1367,11 @@ class MainWindow(QMainWindow):
         """把当前界面快照写入方案文件，并落盘当前配置"""
         if not save_profile(self._ui_profiles_path(),
                             self._collect_ui_profile(name)):
-            QMessageBox.warning(self, "保存失败", "方案写入失败，请查看日志")
+            path = self._ui_profiles_path()
+            QMessageBox.warning(
+                self, "保存失败",
+                f"界面方案写入失败：\n{path}\n\n"
+                f"请检查该文件/目录是否有写入权限、磁盘是否已满（详见日志）。")
             return False
         save_last_selected(self._ui_profiles_path(), name,
                            vpn=getattr(self, "_vpn_config", {}) or {})
@@ -2004,11 +2019,12 @@ class MainWindow(QMainWindow):
                 logger.warning("保存配置失败: %s", e)
 
     def _on_worker_error(self, msg, detail=""):
+        msg = (msg or "").strip() or "未知错误（详情见日志）"
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Critical if hasattr(QMessageBox, "Critical")
                     else QMessageBox.Icon.Critical)
         box.setWindowTitle("操作失败")
-        box.setText(msg)
+        box.setText(msg + "\n\n请根据提示检查网络/配置；详细信息见日志。")
         if detail:
             box.setDetailedText(detail)
         exec_dialog(box)
@@ -2508,8 +2524,9 @@ class MainWindow(QMainWindow):
                     parsed = ast.literal_eval(scheduled)
                     if isinstance(parsed, dict):
                         scheduled = parsed
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "定时同步配置格式无效，已使用默认值: %s", e)
             if not isinstance(scheduled, dict):
                 scheduled = {}
         enabled = scheduled.get("enabled", False)
@@ -2619,6 +2636,8 @@ class MainWindow(QMainWindow):
             update_yaml_values(sync_path, {"scheduled_sync": scheduled})
         except Exception as e:
             logger.warning("保存定时同步配置失败: %s", e)
+            self.status_label.setText(
+                f"设置保存失败：定时同步配置未写入 sync.yaml（{e}）")
 
     def _check_scheduled_sync(self, now: QTime = None):
         """每分钟检查一次：是否到设定日期和时间触发定时同步
@@ -2831,9 +2850,11 @@ class MainWindow(QMainWindow):
         for name, stats, err in chain["results"]:
             lines.append(f"{name}: " + (f"失败 - {err}" if err else stats))
         summary = "\n".join(lines) if lines else "未执行任何方案"
-        self._log(f"[定时方案] 全部完成（{len(chain['results'])} 个方案）\n"
-                  f"{summary}")
-        self.status_label.setText("定时方案导入完成")
+        failed = sum(1 for _n, _s, err in chain["results"] if err)
+        status = f"定时方案导入完成（成功 {len(chain['results']) - failed} / 失败 {failed}）"
+        self._log(f"[定时方案] 全部完成（{len(chain['results'])} 个方案，"
+                  f"失败 {failed} 个）\n{summary}")
+        self.status_label.setText(status)
         if self.chk_scheduled_notify.isChecked():
             QMessageBox.information(self, "定时方案导入完成", summary)
 
@@ -2874,7 +2895,10 @@ class MainWindow(QMainWindow):
                 self._load_config()
         except Exception as e:
             logger.exception("打开配置对话框失败")
-            QMessageBox.critical(self, "错误", f"无法打开配置对话框:\n{e}")
+            QMessageBox.critical(
+                self, "错误",
+                f"无法打开配置对话框：{e}\n\n"
+                f"请检查程序目录下 configs/ 是否存在且有读写权限。")
 
     # ── 通用回调 ──────────────────────────────────────
 
@@ -2995,6 +3019,9 @@ class MainWindow(QMainWindow):
         if not info:
             if was_manual:
                 self._set_busy(False)
+                QMessageBox.warning(
+                    self, "检查更新",
+                    "返回的版本信息不完整，请稍后重试。")
             return
 
         # 检查最低版本
@@ -3100,14 +3127,26 @@ class MainWindow(QMainWindow):
         import os as _os
         bat_path = self._update_bat_path
         if not bat_path or not os.path.exists(bat_path):
-            QMessageBox.warning(self, "更新失败", "替换脚本不存在")
+            QMessageBox.warning(
+                self, "更新失败",
+                f"更新替换脚本不存在：\n{bat_path or '(未生成)'}\n\n"
+                f"请重新检查更新并下载，或手动解压发布包覆盖安装。")
             return
 
-        subprocess.Popen(
-            ['cmd', '/c', bat_path],
-            creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
-            cwd=os.path.dirname(bat_path),
-        )
+        try:
+            subprocess.Popen(
+                ['cmd', '/c', bat_path],
+                creationflags=(subprocess.CREATE_NEW_CONSOLE
+                               | subprocess.CREATE_NEW_PROCESS_GROUP),
+                cwd=os.path.dirname(bat_path),
+            )
+        except Exception as e:
+            logger.exception("启动更新脚本失败")
+            QMessageBox.critical(
+                self, "更新失败",
+                f"无法启动更新脚本：{e}\n\n"
+                f"请手动运行 {bat_path}，或手动解压发布包覆盖安装。")
+            return
         # 立即强制退出 Python 进程，不等 QThread / GC，
         # 让 _internal 里的 dll 句柄立即释放（避免 robocopy 失败）
         _os._exit(0)

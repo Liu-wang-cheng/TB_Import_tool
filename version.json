@@ -1,8 +1,8 @@
 {
-  "version": "2.8.20",
-  "sha256": "1ab4d931dc6f6804052f9a3aba088ac875624e2947ddb30332b77d469e659c1d",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.20/SmartDefectPlatform.zip",
+  "version": "2.8.21",
+  "sha256": "",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.21/SmartDefectPlatform.zip",
   "release_date": "2026-11-04",
-  "release_notes": "v2.8.20 修复/调整：配置对话框改用程序目录绝对路径，修复通过免 UAC 快捷方式启动时源平台/Teambition/钉钉等配置页空白、Webhook 等修改无法保存的问题（也是部分用户正式导入后收不到钉钉通知的根因之一）；AI 分析功能暂时停用，主界面与配置页的 AI 开关置灰并强制关闭；钉钉通知补充诊断日志：启动时记录 webhook 是否配置，同步结束记录跳过原因（未配置/0条/关闭同步无新增）或发送成功/失败，便于定位未通知问题。测试 621 个通过（排除需真实服务器的网络集成测试）",
+  "release_notes": "v2.8.21 修复/完善：全面审查错误提示与静默失败——更新下载/校验/解压/替换脚本失败改为中文原因与处理建议；配置保存失败指出具体 Tab 并对密码/密钥脱敏；界面方案文件损坏时弹窗提醒；定时多方案汇总成功/失败数量；钉钉补充 webhook 状态、发送结果、跳过原因与错误码中文说明；外部TB/禅道接口失败补充上下文与登录状态建议；关闭同步/附件读取失败不再静默；外部TB详情缓存未命中改为报错跳过，避免创建垃圾任务；CLI 异常中文提示；构建脚本在密钥剥离失败/缺文件时中止并恢复配置。测试 625 个通过（排除需真实服务器的网络集成测试）",
   "min_version": "1.0"
 }

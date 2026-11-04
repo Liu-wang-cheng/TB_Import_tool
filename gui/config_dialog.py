@@ -541,19 +541,43 @@ class ConfigDialog(QDialog):
         else:
             self.collab_interval.setCurrentIndex(2)    # 每月
 
+    def _redact_error(self, e) -> str:
+        """错误信息中出现的密码/密钥/token 一律脱敏"""
+        text = str(e)
+        for value in (
+            self.zt_password.text(),
+            self.tb_app_secret.text(),
+            self.dt_secret.text(),
+            self.ai_drc_password.text(),
+            self.cls_llm_api_key.text(),
+            self.collab_token.text(),
+        ):
+            if value and len(value) >= 4:
+                text = text.replace(value, "***")
+        return text
+
     def _save(self):
-        try:
-            self._save_source()
-            self._save_teambition()
-            self._save_sync()
-            self._save_classifier()
-            self._save_ai_analysis()
-            self._save_dingtalk()
-            QMessageBox.information(self, "保存成功", "配置已保存")
-            self.accept()
-        except Exception as e:
-            logger.exception("保存配置失败")
-            QMessageBox.critical(self, "保存失败", str(e))
+        steps = [
+            ("源平台", self._save_source),
+            ("Teambition", self._save_teambition),
+            ("同步", self._save_sync),
+            ("分类器", self._save_classifier),
+            ("AI分析", self._save_ai_analysis),
+            ("钉钉", self._save_dingtalk),
+        ]
+        for name, save_fn in steps:
+            try:
+                save_fn()
+            except Exception as e:
+                logger.exception("保存%s配置失败", name)
+                QMessageBox.critical(
+                    self, "保存失败",
+                    f"{name} 配置保存失败：{self._redact_error(e)}\n\n"
+                    f"注意：此前页面的配置可能已写入。"
+                    f"请修正后重新保存。")
+                return
+        QMessageBox.information(self, "保存成功", "配置已保存")
+        self.accept()
 
     def _save_source(self):
         """保存源平台配置：source.yaml 只存平台类型，各平台配置存到独立文件。"""

@@ -1385,8 +1385,12 @@ class SyncEngine:
                 real_name = statuses.get(task.status, "")
                 if "待回归" in real_name or "待复现" in real_name:
                     return True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    "查询任务流状态失败，无法确认是否待回归: "
+                    "Bug#%s task=%s status=%s: %s",
+                    bug.id, getattr(task, "id", ""),
+                    getattr(task, "status", ""), e)
         # taskflow_id为空时，尝试通过sfcId推断（仅当状态ID完全未知时）
         if not taskflow_id and sfc_id and self._pending_regression_ids:
             # 尝试查询该sfc对应taskflow的状态
@@ -1397,8 +1401,11 @@ class SyncEngine:
                     real_name = statuses.get(task.status, "")
                     if "待回归" in real_name or "待复现" in real_name:
                         return True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    "通过 sfcId 查询任务流状态失败: Bug#%s sfc=%s "
+                    "status=%s: %s",
+                    bug.id, sfc_id, getattr(task, "status", ""), e)
         return False
 
     def _close_task_by_id(self, bug, task_id: str, dry_run: bool,
@@ -1635,7 +1642,10 @@ class SyncEngine:
                 if not identifiers:
                     try:
                         vlns_in_comments = self.source.extract_vlns_numbers(bug.id)
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(
+                            "[关闭同步] Bug#%d 提取评论中的 VLNS/CPAX 失败：%s",
+                            bug.id, e)
                         vlns_in_comments = []
                     for num in vlns_in_comments:
                         for prefix in ("VLNS", "CPAX"):
@@ -1643,7 +1653,10 @@ class SyncEngine:
                 for identifier in identifiers:
                     try:
                         task = self.teambition.get_task_by_identifier(identifier)
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(
+                            "[关闭同步] 查询任务 %s 失败，跳过：%s",
+                            identifier, e)
                         continue
                     if not task:
                         continue
@@ -2935,7 +2948,10 @@ class SyncEngine:
                     if isinstance(val, list):
                         return val
             return []
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "读取任务 %s 的已有附件字段失败，本次跳过附件值去重校验: %s",
+                task_id, e)
             return []
 
     def _get_existing_task_filenames(self, task_id: str) -> set:
@@ -2948,8 +2964,10 @@ class SyncEngine:
                 fn = w.get("fileName", "")
                 if fn:
                     filenames.add(fn)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "读取任务 %s 的附件列表失败，可能重复上传同名附件: %s",
+                task_id, e)
         # 2. 从日志附件自定义字段获取
         attachment_cf_id = self.cf_ids.get("attachment", "")
         if attachment_cf_id:
