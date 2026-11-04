@@ -165,6 +165,15 @@ def update_version_json(repo: str, token: str, version: str,
         "release_notes": notes,
         "min_version": "1.0",
     }
+    # 先写本地 version.json：即使稍后远端 push 失败，也能手动补推
+    local_vf = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "version.json")
+    try:
+        with open(local_vf, "w", encoding="utf-8") as f:
+            json.dump(version_data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+    except OSError as e:
+        print(f"  [WARN] 写入本地 version.json 失败: {e}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         repo_url = f"https://github.com/{repo}.git"
@@ -203,8 +212,27 @@ def update_version_json(repo: str, token: str, version: str,
             subprocess.run(["git", "commit", "-m",
                             f"release v{version}: update version.json & README"],
                            cwd=tmpdir, check=True, capture_output=True, timeout=60)
-            subprocess.run(["git", "push", "origin", "main"],
-                           cwd=tmpdir, check=True, capture_output=True, timeout=180)
+            push_main = subprocess.run(
+                ["git", "push", "origin", "main"],
+                cwd=tmpdir, capture_output=True, timeout=180)
+            if push_main.returncode != 0:
+                stderr = push_main.stderr.decode("utf-8", errors="replace")
+                print(f"  [WARN] 推送 main 失败，尝试 rebase 后重试：{stderr.strip()}")
+                subprocess.run(
+                    ["git", "pull", "--rebase", "origin", "main"],
+                    cwd=tmpdir, capture_output=True, timeout=180)
+                push_main = subprocess.run(
+                    ["git", "push", "origin", "main"],
+                    cwd=tmpdir, capture_output=True, timeout=180)
+            if push_main.returncode != 0:
+                stderr = push_main.stderr.decode("utf-8", errors="replace")
+                print("[ERROR] 推送 version.json/README 到 main 失败：")
+                print(stderr.strip())
+                print("  本地 version.json 已写入最终 sha256，请手动执行：")
+                print("  git add version.json README.md")
+                print(f"  git commit -m \"release v{version}: update version.json\"")
+                print("  git push origin main")
+                sys.exit(1)
         else:
             print(f"  [GIT] version.json & README 无变化，跳过 commit")
 
