@@ -15,8 +15,25 @@ from gui.qt_compat import (
 
 from gui.yaml_utils import update_yaml_values
 from gui.qt_compat import QThread, pyqtSignal
+from gui.feature_flags import AI_ANALYSIS_UI_ENABLED
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_config_dir(config_dir: str) -> str:
+    """把相对 config_dir 解析到程序目录（不受启动时工作目录影响）。
+
+    通过免 UAC 计划任务启动时，进程工作目录可能是 System32，
+    相对路径会读不到 configs/，导致配置对话框整页空白。
+    """
+    if os.path.isabs(config_dir):
+        return config_dir
+    import sys
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, config_dir)
 
 
 class CollabSyncWorker(QThread):
@@ -43,7 +60,7 @@ class ConfigDialog(QDialog):
 
     def __init__(self, config_dir="configs", parent=None):
         super().__init__(parent)
-        self.config_dir = config_dir
+        self.config_dir = resolve_config_dir(config_dir)
         self.setWindowTitle("配置管理")
         self.setMinimumSize(600, 500)
         self._build_ui()
@@ -294,6 +311,9 @@ class ConfigDialog(QDialog):
         form = QFormLayout(w)
 
         self.ai_enabled = QCheckBox("启用 AI 日志分析（同步后自动分析并写入评论）")
+        if not AI_ANALYSIS_UI_ENABLED:
+            self.ai_enabled.setChecked(False)
+            self.ai_enabled.setEnabled(False)
         form.addRow("", self.ai_enabled)
 
         # DRC 服务器
@@ -495,7 +515,10 @@ class ConfigDialog(QDialog):
 
         # AI分析
         ai = self._load_yaml("ai_analysis.yaml")
-        self.ai_enabled.setChecked(ai.get("enabled", False))
+        self.ai_enabled.setChecked(
+            AI_ANALYSIS_UI_ENABLED and ai.get("enabled", False))
+        if not AI_ANALYSIS_UI_ENABLED:
+            self.ai_enabled.setEnabled(False)
         self.ai_drc_server.setText(ai.get("drc_server", "") or "http://61.141.202.107:8008")
         self.ai_drc_username.setText(ai.get("drc_username", "") or "ldrobot-team")
         self.ai_drc_password.setText(ai.get("drc_password", "") or "ldrobotlog4110")
@@ -643,7 +666,8 @@ class ConfigDialog(QDialog):
 
     def _save_ai_analysis(self):
         values = {
-            "enabled": self.ai_enabled.isChecked(),
+            "enabled": (AI_ANALYSIS_UI_ENABLED
+                        and self.ai_enabled.isChecked()),
             # 始终写入（清空 = 写 null 恢复默认值）；此前空值跳过写入
             # 导致清空输入框再保存无效
             "drc_server": self.ai_drc_server.text().strip() or None,

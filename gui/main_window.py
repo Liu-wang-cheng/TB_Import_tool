@@ -30,6 +30,7 @@ from gui.ui_profiles import (
     load_profiles, save_profile, resolve_profiles, format_profiles_summary,
     load_last_selected, save_last_selected, load_last_vpn,
 )
+from gui.feature_flags import AI_ANALYSIS_UI_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -526,6 +527,9 @@ class MainWindow(QMainWindow):
         self.chk_ai_analysis = QCheckBox("开启AI分析日志")
         self.chk_ai_analysis.setToolTip("同步后自动下载DRC日志并调用LLM分析，结果写入TB评论")
         self.chk_ai_analysis.stateChanged.connect(self._on_ai_switch_changed)
+        if not AI_ANALYSIS_UI_ENABLED:
+            self.chk_ai_analysis.setChecked(False)
+            self.chk_ai_analysis.setEnabled(False)
 
         self.chk_fault_pattern = QCheckBox("故障模式库")
         self.chk_fault_pattern.setToolTip("匹配已知故障模式（倾斜误触发、抱起未恢复等），提供根因提示")
@@ -710,6 +714,8 @@ class MainWindow(QMainWindow):
 
     def _check_ai_analysis_config(self):
         """检查 AI 分析配置状态，在状态栏显示"""
+        if not AI_ANALYSIS_UI_ENABLED:
+            return
         ai_cfg = self.config.get("ai_analysis", {})
         if ai_cfg.get("enabled"):
             cls_cfg = self.config.get("classifier", {})
@@ -764,6 +770,9 @@ class MainWindow(QMainWindow):
         self.chk_knowledge_base.setChecked(bool(kb_cfg.get("enabled", False)))
         self.chk_knowledge_base.blockSignals(False)
 
+        if not AI_ANALYSIS_UI_ENABLED:
+            self._force_ai_analysis_ui_off()
+
         # AI 关闭时禁用子开关
         self._update_ai_sub_switches()
 
@@ -780,14 +789,32 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning("保存重新打开任务开关失败: %s", e)
 
+    def _force_ai_analysis_ui_off(self):
+        """AI 分析暂时停用：强制关闭总开关并禁用相关控件。"""
+        if AI_ANALYSIS_UI_ENABLED:
+            return
+        self.chk_ai_analysis.blockSignals(True)
+        self.chk_ai_analysis.setChecked(False)
+        self.chk_ai_analysis.blockSignals(False)
+        self.chk_ai_analysis.setEnabled(False)
+        self.config.setdefault("ai_analysis", {})["enabled"] = False
+        for chk in (self.chk_fault_pattern, self.chk_specialized_prompt,
+                    self.chk_knowledge_base):
+            chk.setEnabled(False)
+
     def _on_ai_switch_changed(self, state):
         """AI 分析总开关变化时更新子开关可用性"""
+        if not AI_ANALYSIS_UI_ENABLED:
+            self._force_ai_analysis_ui_off()
+            self._save_ai_switches()
+            return
         self._update_ai_sub_switches()
         self._save_ai_switches()
 
     def _update_ai_sub_switches(self):
         """AI 总开关关闭时禁用子开关"""
-        enabled = self.chk_ai_analysis.isChecked()
+        enabled = (AI_ANALYSIS_UI_ENABLED
+                   and self.chk_ai_analysis.isChecked())
         for chk in [self.chk_fault_pattern, self.chk_specialized_prompt,
                      self.chk_knowledge_base]:
             chk.setEnabled(enabled)
@@ -797,7 +824,10 @@ class MainWindow(QMainWindow):
         from gui.yaml_utils import update_yaml_values
 
         # AI 分析总开关 → ai_analysis.yaml
-        ai_enabled = self.chk_ai_analysis.isChecked()
+        if not AI_ANALYSIS_UI_ENABLED:
+            self._force_ai_analysis_ui_off()
+        ai_enabled = (AI_ANALYSIS_UI_ENABLED
+                      and self.chk_ai_analysis.isChecked())
         ai_path = os.path.join(self._project_root, "configs", "ai_analysis.yaml")
         if os.path.exists(ai_path):
             update_yaml_values(ai_path, {"enabled": ai_enabled})
@@ -845,9 +875,15 @@ class MainWindow(QMainWindow):
                     webhook_url=dt_cfg["webhook_url"],
                     secret=dt_cfg.get("secret", ""),
                 )
-                logger.info("钉钉通知已启用")
+                from urllib.parse import urlparse
+                host = urlparse(dt_cfg["webhook_url"]).netloc or "(invalid)"
+                logger.info("钉钉通知已启用（webhook: %s）", host)
             except Exception as e:
                 logger.warning("钉钉机器人初始化失败: %s", e)
+        else:
+            logger.warning(
+                "钉钉通知未启用：%s 未配置 webhook_url",
+                os.path.join(self._project_root, "configs", "dingtalk.yaml"))
 
     def _start_collab_auto_pull(self):
         """启动协同学习自动拉取（延迟执行，等待组件初始化完成）。"""
@@ -1917,8 +1953,11 @@ class MainWindow(QMainWindow):
         self._busy_states = {}
         for w in widgets:
             w.setEnabled(states.get(w, True))
-        # AI 子开关受总开关约束
-        if not self.chk_ai_analysis.isChecked():
+        # AI 子开关受总开关约束；AI 功能停用时总开关也必须保持置灰
+        if not AI_ANALYSIS_UI_ENABLED:
+            self.chk_ai_analysis.setEnabled(False)
+        if (not AI_ANALYSIS_UI_ENABLED
+                or not self.chk_ai_analysis.isChecked()):
             for chk in (self.chk_fault_pattern, self.chk_specialized_prompt,
                         self.chk_knowledge_base):
                 chk.setEnabled(False)
@@ -2828,7 +2867,8 @@ class MainWindow(QMainWindow):
 
     def _on_config(self):
         try:
-            dlg = ConfigDialog("configs", parent=self)
+            dlg = ConfigDialog(
+                os.path.join(self._project_root, "configs"), parent=self)
             result = exec_dialog(dlg)
             if result == QDialog.Accepted:
                 self._load_config()

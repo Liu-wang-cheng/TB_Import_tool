@@ -434,22 +434,27 @@ class SyncEngine:
 
         # 钉钉通知（关闭同步开启时，仅在有新建/重新激活时才发主同步通知；
         # 获取到的缺陷数量为 0 时不推送）
-        if self.dingtalk_bot and (
-            stats.total > 0 or stats.closed_synced > 0
-        ) and (
-            not self.sync_closed_status
-            or stats.created > 0
-            or stats.reactivated > 0
-        ):
+        if self.dingtalk_bot is None:
+            logger.info("跳过钉钉通知：未配置 webhook 或机器人初始化失败")
+        elif not (stats.total > 0 or stats.closed_synced > 0):
+            logger.info("跳过钉钉通知：本次未获取到缺陷（total=0）")
+        elif (self.sync_closed_status and stats.created == 0
+              and stats.reactivated == 0):
+            logger.info(
+                "跳过钉钉主通知：关闭同步模式下无新建/重新激活"
+                "（total=%d, closed=%d）",
+                stats.total, stats.closed_synced)
+        else:
             try:
                 source_name = {"zentao": "禅道", "jira": "Jira",
                                "teambition": "外部TB"}.get(
                     getattr(self, "source_type", "zentao"), "禅道")
-                self.dingtalk_bot.send_sync_result(
+                ok = self.dingtalk_bot.send_sync_result(
                     stats, elapsed, dry_run=is_dry_run,
                     project_name=self.project_name,
                     source_name=source_name,
                 )
+                logger.info("钉钉同步通知发送%s", "成功" if ok else "失败")
             except Exception as e:
                 logger.warning("钉钉通知发送失败: %s", e)
 
