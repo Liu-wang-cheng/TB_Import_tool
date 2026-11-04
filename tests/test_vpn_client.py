@@ -158,7 +158,7 @@ class TestConnect:
         procs = []
 
         def fake_popen(cmd, **kwargs):
-            p = _FakeProc(cmd, ["Using Wintun device 'vpn'"],
+            p = _FakeProc(cmd, ["Configured as 10.0.0.2, with SSL disconnected and DTLS established"],
                           exit_code=0, **kwargs)
             procs.append(p)
             return p
@@ -180,7 +180,7 @@ class TestConnect:
         mismatch = ("None of the 1 fingerprint(s) specified via --servercert "
                     "match server's certificate: pin-sha256:AAAA=")
         procs = []
-        outputs = [[mismatch], ["Using Wintun device 'vpn'"]]
+        outputs = [[mismatch], ["Configured as 10.0.0.2, with SSL disconnected and DTLS established"]]
 
         def fake_popen(cmd, **kwargs):
             p = _FakeProc(cmd, outputs[len(procs)], exit_code=1, **kwargs)
@@ -213,6 +213,44 @@ class TestConnect:
         ok, msg = _client(probe_host="", probe_port=0, timeout=1).connect()
         assert ok is False
         assert "管理员" in msg
+
+
+class TestErrorHints:
+    def test_success_output_not_misjudged_as_auth_failure(self):
+        text = ("Configured as 10.0.0.2\n"
+                "Session authentication will expire at 2026-11-04")
+        assert VpnClient._error_hint(text) == ""
+
+    def test_failed_authentication_hint(self):
+        assert "账号或密码" in VpnClient._error_hint(
+            "Failed to complete authentication")
+
+    def test_session_terminated_hint(self):
+        assert "会话" in VpnClient._error_hint("Session terminated by server")
+
+    def test_wintun_failure_hint(self):
+        assert "虚拟网卡" in VpnClient._error_hint(
+            "Failed to create Wintun adapter")
+
+
+class TestProbeFailureMessage:
+    def test_tunnel_up_but_probe_unreachable(self, monkeypatch):
+        import src.vpn_client as mod
+        monkeypatch.setattr(mod, "find_openconnect", lambda: "oc.exe")
+        monkeypatch.setattr(mod, "is_reachable", lambda *a, **k: False)
+
+        def fake_popen(cmd, **kwargs):
+            return _FakeProc(cmd, [
+                "Configured as 10.0.0.2, with SSL disconnected",
+                "Session authentication will expire at 2026-11-04",
+            ], exit_code=0, **kwargs)
+
+        monkeypatch.setattr(mod.subprocess, "Popen", fake_popen)
+        ok, msg = _client(timeout=1).connect()
+        assert ok is False
+        assert "隧道已建立" in msg
+        assert "10.0.0.5:8080" in msg
+        assert "账号或密码" not in msg
 
 
 class TestDisconnect:
@@ -261,7 +299,7 @@ class TestBundledScript:
         procs = []
 
         def fake_popen(cmd, **kwargs):
-            p = _FakeProc(cmd, ["Using Wintun device 'vpn'"], **kwargs)
+            p = _FakeProc(cmd, ["Configured as 10.0.0.2, with SSL disconnected and DTLS established"], **kwargs)
             procs.append(p)
             return p
 

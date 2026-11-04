@@ -24,12 +24,11 @@ _DEFAULT_PATHS = [
     r"C:\Program Files (x86)\OpenConnect\openconnect.exe",
 ]
 
-# openconnect 连接成功的输出特征
+# openconnect 隧道真正建立的输出特征（"Using Wintun device" 等仅表示
+# 网卡已创建，不能作为连接成功依据）
 _SUCCESS_MARKERS = (
     "Configured as ",
     "PPP state transition from OPENED to NETWORK",
-    "Using Wintun device",
-    "Using TAP device",
 )
 
 # 证书不匹配时 openconnect 会打印实际指纹，用于首次信任（TOFU）
@@ -128,6 +127,7 @@ class VpnClient:
         self._proc: Optional[subprocess.Popen] = None
         self._output: list = []
         self._reader: Optional[threading.Thread] = None
+        self._last_exit_code = None
 
     # ── 状态 ──────────────────────────────────────────
 
@@ -148,6 +148,11 @@ class VpnClient:
             return False, "VPN 配置不完整（服务器/端口）"
         if self.probe_host and self.probe_port and self.probe():
             return True, "目标已可达（无需连接 VPN）"
+        logger.info(
+            "VPN 连接参数: server=%s:%s user=%s probe=%s:%s timeout=%ss cert=%s",
+            self.server, self.port, self.username,
+            self.probe_host or "-", self.probe_port or "-", self.timeout,
+            "已固定" if self.servercert else "首次信任(TOFU)")
         exe = find_openconnect()
         if not exe:
             return False, ("未检测到 OpenConnect，请先安装（管理员执行 "
@@ -168,8 +173,11 @@ class VpnClient:
                                pin[:24] + "…")
                 self.servercert = pin
                 continue
-            logger.warning("VPN 连接失败: %s", msg)
+            logger.warning("VPN 连接失败（openconnect 退出码 %s）: %s",
+                           self._last_exit_code, msg)
+            self._log_output_tail()
             return False, msg
+        self._log_output_tail()
         return False, "VPN 连接失败"
 
     def _try_connect(self, exe: str) -> tuple:
@@ -218,19 +226,42 @@ class VpnClient:
                 if self.probe():
                     return True, "VPN 已连接，目标可达", self.servercert or None
             if proc.poll() is not None:
+                # 进程退出后读取线程可能还没把最后的错误行读完，等它排空
+                if self._reader is not None:
+                    self._reader.join(timeout=1.0)
                 break
             time.sleep(0.5)
 
+        if self._reader is not None:
+            self._reader.join(timeout=1.0)
+        self._last_exit_code = proc.poll()
         text = "".join(self._output)
         pin = parse_certificate_pin(text)
+        configured = any(m in text for m in _SUCCESS_MARKERS)
         self.disconnect()
-        msg = ("VPN 连接超时或失败"
-               + ("（目标不可达）" if any(m in text for m in _SUCCESS_MARKERS)
-                  else ""))
+        if configured and self.probe_host and self.probe_port:
+            msg = (f"VPN 隧道已建立，但探测目标 "
+                   f"{self.probe_host}:{self.probe_port} 不可达。"
+                   f"请确认该 VPN 账号有内网访问权限，"
+                   f"或在 VPN 设置中修改探测地址")
+        elif configured:
+            msg = "VPN 隧道已建立，但连接随后中断"
+        else:
+            msg = "VPN 连接超时或失败"
         hint = self._error_hint(text)
         if hint:
             msg += "：" + hint
         return False, msg, pin
+
+    def _log_output_tail(self, limit: int = 20):
+        """失败时把 openconnect 输出尾部写入日志，便于远程用户反馈。"""
+        lines = [ln for ln in "".join(self._output).splitlines() if ln.strip()]
+        if not lines:
+            return
+        tail = "\n".join(lines[-limit:])
+        if self.password:
+            tail = tail.replace(self.password, "***")
+        logger.warning("[openconnect 输出]\n%s", tail)
 
     def _read_output(self):
         proc = self._proc
@@ -252,10 +283,20 @@ class VpnClient:
             return "服务器证书不匹配，请在 VPN 设置中更新证书指纹"
         if "administrator" in low or "privilege" in low or "access is denied" in low:
             return "需要以管理员身份运行本程序以创建虚拟网卡"
-        if "authentication" in low or "password" in low or "login failed" in low:
-            return "VPN 账号或密码错误"
-        if "wintun" in low and "failed" in low:
+        if "failed to create wintun" in low or (
+                "wintun" in low and ("failed" in low or "error" in low)):
             return "虚拟网卡创建失败，请确认以管理员运行且 wintun.dll 可用"
+        if any(k in low for k in ("session terminated", "session limit",
+                                   "maximum number of sessions",
+                                   "concurrent session")):
+            return "VPN 会话被服务器终止（账号可能在其他设备同时登录）"
+        # 注意：成功的会话也会输出 "Session authentication will expire"，
+        # 不能只匹配 authentication/password，否则会误报为密码错误
+        if any(k in low for k in ("failed to complete authentication",
+                                   "login failed", "authentication failed",
+                                   "invalid password", "invalid credentials",
+                                   "password expired", "account locked")):
+            return "VPN 账号或密码错误（或账号被锁定/密码过期）"
         return ""
 
     # ── 断开 ──────────────────────────────────────────
