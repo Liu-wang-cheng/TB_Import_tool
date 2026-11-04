@@ -24,11 +24,10 @@ _DEFAULT_PATHS = [
     r"C:\Program Files (x86)\OpenConnect\openconnect.exe",
 ]
 
-# openconnect 隧道真正建立的输出特征（"Using Wintun device" 等仅表示
-# 网卡已创建，不能作为连接成功依据）
+# openconnect 隧道真正建立的输出特征（"Using Wintun device" 仅表示网卡
+# 已创建、"PPP state transition" 也可能在后续 403/断线前出现，均不可靠）
 _SUCCESS_MARKERS = (
     "Configured as ",
-    "PPP state transition from OPENED to NETWORK",
 )
 
 # 证书不匹配时 openconnect 会打印实际指纹，用于首次信任（TOFU）
@@ -123,11 +122,13 @@ class VpnClient:
         self.probe_host = str(cfg.get("probe_host", "")).strip()
         self.probe_port = int(cfg.get("probe_port") or 0)
         self.timeout = int(cfg.get("timeout") or 60)
+        self.no_dtls = bool(cfg.get("no_dtls"))
         self.auto_trust_cert = bool(cfg.get("auto_trust_cert", True))
         self._proc: Optional[subprocess.Popen] = None
         self._output: list = []
         self._reader: Optional[threading.Thread] = None
         self._last_exit_code = None
+        self._last_output_text = ""
 
     # ── 状态 ──────────────────────────────────────────
 
@@ -149,38 +150,68 @@ class VpnClient:
         if self.probe_host and self.probe_port and self.probe():
             return True, "目标已可达（无需连接 VPN）"
         logger.info(
-            "VPN 连接参数: server=%s:%s user=%s probe=%s:%s timeout=%ss cert=%s",
+            "VPN 连接参数: server=%s:%s user=%s probe=%s:%s timeout=%ss "
+            "dtls=%s cert=%s",
             self.server, self.port, self.username,
             self.probe_host or "-", self.probe_port or "-", self.timeout,
+            "关闭(强制TCP)" if self.no_dtls else "自动",
             "已固定" if self.servercert else "首次信任(TOFU)")
         exe = find_openconnect()
         if not exe:
             return False, ("未检测到 OpenConnect，请先安装（管理员执行 "
                            "choco install openconnect -y）或手动连接 VPN")
 
-        for attempt in (1, 2):
-            ok, msg, pin = self._try_connect(exe)
-            if ok:
-                logger.info("VPN 连接成功: %s", msg)
-                if pin and pin != self.servercert:
+        # 默认 DTLS 优先，失败自动回退 TCP；显式勾选强制 TCP 时只走 TCP
+        modes = [True] if self.no_dtls else [False, True]
+        last_msg = "VPN 连接失败"
+        for no_dtls in modes:
+            auto_fallback = no_dtls and not self.no_dtls
+            retry_tcp = False
+            for attempt in (1, 2):
+                ok, msg, pin = self._try_connect(exe, no_dtls=no_dtls)
+                if ok:
+                    logger.info("VPN 连接成功: %s", msg)
+                    if pin and pin != self.servercert:
+                        self.servercert = pin
+                        msg += f"（已记录证书指纹 {pin[:24]}…）"
+                    if auto_fallback:
+                        msg += "（DTLS 失败，已自动回退 TCP）"
+                    return True, msg
+                # 首次未见指纹 → 失败信息里带实际指纹 → 自动信任并重试一次
+                if (attempt == 1 and self.auto_trust_cert
+                        and not self.servercert and pin):
+                    logger.warning("VPN 服务器证书未固定，自动信任指纹: %s",
+                                   pin[:24] + "…")
                     self.servercert = pin
-                    msg += f"（已记录证书指纹 {pin[:24]}…）"
-                return True, msg
-            # 首次未见指纹 → 失败信息里带实际指纹 → 自动信任并重试一次
-            if (attempt == 1 and self.auto_trust_cert and not self.servercert
-                    and pin):
-                logger.warning("VPN 服务器证书未固定，自动信任指纹: %s",
-                               pin[:24] + "…")
-                self.servercert = pin
+                    continue
+                last_msg = msg
+                # DTLS 自动模式失败且输出显示 DTLS 不可用 → 改用 TCP 重试
+                if (not no_dtls and not self.no_dtls
+                        and self._dtls_failure(self._last_output_text)):
+                    logger.warning(
+                        "DTLS 连接失败（退出码 %s），自动改用 TCP 重试: %s",
+                        self._last_exit_code, msg)
+                    self._log_output_tail()
+                    retry_tcp = True
+                    break
+                logger.warning("VPN 连接失败（openconnect 退出码 %s）: %s",
+                               self._last_exit_code, msg)
+                self._log_output_tail()
+                return False, msg
+            if retry_tcp:
                 continue
-            logger.warning("VPN 连接失败（openconnect 退出码 %s）: %s",
-                           self._last_exit_code, msg)
-            self._log_output_tail()
-            return False, msg
         self._log_output_tail()
-        return False, "VPN 连接失败"
+        return False, last_msg
 
-    def _try_connect(self, exe: str) -> tuple:
+    @staticmethod
+    def _dtls_failure(text: str) -> bool:
+        """输出是否表明 DTLS 不可用（可自动回退 TCP）"""
+        low = (text or "").lower()
+        return ("detected dead peer" in low
+                or "failed to connect dtls" in low
+                or ("svrhello status was" in low and "fail" in low))
+
+    def _try_connect(self, exe: str, no_dtls: Optional[bool] = None) -> tuple:
         """启动一次 openconnect，返回 (ok, message, detected_pin)"""
         cmd = [
             exe,
@@ -190,6 +221,10 @@ class VpnClient:
             "--passwd-on-stdin",
             "--non-inter",
         ]
+        # UDP/50443 被拦截时强制走 TCP/HTTPS，避免 DTLS dead peer 后的错误回退
+        use_no_dtls = self.no_dtls if no_dtls is None else no_dtls
+        if use_no_dtls:
+            cmd.append("--no-dtls")
         # 无指纹时用占位指纹探测真实指纹（否则 openconnect 只报 signer not found）
         cmd.append(f"--servercert={self.servercert or _DUMMY_PIN}")
         # 显式指定路由脚本：内置版默认脚本路径编译为安装目录，
@@ -236,6 +271,7 @@ class VpnClient:
             self._reader.join(timeout=1.0)
         self._last_exit_code = proc.poll()
         text = "".join(self._output)
+        self._last_output_text = text
         pin = parse_certificate_pin(text)
         configured = any(m in text for m in _SUCCESS_MARKERS)
         self.disconnect()
@@ -253,7 +289,7 @@ class VpnClient:
             msg += "：" + hint
         return False, msg, pin
 
-    def _log_output_tail(self, limit: int = 20):
+    def _log_output_tail(self, limit: int = 40):
         """失败时把 openconnect 输出尾部写入日志，便于远程用户反馈。"""
         lines = [ln for ln in "".join(self._output).splitlines() if ln.strip()]
         if not lines:
@@ -283,8 +319,16 @@ class VpnClient:
             return "服务器证书不匹配，请在 VPN 设置中更新证书指纹"
         if "administrator" in low or "privilege" in low or "access is denied" in low:
             return "需要以管理员身份运行本程序以创建虚拟网卡"
-        if "failed to create wintun" in low or (
-                "wintun" in low and ("failed" in low or "error" in low)):
+        if "403 forbidden" in low or "unexpected 403" in low:
+            return ("VPN 服务器拒绝隧道配置（HTTP 403）：该账号可能未开通 "
+                    "SSL VPN 隧道权限，或需要使用指定的认证组/门户")
+        if "ancient fortinet server" in low:
+            return "服务器未返回标准 Fortinet 隧道配置（账号权限/认证组不匹配）"
+        if "detected dead peer" in low or "failed to connect dtls" in low:
+            return "DTLS 连接失败并回退 HTTPS（可能 UDP 50443 被防火墙拦截）"
+        if ("failed to create wintun" in low
+                or "failed to open wintun" in low
+                or ("wintun adapter" in low and "failed" in low)):
             return "虚拟网卡创建失败，请确认以管理员运行且 wintun.dll 可用"
         if any(k in low for k in ("session terminated", "session limit",
                                    "maximum number of sessions",

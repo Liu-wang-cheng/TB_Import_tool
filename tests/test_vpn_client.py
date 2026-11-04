@@ -200,6 +200,71 @@ class TestConnect:
                    for p in procs[:1])
         assert any("--servercert=pin-sha256:AAAA=" in p.cmd for p in procs)
 
+    def test_no_dtls_flag_added(self, monkeypatch):
+        import src.vpn_client as mod
+        monkeypatch.setattr(mod, "find_openconnect", lambda: "oc.exe")
+        monkeypatch.setattr(mod, "is_reachable", lambda *a, **k: True)
+        procs = []
+
+        def fake_popen(cmd, **kwargs):
+            p = _FakeProc(cmd, ["Configured as 10.0.0.2"], **kwargs)
+            procs.append(p)
+            return p
+
+        monkeypatch.setattr(mod.subprocess, "Popen", fake_popen)
+        ok, _ = _client(probe_host="", probe_port=0,
+                        no_dtls=True).connect()
+        assert ok is True
+        assert "--no-dtls" in procs[0].cmd
+
+    def test_auto_fallback_to_tcp_on_dtls_failure(self, monkeypatch):
+        import src.vpn_client as mod
+        monkeypatch.setattr(mod, "find_openconnect", lambda: "oc.exe")
+        mismatch = ("match server's certificate: "
+                    "pin-sha256:AAAA=")
+        outputs = [
+            [mismatch],
+            ['Detected dead peer!',
+             'svrhello status was "fail" rather than "ok"',
+             'Failed to connect DTLS tunnel; using HTTPS instead'],
+            ["Configured as 10.0.0.2"],
+        ]
+        procs = []
+
+        def fake_popen(cmd, **kwargs):
+            p = _FakeProc(cmd, outputs[len(procs)], exit_code=1, **kwargs)
+            procs.append(p)
+            return p
+
+        monkeypatch.setattr(mod.subprocess, "Popen", fake_popen)
+        ok, msg = _client(probe_host="", probe_port=0,
+                          timeout=1).connect()
+        assert ok is True
+        assert "自动回退 TCP" in msg
+        assert len(procs) == 3
+        assert "--no-dtls" not in procs[0].cmd
+        assert "--no-dtls" not in procs[1].cmd
+        assert "--no-dtls" in procs[2].cmd
+
+    def test_no_tcp_fallback_on_auth_failure(self, monkeypatch):
+        import src.vpn_client as mod
+        monkeypatch.setattr(mod, "find_openconnect", lambda: "oc.exe")
+        procs = []
+
+        def fake_popen(cmd, **kwargs):
+            p = _FakeProc(cmd, ["Failed to complete authentication"],
+                          exit_code=1, **kwargs)
+            procs.append(p)
+            return p
+
+        monkeypatch.setattr(mod.subprocess, "Popen", fake_popen)
+        ok, msg = _client(servercert="pin-sha256:AAAA=", probe_host="",
+                          probe_port=0, timeout=1).connect()
+        assert ok is False
+        assert "账号或密码" in msg
+        assert len(procs) == 1
+        assert "--no-dtls" not in procs[0].cmd
+
     def test_failure_message_hint_for_admin(self, monkeypatch):
         import src.vpn_client as mod
         monkeypatch.setattr(mod, "find_openconnect", lambda: "oc.exe")
@@ -231,6 +296,20 @@ class TestErrorHints:
     def test_wintun_failure_hint(self):
         assert "虚拟网卡" in VpnClient._error_hint(
             "Failed to create Wintun adapter")
+
+    def test_wintun_success_plus_unrelated_failure_no_false_hint(self):
+        """Using Wintun device + 其它失败行，不得误报虚拟网卡失败"""
+        text = ("Using Wintun device 'vpn'\n"
+                "Establishing PPP tunnel over TLS failed")
+        assert "虚拟网卡" not in VpnClient._error_hint(text)
+
+    def test_403_portal_hint(self):
+        text = ("Got HTTP response: HTTP/1.1 403 Forbidden\n"
+                "Unexpected 403 result from server")
+        assert "403" in VpnClient._error_hint(text)
+
+    def test_dtls_dead_peer_hint(self):
+        assert "DTLS" in VpnClient._error_hint("Detected dead peer!")
 
 
 class TestProbeFailureMessage:

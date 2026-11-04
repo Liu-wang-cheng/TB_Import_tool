@@ -24,6 +24,8 @@ def vpn_config_from_dict(data: dict) -> dict:
                                     not (data.get("probe_host")
                                          and data.get("probe_port")))),
         "timeout": int(data.get("timeout") or 0) or 60,
+        # UDP/50443 被防火墙拦截时勾选：强制走 TCP/HTTPS，禁用 DTLS
+        "no_dtls": bool(data.get("no_dtls", False)),
         "auto_trust_cert": bool(data.get("auto_trust_cert", True)),
         # 默认导入完成后断开 VPN（已显式保存为 false 的方案保持 false）
         "disconnect_after": bool(data.get("disconnect_after", True)),
@@ -108,6 +110,13 @@ class VpnDialog(QDialog):
         self.spin_timeout.setValue(cfg["timeout"] or 60)
         form.addRow("连接超时(秒):", self.spin_timeout)
 
+        self.chk_no_dtls = QCheckBox("始终强制 TCP（禁用 DTLS）")
+        self.chk_no_dtls.setToolTip(
+            "默认先尝试 DTLS，失败会自动回退 TCP；勾选后跳过 DTLS，"
+            "始终使用 HTTPS 隧道（UDP/50443 被拦截时更稳定）")
+        self.chk_no_dtls.setChecked(cfg["no_dtls"])
+        form.addRow("", self.chk_no_dtls)
+
         self.edit_cert = QLineEdit(cfg["servercert"])
         self.edit_cert.setPlaceholderText(
             "留空则首次连接自动记录（pin-sha256:...）")
@@ -170,7 +179,7 @@ class VpnDialog(QDialog):
     def _update_enabled(self, _checked=None):
         on = self.chk_enabled.isChecked()
         for w in (self.edit_server, self.spin_port, self.edit_username,
-                  self.edit_password, self.spin_timeout,
+                  self.edit_password, self.spin_timeout, self.chk_no_dtls,
                   self.edit_cert, self.chk_probe_auto, self.chk_auto_trust,
                   self.chk_disconnect, self.btn_test):
             w.setEnabled(on)
@@ -237,6 +246,7 @@ class VpnDialog(QDialog):
             "probe_port": port,
             "probe_auto": self.chk_probe_auto.isChecked(),
             "timeout": self.spin_timeout.value(),
+            "no_dtls": self.chk_no_dtls.isChecked(),
             "auto_trust_cert": self.chk_auto_trust.isChecked(),
             "disconnect_after": self.chk_disconnect.isChecked(),
         })

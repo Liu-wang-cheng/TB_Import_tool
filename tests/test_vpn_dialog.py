@@ -23,7 +23,17 @@ class TestVpnDialogEnableToggle:
         dlg = _dialog(False)
         assert dlg.edit_server.isEnabled() is False
         assert dlg.edit_password.isEnabled() is False
+        assert dlg.chk_no_dtls.isEnabled() is False
         assert dlg.btn_test.isEnabled() is False
+        dlg.deleteLater()
+
+    def test_no_dtls_roundtrip(self, qapp):
+        from gui.vpn_dialog import VpnDialog
+        dlg = VpnDialog({"enabled": True, "no_dtls": True},
+                        default_probe="10.0.0.1:80")
+        assert dlg.chk_no_dtls.isChecked() is True
+        assert dlg.chk_no_dtls.isEnabled() is True
+        assert dlg.current_config()["no_dtls"] is True
         dlg.deleteLater()
 
     def test_toggle_enables_fields_immediately(self, qapp):
