@@ -1,6 +1,6 @@
 {
   "version": "2.8.22",
-  "sha256": "",
+  "sha256": "d614c89e218b680c659beb30a210f8a2865f183fa213578cb68020adf86a8457",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.22/SmartDefectPlatform.zip",
   "release_date": "2026-11-09",
   "release_notes": "v2.8.22 改进：项目/执行ID 支持手动输入（逗号分隔多个），同时保留缺陷地址自动解析；缺陷查看地址解析新增 m=bug&f=view&id=xxx&t=html 格式（此前只识别 bugID= 和 bug-view-，导致部分地址点解析后项目ID仍为空）；解析/列表合并前先把当前筛选写回配置，避免手动填写的项目ID被覆盖。测试 629 个通过（排除需真实服务器的网络集成测试）",
