@@ -325,6 +325,28 @@ def build_fetch_combos(product_ids, project_ids) -> list:
     return [(None, j) for j in (projects or [None])]
 
 
+def parse_zentao_bug_view_id(url: str) -> Optional[int]:
+    """从禅道缺陷查看地址提取 Bug ID。
+
+    支持：
+      - index.php?m=bug&f=view&bugID=65600
+      - index.php?m=bug&f=view&id=65600&t=html
+      - bug-view-65600.html
+    """
+    if not url:
+        return None
+    m = re.search(r'bug-view-(\d+)', url, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    has_bug = re.search(r'[?&]m=bug(?:&|$)', url, re.IGNORECASE)
+    has_view = re.search(r'[?&]f=view(?:&|$)', url, re.IGNORECASE)
+    if has_bug and has_view:
+        m = re.search(r'[?&](?:bugID|id)=(\d+)', url, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+    return None
+
+
 def parse_zentao_url(url: str) -> dict:
     """从禅道 Bug 页面 URL 中解析产品ID、项目ID、模块ID、分支ID
 

@@ -18,7 +18,7 @@ from gui.qt_compat import (  # noqa: F401
 
 from src.config_loader import load_configs
 from gui.yaml_utils import update_yaml_values
-from src.utils import parse_zentao_url
+from src.utils import parse_zentao_url, parse_zentao_bug_view_id
 from dingtalk.bot import DingTalkBot
 from gui.config_dialog import ConfigDialog
 from gui.log_handler import QtLogHandler
@@ -273,15 +273,16 @@ class MainWindow(QMainWindow):
 
         # 项目/执行ID（可选）：禅道产品接口只返回未挂项目的缺陷，
         # 填写项目/执行ID 可把挂在该项目下的缺陷一起拉取
-        self.lbl_zt_project = QLabel("项目/执行(自动):")
+        self.lbl_zt_project = QLabel("项目/执行ID:")
         row1.addWidget(self.lbl_zt_project)
         self.filter_zt_project = QLineEdit()
-        self.filter_zt_project.setPlaceholderText("自动解析")
-        self.filter_zt_project.setMaximumWidth(120)
-        self.filter_zt_project.setReadOnly(True)
+        self.filter_zt_project.setPlaceholderText(
+            "自动解析，可手动填写（逗号分隔多个）")
+        self.filter_zt_project.setMaximumWidth(180)
         self.filter_zt_project.setToolTip(
-            "自动解析：粘贴缺陷查看地址/项目缺陷列表地址后自动填入。"
-            "产品接口只返回未挂项目的缺陷，解析出项目/执行后会一并拉取")
+            "可粘贴缺陷查看地址自动解析，也可手动填写项目/执行ID"
+            "（逗号分隔多个）。产品接口只返回未挂项目的缺陷，"
+            "填写后会把这些项目下的缺陷一并拉取")
         row1.addWidget(self.filter_zt_project)
 
         # 状态：固定三个选项，对应 status_code 动态获取
@@ -1931,7 +1932,7 @@ class MainWindow(QMainWindow):
             self.btn_test, self.btn_config, self.btn_update,
             # 筛选面板
             self.filter_url, self.btn_parse_url, self.filter_product,
-            self.filter_module, self.filter_status,
+            self.filter_module, self.filter_zt_project, self.filter_status,
             self.filter_assigned, self.filter_platform,
             self.btn_add_assigned, self.btn_del_assigned,
             self.btn_toggle_assigned,
@@ -2081,11 +2082,10 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # 禅道缺陷查看地址（m=bug&f=view&bugID=xxx / bug-view-xxx.html）：
+        # 禅道缺陷查看地址（m=bug&f=view&bugID=xxx / id=xxx / bug-view-xxx.html）：
         # 自动拉取该缺陷，解析其产品/项目/模块
-        m_bug = (re.search(r'[?&]bugID=(\d+)', url, re.I)
-                 or re.search(r'bug-view-(\d+)', url, re.I))
-        if m_bug:
+        bug_view_id = parse_zentao_bug_view_id(url)
+        if bug_view_id:
             # 地址里带了服务器：与当前配置不一致时切换（否则会拿错服务器查询）
             m_origin = re.match(r'(https?://[^/]+)', url)
             if m_origin:
@@ -2118,13 +2118,15 @@ class MainWindow(QMainWindow):
             self._apply_filters_to_config()
             logger.info("[解析] 缺陷查看地址: %s", url)
             self.status_label.setText("正在解析缺陷所属产品/项目...")
-            worker = ParseBugWorker(self.config, int(m_bug.group(1)), self)
+            worker = ParseBugWorker(self.config, bug_view_id, self)
             worker.finished.connect(self._on_bug_url_parsed)
             worker.error.connect(self._on_worker_error)
             if self._start_worker(worker):
                 worker.start()
             return
 
+        # 先把手动填写的项目/执行ID 等当前筛选写回配置，再合并解析结果
+        self._apply_filters_to_config()
         parsed = parse_zentao_url(url)
         filled = []
         zt_filters = self.config.setdefault("zentao", {}).setdefault("filters", {})

@@ -5,8 +5,31 @@ from src.utils import (
     resolve_assigned_to,
     extract_department_prefix,
     parse_zentao_url,
+    parse_zentao_bug_view_id,
     normalize_zentao_filters,
 )
+
+
+class TestParseZentaoBugViewId:
+    def test_bugid_query(self):
+        assert parse_zentao_bug_view_id(
+            "http://10.10.3.67:8080/index.php?m=bug&f=view&bugID=65600"
+        ) == 65600
+
+    def test_id_query_with_t_html(self):
+        assert parse_zentao_bug_view_id(
+            "http://10.10.3.67:8080/index.php?m=bug&f=view&id=65600&t=html"
+        ) == 65600
+
+    def test_bug_view_path(self):
+        assert parse_zentao_bug_view_id(
+            "http://zentao/bug-view-65600.html"
+        ) == 65600
+
+    def test_non_bug_view_id_ignored(self):
+        assert parse_zentao_bug_view_id(
+            "http://zentao/index.php?m=project&f=browse&id=649"
+        ) is None
 
 
 class TestResolveAssignedTo:
