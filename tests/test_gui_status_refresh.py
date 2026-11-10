@@ -77,6 +77,30 @@ class TestStatusRefreshVpnGuard:
         assert ("http://10.10.3.67:8080", "u", "p") in fake_cache
 
 
+class TestStatusCodeMap:
+    """delay/postponed 属于未关闭状态，必须包含在“激活”里"""
+
+    def test_delay_and_postponed_in_active(self):
+        from gui.main_window import MainWindow
+        m = MainWindow._build_status_code_map({
+            "open": ["active", "confirmed"],
+            "closed": ["resolved", "closed"],
+        })
+        assert "delay" in m["激活"]
+        assert "postponed" in m["激活"]
+        assert "delay" not in m["已关闭"]
+        assert set(m["激活+已关闭"]) == {
+            "active", "confirmed", "delay", "postponed", "resolved", "closed"}
+
+    def test_no_duplicate_when_api_already_has_delay(self):
+        from gui.main_window import MainWindow
+        m = MainWindow._build_status_code_map({
+            "open": ["active", "confirmed", "delay"],
+            "closed": ["resolved", "closed"],
+        })
+        assert m["激活"].count("delay") == 1
+
+
 class TestProgressBarReset:
     """任务结束后不得残留不确定模式（滚动）"""
 

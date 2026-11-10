@@ -51,6 +51,9 @@ class ZentaoClient:
         # 在同一会话内重复 GET /api.php/v1/products/{id}/modules
         self._product_modules_cache: dict = {}
         self._product_modules_cache_lock = threading.Lock()
+        # 已确认只能用执行接口的项目/执行ID：后续分页/同步直接走
+        # /executions/{id}/bugs，避免每页都先请求 /projects 再 400 回退
+        self._execution_endpoint_ids = set()
         # 云端浏览页数据缓存（含 modules），避免 get_bug_raw 已拉过一套数据又拉一次
         self._cloud_browse_cache: dict = {}
         self._cloud_browse_cache_lock = threading.Lock()
@@ -889,6 +892,10 @@ class ZentaoClient:
         params = {"page": page, "limit": limit}
         if server_status:
             params["status"] = server_status
+        if project_id and project_id in self._execution_endpoint_ids:
+            path = f"/api.php/v1/executions/{project_id}/bugs"
+            if product_id:
+                params["product"] = product_id
         try:
             data = self._request("GET", path, params=params)
         except ZentaoAPIError as e:
@@ -896,11 +903,14 @@ class ZentaoClient:
             # 回退到 /executions/{id}/bugs（可按 product 过滤），避免漏拉缺陷
             if (project_id and path.startswith("/api.php/v1/projects/")
                     and e.status_code in (400, 403, 404)):
+                self._execution_endpoint_ids.add(project_id)
                 exec_path = f"/api.php/v1/executions/{project_id}/bugs"
                 exec_params = dict(params)
                 if product_id:
                     exec_params["product"] = product_id
-                logger.info("项目接口不可用，回退执行接口: %s", exec_path)
+                logger.info(
+                    "ID %s 不是项目（按执行接口拉取）: %s",
+                    project_id, exec_path)
                 data = self._request("GET", exec_path, params=exec_params)
             else:
                 raise

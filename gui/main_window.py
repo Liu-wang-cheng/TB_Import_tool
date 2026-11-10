@@ -293,9 +293,10 @@ class MainWindow(QMainWindow):
         # 兜底用标准 ZenTao 状态码，连接成功后会用 fetch_status_codes 自适应
         # 默认选项："激活"（所有打开的任务）
         self._status_code_map = {
-            "激活": ["active", "confirmed"],
+            "激活": ["active", "confirmed", "delay", "postponed"],
             "已关闭": ["closed", "resolved"],
-            "激活+已关闭": ["active", "confirmed", "closed", "resolved"],
+            "激活+已关闭": ["active", "confirmed", "delay", "postponed",
+                           "closed", "resolved"],
         }
 
         self.lbl_status = QLabel("状态:")
@@ -305,6 +306,9 @@ class MainWindow(QMainWindow):
         self.filter_status.setCurrentIndex(0)  # 默认 "激活"
         self.filter_status.setMinimumWidth(100)
         self.filter_status.setMaximumWidth(160)
+        self.filter_status.setToolTip(
+            "激活 = 所有未关闭状态（含 active/confirmed/delay/postponed）；"
+            "已关闭 = resolved/closed")
         row1.addWidget(self.filter_status)
         row1.addStretch()
         grid.addLayout(row1)
@@ -2314,6 +2318,22 @@ class MainWindow(QMainWindow):
             self._refresh_status_codes()
             QMessageBox.information(self, "连接测试", message)
 
+    @staticmethod
+    def _build_status_code_map(groups: dict) -> dict:
+        """构建状态筛选映射；delay/postponed 也是未关闭状态，归入“激活”。"""
+        open_codes = list((groups or {}).get("open") or
+                          ["active", "confirmed"])
+        closed_codes = list((groups or {}).get("closed") or
+                            ["resolved", "closed"])
+        for status in ("delay", "postponed"):
+            if status not in open_codes and status not in closed_codes:
+                open_codes.append(status)
+        return {
+            "激活": list(open_codes),
+            "已关闭": list(closed_codes),
+            "激活+已关闭": list(open_codes) + list(closed_codes),
+        }
+
     def _refresh_status_codes(self):
         """从当前连接的禅道服务器动态获取状态码分组，更新 _status_code_map。
 
@@ -2383,13 +2403,7 @@ class MainWindow(QMainWindow):
 
             groups = client.fetch_status_groups()
             if groups:
-                open_codes = groups.get("open", ["active", "confirmed"])
-                closed_codes = groups.get("closed", ["resolved", "closed"])
-                self._status_code_map = {
-                    "激活": list(open_codes),
-                    "已关闭": list(closed_codes),
-                    "激活+已关闭": list(open_codes) + list(closed_codes),
-                }
+                self._status_code_map = self._build_status_code_map(groups)
                 logger.info("动态加载状态码分组: %s", self._status_code_map)
                 self._status_refreshed_key = cache_key
         except Exception as e:

@@ -26,6 +26,22 @@ class TestFetchBugsExecutionFallback:
         assert second.args[1] == "/api.php/v1/executions/649/bugs"
         assert second.kwargs["params"].get("product") == 413
 
+    def test_execution_id_cached_for_subsequent_calls(self):
+        c = self._client()
+        c._request = MagicMock(side_effect=[
+            ZentaoAPIError(400, '{"error":"error"}', "/projects/649/bugs"),
+            {"bugs": [], "total": 0},
+            {"bugs": [], "total": 0},
+        ])
+        c.fetch_bugs(product_id=413, project_id=649)
+        c.fetch_bugs(product_id=413, project_id=649)
+        paths = [call.args[1] for call in c._request.call_args_list]
+        assert paths == [
+            "/api.php/v1/projects/649/bugs",
+            "/api.php/v1/executions/649/bugs",
+            "/api.php/v1/executions/649/bugs",
+        ]
+
     def test_other_errors_not_swallowed(self):
         c = self._client()
         c._request = MagicMock(side_effect=ZentaoAPIError(500, "boom", "/x"))
