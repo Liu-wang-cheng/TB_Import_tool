@@ -287,9 +287,17 @@ class ConfigDialog(QDialog):
         self.cls_llm_api_key.setEchoMode(QLineEdit.Password)
         llm_form.addRow("API Key:", self.cls_llm_api_key)
 
-        self.cls_llm_model = QLineEdit()
-        self.cls_llm_model.setPlaceholderText("MiniMax-M2.7")
-        llm_form.addRow("模型名称:", self.cls_llm_model)
+        self.cls_llm_model = QComboBox()
+        self.cls_llm_model.setEditable(True)
+        self.cls_llm_model.lineEdit().setPlaceholderText("选择或输入模型名称")
+        model_row = QHBoxLayout()
+        model_row.addWidget(self.cls_llm_model, 1)
+        self.btn_refresh_models = QPushButton("刷新模型")
+        self.btn_refresh_models.setToolTip(
+            "调用中转站 /models 接口获取可用模型列表")
+        self.btn_refresh_models.clicked.connect(self._refresh_llm_models)
+        model_row.addWidget(self.btn_refresh_models)
+        llm_form.addRow("模型名称:", model_row)
 
         self.cls_llm_timeout = QSpinBox()
         self.cls_llm_timeout.setRange(5, 300)
@@ -509,7 +517,11 @@ class ConfigDialog(QDialog):
         self.cls_llm_enabled.setChecked(llm.get("enabled", False))
         self.cls_llm_base_url.setText(llm.get("base_url", ""))
         self.cls_llm_api_key.setText(llm.get("api_key", ""))
-        self.cls_llm_model.setText(llm.get("model", ""))
+        model = str(llm.get("model", "") or "")
+        self.cls_llm_model.clear()
+        if model:
+            self.cls_llm_model.addItem(model)
+            self.cls_llm_model.setCurrentText(model)
         self.cls_llm_timeout.setValue(llm.get("timeout", 180))
         self.cls_llm_batch_size.setValue(llm.get("batch_size", 10))
 
@@ -673,6 +685,39 @@ class ConfigDialog(QDialog):
             "attachment_retries": self.sync_retries.value(),
         })
 
+    def _refresh_llm_models(self):
+        """从当前 API 地址/Key 获取中转站可用模型并填充下拉框。"""
+        base = self.cls_llm_base_url.text().strip()
+        key = self.cls_llm_api_key.text().strip()
+        if not base:
+            QMessageBox.warning(self, "刷新模型", "请先填写 API 地址。")
+            return
+        self.btn_refresh_models.setEnabled(False)
+        try:
+            from src.classifier import fetch_relay_models
+            models = fetch_relay_models(base, key)
+        except Exception as e:
+            QMessageBox.warning(
+                self, "刷新模型失败",
+                f"无法获取中转站模型列表：{e}\n\n"
+                f"请检查 API 地址、API Key 与网络。")
+            return
+        finally:
+            self.btn_refresh_models.setEnabled(True)
+        if not models:
+            QMessageBox.warning(self, "刷新模型", "中转站未返回可用模型。")
+            return
+        current = self.cls_llm_model.currentText().strip()
+        self.cls_llm_model.blockSignals(True)
+        self.cls_llm_model.clear()
+        self.cls_llm_model.addItems(models)
+        if current and current not in models:
+            self.cls_llm_model.addItem(current)
+        self.cls_llm_model.setCurrentText(current or models[0])
+        self.cls_llm_model.blockSignals(False)
+        QMessageBox.information(
+            self, "刷新模型", f"已获取 {len(models)} 个可用模型。")
+
     def _save_classifier(self):
         path = os.path.join(self.config_dir, "classifier.yaml")
         update_yaml_values(path, {
@@ -683,7 +728,7 @@ class ConfigDialog(QDialog):
             "classifier.llm.enabled": self.cls_llm_enabled.isChecked(),
             "classifier.llm.base_url": self.cls_llm_base_url.text().strip(),
             "classifier.llm.api_key": self.cls_llm_api_key.text().strip(),
-            "classifier.llm.model": self.cls_llm_model.text().strip(),
+            "classifier.llm.model": self.cls_llm_model.currentText().strip(),
             "classifier.llm.timeout": self.cls_llm_timeout.value(),
             "classifier.llm.batch_size": self.cls_llm_batch_size.value(),
         })

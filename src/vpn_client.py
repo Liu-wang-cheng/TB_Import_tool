@@ -7,6 +7,7 @@
 密码只经 stdin 传入，不出现在命令行/日志中。
 """
 
+import json
 import logging
 import os
 import re
@@ -16,6 +17,7 @@ import subprocess
 import threading
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,126 @@ _PIN_RE = re.compile(r"match server's certificate:\s*(pin-sha256:[A-Za-z0-9+/=]+
 # 占位指纹：OpenConnect 在未提供 --servercert 时只会报 "signer not found"，
 # 不会输出实际指纹；先给一个必不匹配的指纹，让它打印真实指纹后再重试
 _DUMMY_PIN = "pin-sha256:" + "A" * 43 + "="
+
+
+def _resolve_private_host(host: str) -> str:
+    """把主机名/IP 解析为私有 IPv4；公网/本地回环返回空串。"""
+    import ipaddress
+    if not host:
+        return ""
+    value = str(host).strip()
+    try:
+        addr = ipaddress.ip_address(value)
+    except ValueError:
+        try:
+            value = socket.gethostbyname(value)
+            addr = ipaddress.ip_address(value)
+        except (OSError, ValueError):
+            return ""
+    if not addr.is_private or addr.is_loopback:
+        return ""
+    return str(addr)
+
+
+def collect_llm_bypass_hosts(config: dict) -> list:
+    """从分类器/AI 分析配置提取需要绕过 VPN 的内网 LLM 中转站 IP。"""
+    config = config or {}
+    bases = []
+
+    cl = config.get("classifier") or {}
+    if isinstance(cl, dict):
+        if "llm" not in cl and isinstance(cl.get("classifier"), dict):
+            cl = cl["classifier"]
+        llm = cl.get("llm") if isinstance(cl, dict) else {}
+        if isinstance(llm, dict):
+            bases.append(llm.get("base_url"))
+
+    ai = config.get("ai_analysis") or {}
+    if isinstance(ai, dict):
+        llm = ai.get("llm")
+        if isinstance(llm, dict):
+            bases.append(llm.get("base_url"))
+
+    hosts = []
+    for base in bases:
+        if not base:
+            continue
+        host = urlparse(str(base)).hostname
+        ip = _resolve_private_host(host)
+        if ip and ip not in hosts:
+            hosts.append(ip)
+    return hosts
+
+
+def _powershell(script: str, timeout: int = 15):
+    return subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=timeout,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def _json_first(stdout: str) -> dict:
+    text = (stdout or "").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return {}
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    return data if isinstance(data, dict) else {}
+
+
+def _find_net_route(ip: str) -> dict:
+    """查找到目标 IP 的当前路由（应在 VPN 连接前调用）。"""
+    script = (
+        f"$r = Find-NetRoute -RemoteIPAddress '{ip}' -ErrorAction SilentlyContinue "
+        f"| Where-Object {{ $_.NextHop -and $_.DestinationPrefix }} "
+        f"| Select-Object -First 1 InterfaceIndex,NextHop,DestinationPrefix; "
+        f"if ($r) {{ $r | ConvertTo-Json -Compress }}")
+    try:
+        return _json_first(_powershell(script).stdout)
+    except Exception as e:
+        logger.debug("查询 LLM 直连路由失败: %s", e)
+        return {}
+
+
+def _route_exists(ip: str) -> bool:
+    script = (
+        f"$r = Get-NetRoute -DestinationPrefix '{ip}/32' "
+        f"-ErrorAction SilentlyContinue | Select-Object -First 1; "
+        f"if ($r) {{ 'yes' }}")
+    try:
+        return "yes" in (_powershell(script, timeout=10).stdout or "")
+    except Exception:
+        return False
+
+
+def _add_host_route(ip: str, next_hop: str, if_index: int) -> tuple:
+    script = (
+        f"New-NetRoute -DestinationPrefix '{ip}/32' -NextHop '{next_hop}' "
+        f"-InterfaceIndex {int(if_index)} -RouteMetric 1 "
+        f"-PolicyStore ActiveStore -ErrorAction Stop")
+    try:
+        r = _powershell(script)
+        if r.returncode == 0:
+            return True, ""
+        return False, (r.stderr or r.stdout or "").strip()[:300]
+    except Exception as e:
+        return False, str(e)[:300]
+
+
+def _remove_host_route(ip: str) -> bool:
+    script = (
+        f"Remove-NetRoute -DestinationPrefix '{ip}/32' -Confirm:$false "
+        f"-ErrorAction SilentlyContinue")
+    try:
+        return _powershell(script, timeout=10).returncode == 0
+    except Exception:
+        return False
 
 
 def _resource_root() -> str:
@@ -124,6 +246,10 @@ class VpnClient:
         self.timeout = int(cfg.get("timeout") or 60)
         self.no_dtls = bool(cfg.get("no_dtls"))
         self.auto_trust_cert = bool(cfg.get("auto_trust_cert", True))
+        # 内网 LLM 中转站等需要绕过 VPN 的主机（由调用方从完整配置提取）
+        self.bypass_hosts = list(cfg.get("bypass_hosts") or [])
+        self._bypass_routes = []
+        self._added_bypass_ips = []
         self._proc: Optional[subprocess.Popen] = None
         self._output: list = []
         self._reader: Optional[threading.Thread] = None
@@ -139,6 +265,49 @@ class VpnClient:
     def probe(self) -> bool:
         return is_reachable(self.probe_host, self.probe_port)
 
+    def _prepare_bypass_routes(self):
+        """在 VPN 连接前记录 LLM 中转站经物理网络的下一跳。"""
+        self._bypass_routes = []
+        for host in self.bypass_hosts:
+            ip = _resolve_private_host(host)
+            if not ip:
+                continue
+            info = _find_net_route(ip)
+            next_hop = str(info.get("NextHop") or "").strip()
+            if_index = info.get("InterfaceIndex")
+            if not next_hop or not if_index:
+                logger.info("LLM 中转站 %s 无需 bypass（本地路由已直连）", ip)
+                continue
+            self._bypass_routes.append((ip, next_hop, int(if_index)))
+        if self._bypass_routes:
+            logger.info(
+                "VPN LLM 直连路由候选: %s",
+                ", ".join(f"{ip} via {hop}"
+                          for ip, hop, _ in self._bypass_routes))
+
+    def _add_bypass_routes(self):
+        for ip, next_hop, if_index in self._bypass_routes:
+            if ip in self._added_bypass_ips:
+                continue
+            if _route_exists(ip):
+                logger.info("LLM 直连路由已存在，跳过: %s", ip)
+                continue
+            ok, err = _add_host_route(ip, next_hop, if_index)
+            if ok:
+                self._added_bypass_ips.append(ip)
+                logger.info("[VPN] 已添加 LLM 直连路由: %s via %s (if %s)",
+                            ip, next_hop, if_index)
+            else:
+                logger.warning("[VPN] 添加 LLM 直连路由失败 %s: %s", ip, err)
+
+    def _remove_bypass_routes(self):
+        for ip in list(self._added_bypass_ips):
+            if _remove_host_route(ip):
+                logger.info("[VPN] 已删除 LLM 直连路由: %s", ip)
+            else:
+                logger.warning("[VPN] 删除 LLM 直连路由失败: %s", ip)
+        self._added_bypass_ips = []
+
     # ── 连接 ──────────────────────────────────────────
 
     def connect(self) -> tuple:
@@ -149,6 +318,8 @@ class VpnClient:
             return False, "VPN 配置不完整（服务器/端口）"
         if self.probe_host and self.probe_port and self.probe():
             return True, "目标已可达（无需连接 VPN）"
+        if self.bypass_hosts:
+            self._prepare_bypass_routes()
         logger.info(
             "VPN 连接参数: server=%s:%s user=%s probe=%s:%s timeout=%ss "
             "dtls=%s cert=%s",
@@ -176,6 +347,7 @@ class VpnClient:
                         msg += f"（已记录证书指纹 {pin[:24]}…）"
                     if auto_fallback:
                         msg += "（DTLS 失败，已自动回退 TCP）"
+                    self._add_bypass_routes()
                     return True, msg
                 # 首次未见指纹 → 失败信息里带实际指纹 → 自动信任并重试一次
                 if (attempt == 1 and self.auto_trust_cert
@@ -348,23 +520,24 @@ class VpnClient:
     def disconnect(self) -> tuple:
         proc = self._proc
         self._proc = None
-        if proc is None or proc.poll() is not None:
-            return True, "VPN 未连接"
-        try:
-            proc.terminate()
-            proc.wait(timeout=8)
-        except Exception:
+        had_vpn = proc is not None and proc.poll() is None
+        if had_vpn:
             try:
-                proc.kill()
+                proc.terminate()
+                proc.wait(timeout=8)
             except Exception:
-                pass
-        # 等待网卡/路由清理
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        # 先清理 LLM 直连路由，再等待网卡/路由清理
+        self._remove_bypass_routes()
         for _ in range(10):
             if not self.probe():
                 break
             time.sleep(0.5)
         logger.info("VPN 已断开")
-        return True, "VPN 已断开"
+        return True, "VPN 已断开" if had_vpn else "VPN 未连接"
 
 
 def ensure_vpn(config: dict) -> tuple:

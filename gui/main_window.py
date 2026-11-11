@@ -1604,6 +1604,15 @@ class MainWindow(QMainWindow):
         """将筛选面板的值写回 config dict"""
         # 方案级 VPN 配置随同步配置一起下发（worker 在后台建隧道）
         vpn_cfg = dict(getattr(self, "_vpn_config", {}) or {})
+        # 内网 LLM 中转站可能被 VPN 的 192.168.0.0/16 路由劫持；
+        # 把中转站 IP 交给 VpnClient，在 VPN 连接后加 /32 直连路由
+        try:
+            from src.vpn_client import collect_llm_bypass_hosts
+            bypass_hosts = collect_llm_bypass_hosts(self.config)
+            if bypass_hosts:
+                vpn_cfg["bypass_hosts"] = bypass_hosts
+        except Exception as e:
+            logger.debug("解析 LLM 直连路由失败: %s", e)
         if vpn_cfg.get("enabled") and (
                 vpn_cfg.get("probe_auto")
                 or not (vpn_cfg.get("probe_host")

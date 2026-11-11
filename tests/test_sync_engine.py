@@ -1029,6 +1029,47 @@ class TestAIReviewRetry:
         assert c.last_review_had_failure is False
 
 
+class TestClassifierPipeline:
+    """TF-IDF 优先；LLM 仅在 TF-IDF 未命中时兜底一次"""
+
+    def _make(self):
+        import threading
+        from src.classifier import BugClassifier
+        c = BugClassifier.__new__(BugClassifier)
+        c._cache = {}
+        c._cache_lock = threading.Lock()
+        c._sim_classifier = MagicMock()
+        c._sim_classifier.trained = True
+        c._llm_enabled = True
+        c._api_key = "k"
+        c._llm_classify_single = MagicMock(return_value=None)
+        c._llm_review = MagicMock(return_value="审核类")
+        c._fallback_category = MagicMock(return_value="兜底类")
+        c._cache_key = lambda title, steps, assigned="": (title, steps, assigned)
+        return c
+
+    def test_tfidf_hit_skips_llm(self):
+        c = self._make()
+        c._sim_classifier.classify.return_value = "TFIDF类"
+        assert c.classify("标题", "步骤", "firmware", "张三") == "TFIDF类"
+        c._llm_classify_single.assert_not_called()
+        c._llm_review.assert_not_called()
+
+    def test_llm_used_when_tfidf_miss(self):
+        c = self._make()
+        c._sim_classifier.classify.return_value = ""
+        c._llm_classify_single.return_value = "LLM类"
+        assert c.classify("标题", "步骤", "firmware", "张三") == "LLM类"
+        c._llm_review.assert_not_called()
+
+    def test_no_second_llm_review_when_llm_fails(self):
+        c = self._make()
+        c._sim_classifier.classify.return_value = ""
+        c._llm_classify_single.return_value = None
+        assert c.classify("标题", "步骤", "firmware", "张三") == "兜底类"
+        c._llm_review.assert_not_called()
+
+
 class TestReviewBatchSplit:
     """AI 审核批失败自适应拆半重试"""
 

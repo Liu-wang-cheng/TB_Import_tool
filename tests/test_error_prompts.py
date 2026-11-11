@@ -24,6 +24,32 @@ def test_load_profiles_ex_reports_corruption(tmp_path):
     assert "读取失败" in error
 
 
+def test_fetch_relay_models(monkeypatch):
+    import src.classifier as mod
+
+    class Resp:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {"data": [{"id": "m1"}, {"id": "m2"}, {"id": "m1"}]}
+
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None):
+        calls.append((url, headers or {}, timeout))
+        return Resp()
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+    models = mod.fetch_relay_models(
+        "http://192.168.160.145:8081/v1", "k", timeout=5)
+    assert models == ["m1", "m2"]
+    assert calls[0][0].endswith("/v1/models")
+    assert calls[0][1]["Authorization"] == "Bearer k"
+    assert calls[0][2] == 5
+
+
 def test_dingtalk_errcode_hints():
     from dingtalk.bot import DingTalkBot
     assert "加签" in DingTalkBot._errcode_hint(310000)

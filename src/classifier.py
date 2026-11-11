@@ -41,6 +41,31 @@ def _sanitize_pandas_module():
             del sys.modules['pandas']
 
 
+def fetch_relay_models(base_url: str, api_key: str = "",
+                       timeout: int = 10) -> list:
+    """获取内部 LLM 中转站 `/models` 的可用模型列表。"""
+    base = str(base_url or "").strip().rstrip("/")
+    if not base:
+        raise ValueError("API 地址为空")
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    resp = requests.get(f"{base}/models", headers=headers, timeout=timeout)
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+    data = resp.json()
+    items = data.get("data") or data.get("models") or []
+    models = []
+    for item in items:
+        if isinstance(item, dict):
+            mid = item.get("id") or item.get("name")
+        else:
+            mid = item
+        if mid and str(mid) not in models:
+            models.append(str(mid))
+    return models
+
+
 # ── TF-IDF 相似度分类器（本地学习，无需外部 API）────────────────
 
 class SimilarityClassifier:
@@ -737,7 +762,8 @@ class BugClassifier:
                  rule_fallback_fn: Callable = None) -> str:
         """对单条 Bug 进行分类
 
-        分类流程：TF-IDF 相似度 → LLM 分类 → LLM 审核 → 规则兜底
+        分类流程：TF-IDF 相似度优先 → LLM 分类（兜底）→ 规则兜底。
+        不再追加第二次 LLM 审核，避免 LLM 慢时每条缺陷等待两次超时。
         返回分类名称字符串。永不抛异常，任何失败静默降级。
         """
         cache_key = self._cache_key(bug_title, bug_steps[:200], assigned_to)
@@ -766,16 +792,7 @@ class BugClassifier:
                     self._cache[cache_key] = result
                 return result
 
-        # ── 第三层：LLM 审核 ──
-        if self._llm_enabled and self._api_key:
-            result = self._llm_review(
-                bug_title, bug_steps, bug_type, assigned_to)
-            if result:
-                with self._cache_lock:
-                    self._cache[cache_key] = result
-                return result
-
-        # ── 第四层：兜底 ──
+        # ── 第三层：规则兜底（LLM 已作为上一层的唯一兜底尝试）──
         result = self._fallback_category(bug_type, assigned_to, rule_fallback_fn)
         with self._cache_lock:
             self._cache[cache_key] = result

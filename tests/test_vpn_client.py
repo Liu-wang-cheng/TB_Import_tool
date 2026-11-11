@@ -332,6 +332,59 @@ class TestProbeFailureMessage:
         assert "账号或密码" not in msg
 
 
+class TestLlmBypass:
+    def test_collect_private_llm_host(self):
+        from src.vpn_client import collect_llm_bypass_hosts
+        assert collect_llm_bypass_hosts({
+            "classifier": {"llm": {
+                "base_url": "http://192.168.160.145:8081/v1"}}}
+        ) == ["192.168.160.145"]
+
+    def test_collect_nested_classifier(self):
+        from src.vpn_client import collect_llm_bypass_hosts
+        assert collect_llm_bypass_hosts({
+            "classifier": {"classifier": {"llm": {
+                "base_url": "http://10.1.2.3:8080/v1"}}}}
+        ) == ["10.1.2.3"]
+
+    def test_public_host_ignored(self):
+        from src.vpn_client import collect_llm_bypass_hosts
+        assert collect_llm_bypass_hosts({
+            "classifier": {"llm": {
+                "base_url": "https://api.example.com/v1"}}}
+        ) == []
+
+    def test_prepare_bypass_routes(self, monkeypatch):
+        import src.vpn_client as mod
+        monkeypatch.setattr(mod, "_find_net_route", lambda ip: {
+            "NextHop": "192.168.10.1", "InterfaceIndex": 12,
+            "DestinationPrefix": "0.0.0.0/0"})
+        c = VpnClient({"enabled": True,
+                       "bypass_hosts": ["192.168.160.145"]})
+        c._prepare_bypass_routes()
+        assert c._bypass_routes == [
+            ("192.168.160.145", "192.168.10.1", 12)]
+
+    def test_add_and_remove_routes(self, monkeypatch):
+        import src.vpn_client as mod
+        calls = []
+        monkeypatch.setattr(mod, "_route_exists", lambda ip: False)
+        monkeypatch.setattr(
+            mod, "_add_host_route",
+            lambda ip, nh, idx: calls.append(("add", ip, nh, idx)) or (True, ""))
+        monkeypatch.setattr(
+            mod, "_remove_host_route",
+            lambda ip: calls.append(("del", ip)) or True)
+        c = VpnClient({"enabled": True, "bypass_hosts": []})
+        c._bypass_routes = [("192.168.160.145", "192.168.10.1", 12)]
+        c._add_bypass_routes()
+        c._remove_bypass_routes()
+        assert calls == [
+            ("add", "192.168.160.145", "192.168.10.1", 12),
+            ("del", "192.168.160.145"),
+        ]
+
+
 class TestDisconnect:
     def test_disconnect_terminates_process(self, monkeypatch):
         import src.vpn_client as mod
