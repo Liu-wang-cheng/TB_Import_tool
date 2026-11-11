@@ -1,6 +1,6 @@
 {
   "version": "2.8.25",
-  "sha256": "",
+  "sha256": "796432b40c29eb05a1f6395ea525cd0b2d18485477b834fbedf355dba3752725",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.25/SmartDefectPlatform.zip",
   "release_date": "2026-11-11",
   "release_notes": "v2.8.25 改进：LLM 缺陷分类改为 TF-IDF 优先，LLM 仅在 TF-IDF 未命中时兜底一次，移除第二次 LLM 审核调用，避免 LLM 慢时每条缺陷等待两次 180 秒超时；VPN 连接后自动为内网 LLM 中转站（从 classifier.llm.base_url 提取的私有 IP）添加 /32 直连路由，断开 VPN 时自动删除，修复中转站被 VPN 192.168.0.0/16 路由劫持导致的 LLM 请求超时；分类器配置页“模型名称”改为可编辑下拉框，新增“刷新模型”按钮，通过中转站 /models 获取可用模型。测试 647 个通过（排除需真实服务器的网络集成测试）",
