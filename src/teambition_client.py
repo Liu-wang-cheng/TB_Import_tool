@@ -39,6 +39,9 @@ class TeambitionClient:
         self.api_delay = api_delay
         self.scenariofieldconfig_id = scenariofieldconfig_id
         self.operator_id = operator_id
+        # 权限兜底：任务创建人优先，其次统一兜底操作人（如邢宏普）
+        self.permission_task_creator = ""
+        self.permission_fallback_operator = ""
         self._user_token: Optional[str] = None
         self._app_token: Optional[str] = None
         self._app_token_mode: bool = False
@@ -127,6 +130,7 @@ class TeambitionClient:
 
     def _request(self, method: str, path: str,
                  retry_on_401: bool = True, **kwargs) -> dict:
+        permission_retry = kwargs.pop("_permission_retry", False)
         self._ensure_token()
         url = f"{API_BASE}{path}"
 
@@ -180,7 +184,34 @@ class TeambitionClient:
                     )
                 time.sleep(self.api_delay)
                 return body
-            except TeambitionAPIError:
+            except TeambitionAPIError as e:
+                msg = str(e.message or "")
+                is_permission = (e.code == 403
+                                 or "permission" in msg.lower()
+                                 or "无权限" in msg)
+                if not permission_retry and is_permission:
+                    candidates = []
+                    for cand in (self.permission_task_creator,
+                                 self.permission_fallback_operator):
+                        cand = str(cand or "").strip()
+                        if (cand and cand != str(self.operator_id or "")
+                                and cand not in candidates):
+                            candidates.append(cand)
+                    original = self.operator_id
+                    last = e
+                    for cand in candidates:
+                        logger.warning(
+                            "Teambition 操作无权限，切换操作人 %s 重试: %s",
+                            cand[:8], path)
+                        self.operator_id = cand
+                        try:
+                            return self._request(
+                                method, path, retry_on_401=retry_on_401,
+                                _permission_retry=True, **kwargs)
+                        except TeambitionAPIError as e2:
+                            last = e2
+                    self.operator_id = original
+                    raise last
                 raise
             except requests.exceptions.RequestException as e:
                 last_error = e
@@ -757,6 +788,7 @@ class TeambitionClient:
             sfcId=data.get("sfcId")
                      or data.get("scenariofieldconfigId") or "",
             taskflowId=data.get("taskflowId") or "",
+            creatorId=data.get("creatorId") or "",
             isArchived=bool(data.get("isArchived")),
         )
 

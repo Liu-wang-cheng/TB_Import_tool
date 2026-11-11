@@ -78,6 +78,7 @@ class TeambitionTask:
     defectCategory: str = ""
     project: str = ""
     isArchived: bool = False
+    creatorId: str = ""
 
     def get_base_title(self) -> str:
         title = self.content

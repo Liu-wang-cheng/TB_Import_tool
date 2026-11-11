@@ -344,6 +344,9 @@ class SyncEngine:
         # 构建拼音索引（英文名自动匹配 TB 中文成员）
         self._build_pinyin_member_index()
 
+        # TB 权限兜底操作人（默认邢宏普；无权限时自动切换）
+        self._configure_permission_operator()
+
         # 预解析指派人 → TB 执行人映射（拼音匹配）
         self._preload_assignee_mapping(bugs)
 
@@ -1486,6 +1489,23 @@ class SyncEngine:
                 logger.info("[关闭同步] Bug#%s 模块 '%s' 不匹配 '%s'，跳过",
                             b.id, full.moduleName, self.module_filter)
         return out
+
+    def _configure_permission_operator(self):
+        """配置 TB 权限兜底操作人（默认邢宏普）。"""
+        tb_cfg = self.config.get("teambition", {})
+        name = str(tb_cfg.get("permission_operator_name") or "邢宏普").strip()
+        if not name:
+            return
+        try:
+            uid = self.teambition.search_member(name)
+        except Exception as e:
+            logger.warning("解析 TB 权限兜底操作人失败: %s", e)
+            return
+        if uid:
+            self.teambition.permission_fallback_operator = uid
+            logger.info("TB 权限兜底操作人: %s (%s)", name, uid[:8])
+        else:
+            logger.warning("未找到 TB 权限兜底操作人: %s", name)
 
     def _run_close_sync_phase(self, stats: SyncStats, dry_run: bool,
                                progress_callback=None):
@@ -2819,11 +2839,20 @@ class SyncEngine:
             return 0
 
         existing_filenames = self._get_existing_task_filenames(task_id)
-        uploaded = self._sync_attachments(
-            full_bug, task_id,
-            existing_filenames=existing_filenames,
-            comment_file_ids=comment_file_ids,
-        )
+        # 已存在任务若由其他成员创建，优先用创建人身份更新字段
+        old_creator = getattr(self.teambition, "permission_task_creator", "")
+        creator_id = getattr(existing, "creatorId", "")
+        if not (isinstance(creator_id, str) and len(creator_id) == 24):
+            creator_id = ""
+        self.teambition.permission_task_creator = creator_id
+        try:
+            uploaded = self._sync_attachments(
+                full_bug, task_id,
+                existing_filenames=existing_filenames,
+                comment_file_ids=comment_file_ids,
+            )
+        finally:
+            self.teambition.permission_task_creator = old_creator
         if uploaded:
             logger.info(
                 "[补附件] Bug#%d → TB %s 新增 %d 个附件/评论媒体",
@@ -2947,8 +2976,11 @@ class SyncEngine:
                 logger.warning("评论附件上传失败（已耗尽重试）: file_id=%s", file_id)
 
         # Step 3: 批量更新"日志附件"自定义字段（包含已有 + 新上传）
+        # 只有本次真正上传了新文件才写字段。已存在任务补附件且全部跳过时，
+        # 字段内容本来正确，再写一次既无意义，也可能因操作人不是任务创建人
+        # 被 TB 拒绝（The operation has no permission）。
         attachment_cf_id = self.cf_ids.get("attachment", "")
-        if attachment_cf_id and (uploaded or existing_filenames):
+        if attachment_cf_id and uploaded:
             # 合并已有附件（从 existing_filenames 保留）和新上传的
             values = []
             # 先保留已有附件记录（从任务详情 customfields 中获取）
@@ -2984,8 +3016,9 @@ class SyncEngine:
                     logger.info("日志附件字段已更新: %d 个文件 (新增 %d, 跳过 %d, 总计 %d)",
                                 total, new_count, skipped, total)
                 else:
-                    logger.warning("更新日志附件字段失败（重试后仍失败）: 任务 %s",
-                                   task_id)
+                    logger.warning(
+                        "更新日志附件字段失败（重试后仍失败；若任务由其他成员"
+                        "创建，当前操作人可能无字段权限）: 任务 %s", task_id)
         return uploaded
 
     def _get_existing_attachment_values(self, task_id: str, cf_id: str) -> list:

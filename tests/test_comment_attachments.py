@@ -277,6 +277,22 @@ class TestSyncAttachmentsDedup:
         assert uploaded["100"][1] == "real.jpg"
         assert uploaded["200"][1] == "image_200.png"
 
+    def test_no_field_update_when_nothing_uploaded(self):
+        """已存在附件全部跳过时不要重写日志附件字段（避免无权限报错）"""
+        engine = make_engine()
+        engine.cf_ids = {"attachment": "cf-1"}
+        engine._get_existing_attachment_values = MagicMock(return_value=[])
+        engine._get_existing_task_filenames = MagicMock(
+            return_value={"already.mp4"})
+        bug = self._make_bug()
+        uploaded = engine._sync_attachments(
+            bug, "task-1",
+            existing_filenames={"already.mp4"},
+            comment_file_ids={},
+        )
+        assert uploaded == {}
+        engine.teambition._request.assert_not_called()
+
     def test_returns_uploaded_map(self):
         """_sync_attachments 返回 uploaded map 供评论回填"""
         engine = make_engine()

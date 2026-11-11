@@ -1070,6 +1070,27 @@ class TestClassifierPipeline:
         c._llm_review.assert_not_called()
 
 
+class TestPermissionOperatorConfig:
+    def test_default_permission_operator_is_xinghongpu(self):
+        from src.sync_engine import SyncEngine
+        e = SyncEngine.__new__(SyncEngine)
+        e.config = {"teambition": {}}
+        e.teambition = MagicMock()
+        e.teambition.search_member.return_value = "a" * 24
+        e._configure_permission_operator()
+        e.teambition.search_member.assert_called_with("邢宏普")
+        assert e.teambition.permission_fallback_operator == "a" * 24
+
+    def test_configured_permission_operator(self):
+        from src.sync_engine import SyncEngine
+        e = SyncEngine.__new__(SyncEngine)
+        e.config = {"teambition": {"permission_operator_name": "张三"}}
+        e.teambition = MagicMock()
+        e.teambition.search_member.return_value = "b" * 24
+        e._configure_permission_operator()
+        e.teambition.search_member.assert_called_with("张三")
+
+
 class TestReviewBatchSplit:
     """AI 审核批失败自适应拆半重试"""
 
