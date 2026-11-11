@@ -1,6 +1,6 @@
 {
   "version": "2.8.26",
-  "sha256": "",
+  "sha256": "70fa3d2c32dc6664aefa96091da52728a9dba9a0243903b33be5851c9e602f51",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.26/SmartDefectPlatform.zip",
   "release_date": "2026-11-11",
   "release_notes": "v2.8.26 修复：日志附件字段“The operation has no permission”——已存在任务补附件且没有新上传时不再重写“日志附件”字段（原字段已正确，避免无意义写入）；TB 操作遇到 no permission/403 时自动按“任务创建人 → 邢宏普”切换操作人重试，支持 teambition.permission_operator_name 覆盖兜底操作人；实测同一任务由当前操作人蔡宇杰无权限，切换任务创建人胡继珍后更新成功。测试 653 个通过（排除需真实服务器的网络集成测试）",
