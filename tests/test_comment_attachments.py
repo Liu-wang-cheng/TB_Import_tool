@@ -25,6 +25,58 @@ def make_engine():
     return e
 
 
+class TestBackfillExistingMedia:
+    """已存在任务只补缺失附件/评论媒体，不重复发文字评论"""
+
+    def test_backfills_comment_media(self):
+        engine = make_engine()
+        engine.config = {"sync": {}}
+        engine.sync_attachments = True
+        engine._parse_bug_comments = MagicMock(
+            return_value=([], {"173713": "image"}))
+        engine._get_existing_task_filenames = MagicMock(return_value=set())
+        engine._sync_attachments = MagicMock(
+            return_value={"173713": ("work", "img.png", "url")})
+        engine._submit_bug_comments = MagicMock()
+        bug = ZentaoBug(id=66570, title="t")
+        existing = MagicMock()
+        existing.taskId = "task1"
+
+        n = engine._backfill_existing_task_media(bug, existing)
+
+        assert n == 1
+        engine._sync_attachments.assert_called_once()
+        assert engine._sync_attachments.call_args.kwargs[
+            "comment_file_ids"] == {"173713": "image"}
+        engine._submit_bug_comments.assert_not_called()
+
+    def test_no_media_no_upload(self):
+        engine = make_engine()
+        engine.config = {"sync": {}}
+        engine.sync_attachments = True
+        engine._parse_bug_comments = MagicMock(return_value=([], {}))
+        engine._sync_attachments = MagicMock()
+        bug = ZentaoBug(id=1, title="t", files=[])
+        engine.source.fetch_bug_detail.return_value = bug
+        existing = MagicMock()
+        existing.taskId = "task1"
+
+        assert engine._backfill_existing_task_media(bug, existing) == 0
+        engine._sync_attachments.assert_not_called()
+
+    def test_dry_run_skips(self):
+        engine = make_engine()
+        engine.config = {"sync": {}}
+        engine._sync_attachments = MagicMock()
+        bug = ZentaoBug(id=1, title="t")
+        existing = MagicMock()
+        existing.taskId = "task1"
+
+        assert engine._backfill_existing_task_media(
+            bug, existing, dry_run=True) == 0
+        engine._sync_attachments.assert_not_called()
+
+
 class TestPlaceholderReplacement:
     """_replace_comment_media_with_placeholders"""
 
@@ -35,6 +87,16 @@ class TestPlaceholderReplacement:
         result = engine._replace_comment_media_with_placeholders(html, file_ids)
         assert "__ATTACH_15411__" in result
         assert file_ids == {"15411": "image"}
+
+    def test_fileid_query_image_becomes_placeholder(self):
+        engine = make_engine()
+        file_ids = {}
+        html = ('<p><img onload="setImageSize(this,870)" '
+                'src="http://10.10.3.67:8080/index.php?'
+                'm=file&f=read&t=png&fileID=173713" alt="" /></p>')
+        result = engine._replace_comment_media_with_placeholders(html, file_ids)
+        assert "__ATTACH_173713__" in result
+        assert file_ids == {"173713": "image"}
 
     def test_video_becomes_placeholder(self):
         engine = make_engine()

@@ -149,6 +149,17 @@ build.bat
 
 ## 版本历史
 
+### v2.8.24 (2026-11-11)
+
+- **修复**：禅道评论/重现步骤中的图片使用动态地址 `index.php?m=file&f=read&t=png&fileID=xxx` 时未被识别
+  - 此前只支持 `file-read-xxx`、`file-download-xxx`、`/file/download/xxx`
+  - 现已支持 `fileID=` / `fileId=` / `file_id=`，评论图片可正常下载并上传（如 Bug#66570）
+- **改进**：已存在 TB 任务在去重时自动补齐缺失的附件/评论媒体
+  - 只上传附件与评论图片/视频，**不重复提交文字评论**
+  - 按文件名/file_id 去重，补齐内容写入“日志附件”字段
+  - 可通过 `sync.backfill_existing_attachments: false` 关闭
+- **测试**：新增动态图片地址/已存在任务补附件用例，全量 638 个测试通过（排除需真实服务器的网络集成测试）
+
 ### v2.8.23 (2026-11-10)
 
 - **改进**：禅道“激活”状态组纳入 **delay（延期）** 和 **postponed**，避免延期缺陷被漏导入

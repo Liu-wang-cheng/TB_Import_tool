@@ -223,6 +223,13 @@ class TestExtractInlineImageIds:
             '<img src="/file/download/456"/>')
         assert "456" in ids
 
+    def test_fileid_query_format(self):
+        engine = make_engine()
+        ids = engine._extract_inline_image_ids(
+            '<img src="http://10.10.3.67:8080/index.php?'
+            'm=file&f=read&t=png&fileID=173713"/>')
+        assert ids == ["173713"]
+
     def test_no_img_returns_empty(self):
         engine = make_engine()
         ids = engine._extract_inline_image_ids("no images here")
@@ -860,9 +867,14 @@ class TestExtractFileIdFromSrc:
 
     def test_dynamic_path(self):
         assert SyncEngine._extract_file_id_from_src(
-            "/index.php?m=file&f=download&fileID=300") == "" or \
-            SyncEngine._extract_file_id_from_src(
-                "/file/download/300") == "300"
+            "/index.php?m=file&f=download&fileID=300") == "300"
+        assert SyncEngine._extract_file_id_from_src(
+            "http://10.10.3.67:8080/index.php?m=file&f=read&t=png&fileID=173713"
+        ) == "173713"
+
+    def test_file_download_slash_path(self):
+        assert SyncEngine._extract_file_id_from_src(
+            "/file/download/300") == "300"
 
     def test_empty_src(self):
         assert SyncEngine._extract_file_id_from_src("") == ""

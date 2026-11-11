@@ -992,13 +992,23 @@ class SyncEngine:
                 # 检查是否需要重新激活：禅道 Bug 激活但 TB 任务已关闭
                 if self.reactivate_closed and self._should_reactivate(bug, existing):
                     return self._reactivate_task(bug, existing, dry_run)
+                # 已存在任务补齐缺失的附件/评论媒体（不重复发文字评论）
+                added = 0
+                try:
+                    added = self._backfill_existing_task_media(
+                        bug, existing, dry_run)
+                except Exception as e:
+                    logger.warning("[补附件] Bug#%d 失败: %s", bug.id, e)
                 # 打印双方状态对比
                 tb_status_name = self._get_taskflow_status_name(existing.status)
                 logger.info("[跳过-重复] Bug#%d (禅道=%s, TB=%s) 已存在: %s",
                             bug.id, bug.status, tb_status_name,
                             existing.content)
+                detail = "已存在"
+                if added:
+                    detail += f"（补齐附件 {added} 个）"
                 return SyncResult(bug.id, SyncAction.SKIPPED_DEDUP,
-                                  existing.taskId, "已存在")
+                                  existing.taskId, detail)
 
             # 获取完整详情（试运行跳过备注媒体收集，省 Selenium 开销）
             try:
@@ -2459,6 +2469,10 @@ class SyncEngine:
             ids.append(match.group(1))
         for match in re.finditer(r'/file/download/(\d+)', steps_html):
             ids.append(match.group(1))
+        # 动态查询格式：index.php?m=file&f=read&t=png&fileID=173713
+        for match in re.finditer(
+                r'[?&](?:fileID|fileId|file_id)=(\d+)', steps_html, re.I):
+            ids.append(match.group(1))
         # dict.fromkeys 去重并保持顺序
         return list(dict.fromkeys(ids))
 
@@ -2758,6 +2772,10 @@ class SyncEngine:
         match = re.search(r'file-(?:read|download)[_-](\d+)', src)
         if not match:
             match = re.search(r'/file/download/(\d+)', src)
+        if not match:
+            # 动态查询格式：...&m=file&f=read&t=png&fileID=173713
+            match = re.search(
+                r'[?&](?:fileID|fileId|file_id)=(\d+)', src, re.I)
         return match.group(1) if match else ""
 
     def _upload_comment_media(self, bug_id: int, task_id: str,
@@ -2772,6 +2790,45 @@ class SyncEngine:
         return
 
     # ── 附件同步 ──────────────────────────────────────
+
+    def _backfill_existing_task_media(self, bug: ZentaoBug, existing,
+                                      dry_run: bool = False) -> int:
+        """已存在任务补齐缺失附件/评论媒体，不重复提交文字评论。
+
+        返回本次新上传的附件数量。可用 sync.backfill_existing_attachments
+        (默认 true) 关闭该行为。
+        """
+        if dry_run:
+            return 0
+        if not self.config.get("sync", {}).get(
+                "backfill_existing_attachments", True):
+            return 0
+        task_id = getattr(existing, "taskId", "")
+        if not task_id:
+            return 0
+
+        try:
+            full_bug = self.source.fetch_bug_detail(
+                bug.id, include_media=False)
+        except TypeError:
+            full_bug = self.source.fetch_bug_detail(bug.id)
+        _, comment_file_ids = self._parse_bug_comments(full_bug)
+        files = getattr(full_bug, "files", []) or []
+        if not comment_file_ids and not (
+                getattr(self, "sync_attachments", True) and files):
+            return 0
+
+        existing_filenames = self._get_existing_task_filenames(task_id)
+        uploaded = self._sync_attachments(
+            full_bug, task_id,
+            existing_filenames=existing_filenames,
+            comment_file_ids=comment_file_ids,
+        )
+        if uploaded:
+            logger.info(
+                "[补附件] Bug#%d → TB %s 新增 %d 个附件/评论媒体",
+                bug.id, task_id[:12], len(uploaded))
+        return len(uploaded)
 
     def _sync_attachments(self, bug: ZentaoBug, task_id: str,
                           existing_filenames: set = None,
