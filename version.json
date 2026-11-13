@@ -1,6 +1,6 @@
 {
   "version": "2.8.27",
-  "sha256": "",
+  "sha256": "60ac8fc2c79927eeaf022a80b2b4ac2b620fa6a7728c2e1e1f942b75cbff9588",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.27/SmartDefectPlatform.zip",
   "release_date": "2026-11-13",
   "release_notes": "v2.8.27 改进/修复：AI 审核训练库改为全量审核——首次训练、增量学习、旧失败标记均审核整个学习库（此前首次只抽检每类3条、增量只审新增），失败批次仍定向重试；分类器模型缓存路径固定到程序目录 data/，不再因免 UAC 计划任务的工作目录写入 C:\\Windows\\System32\\data，避免不同启动方式加载不同模型；已把最新 3015 条样本的模型迁移到程序 data。测试 655 个通过（排除需真实服务器的网络集成测试）",
