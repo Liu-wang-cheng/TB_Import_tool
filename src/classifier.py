@@ -83,7 +83,14 @@ class SimilarityClassifier:
         sim_cfg = config.get("similarity", {})
         self._enabled: bool = sim_cfg.get("enabled", True)
         self._threshold: float = sim_cfg.get("threshold", 0.3)
-        self._cache_dir: str = sim_cfg.get("cache_dir", "data")
+        # 缓存目录必须固定到程序目录：计划任务启动时工作目录是 System32，
+        # 相对路径会把模型写到 C:\Windows\System32\data 并导致不同启动方式
+        # 加载不同模型。
+        cache_dir = str(sim_cfg.get("cache_dir") or "").strip()
+        if not cache_dir or not os.path.isabs(cache_dir):
+            from src.utils import get_app_data_dir
+            cache_dir = get_app_data_dir()
+        self._cache_dir: str = cache_dir
         self._samples: List[Tuple[str, str]] = []
         self._vectorizer = None
         self._tfidf_matrix = None

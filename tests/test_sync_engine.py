@@ -948,8 +948,8 @@ class TestAIReviewRetry:
         engine, flag = self._make_engine(tmp_path, monkeypatch)
         open(flag, "w").close()
         calls = []
-        def review():
-            calls.append(1)
+        def review(**kwargs):
+            calls.append(kwargs)
             engine.classifier.last_review_had_failure = False  # 重试成功
         engine.classifier.review_training_data = review
         executed = engine._retry_pending_review()
@@ -996,13 +996,13 @@ class TestAIReviewRetry:
             engine.classifier.last_review_had_failure = False
         engine.classifier.review_training_data = review
         engine._retry_pending_review()
-        assert calls == [((), {})]
+        assert calls == [((), {"max_per_category": 0})]
 
     def test_retry_keeps_flag_on_failure(self, tmp_path, monkeypatch):
         """重试仍失败 → 标记保留，下次同步再试"""
         engine, flag = self._make_engine(tmp_path, monkeypatch)
         open(flag, "w").close()
-        def review():
+        def review(**kwargs):
             engine.classifier.last_review_had_failure = True
         engine.classifier.review_training_data = review
         executed = engine._retry_pending_review()
@@ -1068,6 +1068,22 @@ class TestClassifierPipeline:
         c._llm_classify_single.return_value = None
         assert c.classify("标题", "步骤", "firmware", "张三") == "兜底类"
         c._llm_review.assert_not_called()
+
+
+class TestSimilarityCacheDir:
+    def test_relative_cache_dir_uses_app_data_dir(self, monkeypatch):
+        import src.utils as utils_mod
+        from src.classifier import SimilarityClassifier
+        monkeypatch.setattr(utils_mod, "get_app_data_dir",
+                            lambda: r"D:\app\data")
+        c = SimilarityClassifier({"similarity": {"cache_dir": "data"}})
+        assert c._cache_dir == r"D:\app\data"
+
+    def test_absolute_cache_dir_kept(self, tmp_path):
+        from src.classifier import SimilarityClassifier
+        c = SimilarityClassifier(
+            {"similarity": {"cache_dir": str(tmp_path)}})
+        assert c._cache_dir == str(tmp_path)
 
 
 class TestPermissionOperatorConfig:

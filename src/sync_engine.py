@@ -610,9 +610,10 @@ class SyncEngine:
             logger.info("检测到上次 AI 审核失败标记（无样本明细），"
                         "本次同步先重跑审核流程...")
             self._run_review(
-                lambda: self.classifier.review_training_data(),
+                lambda: self.classifier.review_training_data(
+                    max_per_category=0),
                 progress_callback,
-                msg="AI 审核重试（上次存在失败批次）...")
+                msg="AI 全量审核重试（上次存在失败批次）...")
         return True
 
     def _train_similarity_classifier(self, progress_callback=None):
@@ -679,12 +680,12 @@ class SyncEngine:
                 new_count = self.classifier._sim_classifier.sample_count
                 logger.info("TF-IDF 增量学习完成，模型已更新（共 %d 条样本）",
                              new_count)
-                # AI 审核新增训练数据（只审核新增部分）
+                # AI 全量审核训练库（不再只审核新增部分）
                 self._run_review(
                     lambda: self.classifier.review_training_data(
-                        target_indices=range(old_count, new_count)),
+                        max_per_category=0),
                     progress_callback,
-                    msg="AI 审核新增训练数据...")
+                    msg="AI 全量审核训练数据...")
             else:
                 logger.info("增量学习: 未获取到新样本，保持现有模型")
             return
@@ -714,11 +715,12 @@ class SyncEngine:
                                   f"训练 TF-IDF 模型（{len(samples)} 条样本）...")
             self.classifier.train_similarity(samples, save=True)
             logger.info("TF-IDF 模型训练并保存完成，分类器就绪")
-            # AI 审核训练数据
+            # AI 全量审核训练库
             self._run_review(
-                lambda: self.classifier.review_training_data(),
+                lambda: self.classifier.review_training_data(
+                    max_per_category=0),
                 progress_callback,
-                msg="AI 审核训练数据...")
+                msg="AI 全量审核训练数据...")
         else:
             logger.info("TB 缺陷任务中未找到带分类的样本，"
                          "TF-IDF 不可用，将使用 LLM 和规则兜底分类")
