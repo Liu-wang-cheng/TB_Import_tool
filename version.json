@@ -1,8 +1,8 @@
 {
-  "version": "2.8.27",
+  "version": "2.8.28",
   "sha256": "60ac8fc2c79927eeaf022a80b2b4ac2b620fa6a7728c2e1e1f942b75cbff9588",
-  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.27/SmartDefectPlatform.zip",
+  "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.28/SmartDefectPlatform.zip",
   "release_date": "2026-11-13",
-  "release_notes": "v2.8.27 改进/修复：AI 审核训练库改为全量审核——首次训练、增量学习、旧失败标记均审核整个学习库（此前首次只抽检每类3条、增量只审新增），失败批次仍定向重试；分类器模型缓存路径固定到程序目录 data/，不再因免 UAC 计划任务的工作目录写入 C:\\Windows\\System32\\data，避免不同启动方式加载不同模型；已把最新 3015 条样本的模型迁移到程序 data。测试 655 个通过（排除需真实服务器的网络集成测试）",
+  "release_notes": "v2.8.28 修复：OTA 升级解压/替换新版本时提示文件占用导致升级失败。旧的 _internal 目录改用唯一命名，上一轮残留的 _internal_old 不再阻塞本次替换；重命名、复制和 exe 覆盖均增加重试，失败时完整回滚并提示，不会破坏旧版本；更新前自动结束内置 OpenConnect 子进程并检查是否有其他程序实例；新增单实例启动保护；启动自愈可清理多份 _internal_old 残留和 exe.old 备份；解压临时目录被占用时给出明确处理提示。测试 672 个通过（排除需真实服务器的网络集成测试）",
   "min_version": "1.0"
 }

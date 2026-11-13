@@ -62,6 +62,53 @@ def _validate_update_version(download_url: str, expected: str,
     return ""
 
 
+def _remove_tree_with_retries(path: str, attempts: int = 5,
+                              delay: float = 1.0) -> bool:
+    """删除目录并重试：Windows 上杀毒/资源管理器可能短暂占用文件"""
+    import shutil
+    import time
+    for i in range(attempts):
+        if not os.path.exists(path):
+            return True
+        shutil.rmtree(path, ignore_errors=True)
+        if not os.path.exists(path):
+            return True
+        if i + 1 < attempts:
+            time.sleep(delay)
+    return not os.path.exists(path)
+
+
+def find_other_app_instances() -> list:
+    """返回除当前进程外、同一 exe 的实例 PID（用于更新前避免文件占用）"""
+    if not getattr(sys, "frozen", False):
+        return []
+    import subprocess
+    exe = os.path.abspath(sys.executable)
+    env = dict(os.environ)
+    env["TB_UPDATE_EXE"] = exe
+    script = (
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.ExecutablePath -eq $env:TB_UPDATE_EXE } | "
+        "Select-Object -ExpandProperty ProcessId"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=15, env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as e:
+        logger.debug("检查程序实例失败: %s", e)
+        return []
+    pids = []
+    for token in (out.stdout or "").replace("\r", ",").replace("\n", ",").split(","):
+        token = token.strip()
+        if token.isdigit() and int(token) != os.getpid():
+            pids.append(int(token))
+    return pids
+
+
 def _generate_updater_bat(current_dir: str, new_dir: str, pid: int,
                           extract_dir: str = "") -> str:
     """生成目录模式的更新 bat：等进程退出 → 只更新 _internal/ 和 exe → 重启
@@ -71,140 +118,232 @@ def _generate_updater_bat(current_dir: str, new_dir: str, pid: int,
 
     注意：bat 不嵌入任何绝对/中文路径（UTF-8 写入的文件在 GBK 代码页系统
     会被 cmd 读乱码，导致 rename/robocopy 路径失效），全部用 %~dp0 和
-    动态遍历解析。
-    """
-    exe_name = None
-    for f in os.listdir(current_dir):
-        if f.endswith('.exe'):
-            exe_name = f
-            break
-    if not exe_name:
-        exe_name = "智能缺陷管理平台.exe"
+    动态遍历解析；当前 exe 路径由调用方通过环境变量 TB_UPDATE_EXE 传入。
 
-    cleanup_dir = extract_dir if extract_dir else new_dir
+    旧 _internal 目录用唯一名（_internal_old_<随机数>）：上一轮更新残留的
+    _internal_old 经常被杀毒扫描锁住，若沿用固定名，rename 会因目标已存在
+    或共享冲突失败，表现为“文件占用导致升级失败”。
+    """
     return f"""@echo off
 chcp 65001 >nul 2>&1
 title 正在更新 智能缺陷管理平台
+setlocal EnableExtensions
 cd /d "%~dp0"
+
+set "LOG=%~dp0logs\\update.log"
+if not exist "%~dp0logs" mkdir "%~dp0logs" >nul 2>&1
+call :log "==== 更新开始（旧 PID {pid}） ===="
 
 echo ============================================
 echo   正在更新，请勿关闭此窗口
 echo ============================================
 echo.
 
-REM 等待原进程退出（最多 30 秒）
+REM 等待原进程退出（最多 60 秒）
 set WAITED=0
 :wait_loop
 tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
-if %errorlevel% equ 0 (
-    set /a WAITED+=1
-    if %WAITED% geq 30 (
-        echo [ERROR] 原进程未能退出，更新取消
-        goto :cleanup
-    )
-    timeout /t 1 /nobreak >nul
-    goto wait_loop
+if errorlevel 1 goto :waited
+set /a WAITED+=1
+if %WAITED% geq 60 (
+    echo [ERROR] 原进程未能退出，更新取消
+    call :log "ERROR 原进程 60 秒未退出"
+    timeout /t 15 /nobreak >nul
+    goto :restart_old
 )
+timeout /t 1 /nobreak >nul
+goto :wait_loop
+:waited
 
 echo [OK] 原进程已退出
-timeout /t 2 /nobreak >nul
+call :log "原进程已退出"
+timeout /t 3 /nobreak >nul
 echo.
 
-REM 动态定位新版本 exe 与其所在目录（_update_extracted 内，名称不写死，
-REM 避免中文/绝对路径在非 UTF-8 代码页系统上被 cmd 读乱码）
+REM 结束本程序内置的 OpenConnect 子进程：它从 _internal\\tools\\vpn 运行，
+REM 残留会锁住 _internal 导致无法重命名。仅按本程序目录匹配，不影响
+REM 用户自己安装的其他 VPN 客户端。
+call :kill_bundled_openconnect
+
+REM 定位当前 exe（优先使用调用方传入的完整路径，避免目录里有多个 exe 时选错）
+set "EXE_NAME="
+if not defined TB_UPDATE_EXE goto :exe_from_glob
+for %%f in ("%TB_UPDATE_EXE%") do set "EXE_NAME=%%~nxf"
+goto :exe_ready
+:exe_from_glob
+for %%f in ("%~dp0*.exe") do if not defined EXE_NAME set "EXE_NAME=%%~nxf"
+:exe_ready
+if not defined EXE_NAME (
+    echo [ERROR] 未找到当前程序文件，更新取消
+    call :log "ERROR 未找到当前程序文件"
+    timeout /t 15 /nobreak >nul
+    goto :cleanup
+)
+
+REM 动态定位新版本 exe 与其所在目录（_update_extracted 内，名称不写死）
 set "NEW_EXE="
 for /r "_update_extracted" %%f in (*.exe) do if not defined NEW_EXE set "NEW_EXE=%%f"
 if not defined NEW_EXE (
     echo [ERROR] 未找到新版本程序文件，更新取消
-    pause
+    call :log "ERROR 未找到新版本程序文件"
+    timeout /t 15 /nobreak >nul
     goto :cleanup
 )
 for %%f in ("%NEW_EXE%") do set "NEW_DIR=%%~dpf"
-for %%f in ("%~dp0*.exe") do set "EXE_NAME=%%~nxf"
-if not defined EXE_NAME (
-    echo [ERROR] 未找到当前程序文件，更新取消
-    pause
-    goto :cleanup
-)
 
-REM 清理可能的上次残留（如果上次更新中断留下的 _internal_old）
-if exist "_internal_old" (
-    rmdir /s /q "_internal_old" 2>nul
-)
+REM 旧目录必须用唯一名：固定名 _internal_old 若被上次更新残留占用，
+REM 本次 rename 会直接失败
+set "OLD_DIR=_internal_old_%RANDOM%%RANDOM%"
+for /d %%d in (_internal_old*) do rmdir /s /q "%%d" >nul 2>&1
 
-REM rename 策略：rename 是原子操作，即使文件被锁也能成功
 echo 正在切换程序文件...
-rename "_internal" "_internal_old"
-if %errorlevel% neq 0 (
-    echo [ERROR] 无法重命名 _internal 目录
-    echo 可能原因：权限不足 / _internal 不存在 / 杀毒锁定
-    echo.
-    echo 请尝试：
-    echo   1. 以管理员身份运行
-    echo   2. 暂时禁用杀毒软件
-    pause
-    goto :cleanup
-)
+set /a RENAME_TRY=0
+:rename_try
+rename "_internal" "%OLD_DIR%" >nul 2>&1
+if exist "_internal" goto :rename_retry
+if not exist "%OLD_DIR%" goto :rename_retry
 echo [OK] 旧 _internal 已重命名
+call :log "旧 _internal 已重命名 → %OLD_DIR%"
+goto :copy_internal
 
-REM robocopy 到空目录（无锁，必定成功）
-robocopy "%NEW_DIR%_internal" "_internal" /e /r:3 /w:1 /njh /njs /ndl /nc /ns /np >nul
-if %errorlevel% geq 8 (
-    echo [ERROR] _internal 复制失败，回滚
-    rename "_internal_old" "_internal"
-    pause
-    goto :cleanup
-)
+:rename_retry
+set /a RENAME_TRY+=1
+if %RENAME_TRY% geq 12 goto :rename_failed
+call :log "WARN 第 %RENAME_TRY% 次重命名 _internal 失败，1 秒后重试"
+timeout /t 1 /nobreak >nul
+goto :rename_try
+
+:rename_failed
+echo [ERROR] 无法重命名 _internal 目录（文件被占用）
+echo 可能原因：另一个程序窗口仍在运行 / 杀毒软件正在扫描 / 权限不足
+echo.
+echo 请关闭所有本程序窗口和杀毒软件后重新更新；
+echo 也可以手动下载发布包解压覆盖安装。
+call :log "ERROR 重命名 _internal 失败（重试 12 次）"
+timeout /t 20 /nobreak >nul
+goto :restart_old
+
+:copy_internal
+robocopy "%NEW_DIR%_internal" "_internal" /e /r:5 /w:2 /njh /njs /ndl /nc /ns /np >nul
+if errorlevel 8 goto :copy_internal_failed
 echo [OK] 新 _internal 已就位
+call :log "新 _internal 已复制"
+goto :copy_exe
 
-REM 更新 exe（重命名 + 复制）
-copy /y "%NEW_DIR%%EXE_NAME%" "%EXE_NAME%" >nul
-if %errorlevel% neq 0 (
-    echo [ERROR] exe 复制失败（新 _internal 已就位，可手动覆盖 exe）
-    pause
-    goto :cleanup
-)
+:copy_internal_failed
+echo [ERROR] 新程序文件复制失败，正在回滚旧版本...
+call :log "ERROR 复制新 _internal 失败，回滚"
+goto :rollback
+
+REM 覆盖 exe：原进程已退出且无其他实例，重试覆盖即可
+:copy_exe
+set /a EXE_TRY=0
+:copy_exe_try
+copy /y "%NEW_EXE%" "%EXE_NAME%" >nul 2>&1
+if not errorlevel 1 goto :exe_ok
+set /a EXE_TRY+=1
+if %EXE_TRY% geq 8 goto :exe_failed
+timeout /t 1 /nobreak >nul
+goto :copy_exe_try
+:exe_ok
 echo [OK] exe 已更新
+call :log "exe 已更新"
 echo.
 
 REM 验证版本号
 findstr /r "^[0-9]" "_internal\\VERSION" >nul 2>&1
-if %errorlevel% equ 0 (
-    echo [OK] 更新完成
-) else (
+if errorlevel 1 (
     echo [WARN] VERSION 文件异常，但更新已执行
+    call :log "WARN VERSION 文件异常"
+) else (
+    echo [OK] 更新完成
+    call :log "更新完成"
 )
 echo.
 
 REM 启动新版本（优先走免 UAC 计划任务，存在且可运行时不再弹 UAC）
 echo 正在启动新版本...
 schtasks /query /tn "SmartDefectPlatform_Elevated" >nul 2>&1
-if %errorlevel% neq 0 goto :plain_start
+if errorlevel 1 goto :plain_start
 schtasks /run /tn "SmartDefectPlatform_Elevated" >nul 2>&1
-if %errorlevel% neq 0 goto :plain_start
+if errorlevel 1 goto :plain_start
 goto :started
 :plain_start
 start "" "%EXE_NAME%"
 :started
 
-REM 等待新版本启动，然后清理旧 _internal_old（多次重试，杀毒扫描可能锁定）
+REM 等待新版本启动，然后清理旧目录（多次重试，杀毒扫描可能锁定）
 timeout /t 3 /nobreak >nul
 set OLD_RETRY=0
 :old_cleanup_loop
-if not exist "_internal_old" goto :cleanup
-rmdir /s /q "_internal_old" 2>nul
-if exist "_internal_old" (
-    set /a OLD_RETRY+=1
-    if %OLD_RETRY% lss 5 (
-        timeout /t 3 /nobreak >nul
-        goto old_cleanup_loop
-    )
-    echo [WARN] _internal_old 残留（杀毒锁定？），将由新版本 GUI 启动时清理
+if not exist "%OLD_DIR%" goto :cleanup
+rmdir /s /q "%OLD_DIR%" >nul 2>&1
+if not exist "%OLD_DIR%" goto :cleanup
+set /a OLD_RETRY+=1
+if %OLD_RETRY% lss 10 (
+    timeout /t 2 /nobreak >nul
+    goto :old_cleanup_loop
 )
+echo [WARN] 旧版本文件残留（杀毒锁定？），新版本启动时会自动清理
+call :log "WARN 旧 _internal 残留"
+goto :cleanup
+
+:exe_failed
+echo [ERROR] exe 复制失败，正在回滚旧版本...
+call :log "ERROR 复制 exe 失败，回滚"
+goto :rollback
+
+:rollback
+set /a RB_TRY=0
+:rollback_remove
+rmdir /s /q "_internal" >nul 2>&1
+if not exist "_internal" goto :rollback_restore
+set /a RB_TRY+=1
+if %RB_TRY% geq 10 goto :rollback_stuck
+timeout /t 1 /nobreak >nul
+goto :rollback_remove
+:rollback_restore
+rename "%OLD_DIR%" "_internal" >nul 2>&1
+if exist "_internal" (
+    echo [OK] 已回滚到旧版本
+    call :log "已回滚到旧版本"
+) else (
+    echo [ERROR] 回滚未完成，请重启电脑后重新打开程序（会自动修复）
+    call :log "ERROR 回滚失败，需重启后自动修复"
+)
+goto :restart_old
+
+:rollback_stuck
+echo [ERROR] 被占用的新文件无法删除，回滚未完成
+echo 请重启电脑后重新打开程序（启动时会自动修复）
+call :log "ERROR 回滚时无法删除 _internal，需重启后自动修复"
+goto :cleanup
+
+:restart_old
+echo.
+echo 正在启动现有版本...
+schtasks /query /tn "SmartDefectPlatform_Elevated" >nul 2>&1
+if errorlevel 1 goto :plain_start_old
+schtasks /run /tn "SmartDefectPlatform_Elevated" >nul 2>&1
+if errorlevel 1 goto :plain_start_old
+goto :cleanup
+:plain_start_old
+if exist "%EXE_NAME%" start "" "%EXE_NAME%"
+goto :cleanup
+
+:kill_bundled_openconnect
+set "TB_APP_DIR=%~dp0"
+powershell -NoProfile -NonInteractive -Command "$n=0; Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'openconnect.exe' -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($env:TB_APP_DIR, [System.StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{ $n++; Stop-Process -Id $_.ProcessId -Force }}; if ($n -gt 0) {{ exit 0 }}" >nul 2>&1
+timeout /t 1 /nobreak >nul
+exit /b 0
+
+:log
+echo [%date% %time%] %~1>>"%LOG%"
+exit /b 0
 
 :cleanup
-if exist "_update_extracted" rmdir /s /q "_update_extracted"
-if exist "_update_download.zip" del /f /q "_update_download.zip"
+if exist "_update_extracted" rmdir /s /q "_update_extracted" >nul 2>&1
+if exist "_update_download.zip" del /f /q "_update_download.zip" >nul 2>&1
 (goto) 2>nul & del /f /q "%~f0"
 """
 
@@ -833,7 +972,13 @@ class UpdateDownloadWorker(QThread):
                 self.progress.emit(0, 0, "正在解压更新包...")
                 extract_dir = os.path.join(exe_dir, "_update_extracted")
                 if os.path.isdir(extract_dir):
-                    shutil.rmtree(extract_dir)
+                    if not _remove_tree_with_retries(extract_dir):
+                        self.error.emit(
+                            "上次更新的临时目录无法删除（文件被占用）。\n\n"
+                            "常见原因：杀毒软件正在扫描更新文件，或资源管理器"
+                            "正在预览该目录。\n请稍后重试；若仍失败，请重启电脑"
+                            "后再更新，或手动下载发布包解压覆盖。", "")
+                        return
                 try:
                     with zipfile.ZipFile(dest_path, 'r') as zf:
                         zf.extractall(extract_dir)
@@ -843,6 +988,15 @@ class UpdateDownloadWorker(QThread):
                     self.error.emit(
                         "更新包损坏或下载不完整（不是有效的 zip 文件）。\n"
                         "请重试下载，或手动下载发布包解压覆盖。", "")
+                    return
+                except PermissionError as e:
+                    _remove_tree_with_retries(extract_dir, attempts=2)
+                    if os.path.exists(dest_path):
+                        os.remove(dest_path)
+                    self.error.emit(
+                        f"解压更新包失败：文件被占用（{e}）。\n\n"
+                        f"请暂时关闭杀毒软件后重试，或重启电脑后再更新；"
+                        f"也可以手动下载发布包解压覆盖。", "")
                     return
 
                 # 找到解压后的 exe（可能在子目录中）

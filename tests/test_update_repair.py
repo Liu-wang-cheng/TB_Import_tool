@@ -44,6 +44,33 @@ class TestRepairRollback:
         _mkdir(os.path.join(app_dir, "_internal"))
         assert gui_main._repair_update_state() is False
 
+    def test_rollback_unique_old_dir(self, app_dir):
+        """新脚本的 _internal_old_<随机数> 残留同样能回滚"""
+        _mkdir(os.path.join(app_dir, "_internal_old_123456"))
+        assert gui_main._repair_update_state() is False
+        assert os.path.isdir(os.path.join(app_dir, "_internal"))
+        assert not os.path.exists(
+            os.path.join(app_dir, "_internal_old_123456"))
+
+    def test_cleanup_multiple_old_dirs(self, app_dir):
+        """多轮更新失败可能留下多个旧目录，全部清理"""
+        _mkdir(os.path.join(app_dir, "_internal"))
+        _mkdir(os.path.join(app_dir, "_internal_old"))
+        _mkdir(os.path.join(app_dir, "_internal_old_111222"))
+        assert gui_main._repair_update_state() is False
+        assert os.path.isdir(os.path.join(app_dir, "_internal"))
+        assert not os.path.exists(os.path.join(app_dir, "_internal_old"))
+        assert not os.path.exists(
+            os.path.join(app_dir, "_internal_old_111222"))
+
+    def test_cleanup_exe_backup(self, app_dir):
+        """旧更新流程可能留下 exe.old 备份"""
+        _mkdir(os.path.join(app_dir, "_internal"))
+        backup = os.path.join(app_dir, "智能缺陷管理平台.exe.old")
+        open(backup, "w").close()
+        assert gui_main._repair_update_state() is False
+        assert not os.path.exists(backup)
+
 
 class TestRepairRetry:
     def test_retry_when_user_confirms(self, app_dir, monkeypatch):

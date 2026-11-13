@@ -196,7 +196,9 @@ def _restart_to_update() -> bool:
             f.write(bat_content)
         import subprocess
         subprocess.Popen(["cmd", "/c", bat_path],
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                         env={**os.environ,
+                              "TB_UPDATE_EXE": os.path.abspath(sys.executable)})
         logging.info("已重新生成更新脚本，正在退出以继续更新")
         return True
     except Exception as e:
@@ -255,14 +257,28 @@ def _extract_version(extract_dir: str) -> str:
     return ""
 
 
+def _old_internal_dirs(app_dir: str) -> list:
+    """更新残留的旧程序目录（新脚本用唯一名 _internal_old_<随机数>）"""
+    try:
+        names = sorted(os.listdir(app_dir))
+    except OSError:
+        return []
+    result = []
+    for name in names:
+        path = os.path.join(app_dir, name)
+        if name.startswith("_internal_old") and os.path.isdir(path):
+            result.append(path)
+    return result
+
+
 def _repair_update_state() -> bool:
     """更新自愈：启动时处理上次更新中断的状态。
 
     返回 True 表示已进入"继续更新"流程（调用方应退出，不再启动 GUI）。
 
     优先级：
-    1. _internal 缺失 + _internal_old 存在 → 自动回滚（rename 恢复）
-    2. _internal 与 _internal_old 都存在 → 新 _internal 已就位，清理 _internal_old
+    1. _internal 缺失 + _internal_old* 存在 → 自动回滚（rename 恢复）
+    2. _internal 与 _internal_old* 都存在 → 新 _internal 已就位，清理旧目录
     3. _update_replace.bat 残留时：
        - 解压目录版本 高于 当前运行版本 → 询问用户是否继续更新
        - 版本一致（更新已完成，bat 尚未自删/被锁定）→ 静默清理，不弹窗
@@ -271,21 +287,44 @@ def _repair_update_state() -> bool:
     """
     app_dir = _get_app_dir()
     internal = os.path.join(app_dir, "_internal")
-    internal_old = os.path.join(app_dir, "_internal_old")
+    old_dirs = _old_internal_dirs(app_dir)
     bat_path = os.path.join(app_dir, "_update_replace.bat")
     extract_dir = os.path.join(app_dir, "_update_extracted")
 
-    # 1. 回滚：_internal 缺失但 _internal_old 在（更新在 rename 后中断）
-    if os.path.isdir(internal_old) and not os.path.isdir(internal):
+    # 1. 回滚：_internal 缺失但旧目录在（更新在 rename 后中断）
+    if old_dirs and not os.path.isdir(internal):
         try:
-            os.rename(internal_old, internal)
-            logging.warning("检测到上次更新中断，已自动回滚 _internal_old → _internal")
+            os.rename(old_dirs[0], internal)
+            logging.warning(
+                "检测到上次更新中断，已自动回滚 %s → _internal",
+                os.path.basename(old_dirs[0]))
+            old_dirs = old_dirs[1:]
         except OSError as e:
             logging.error("自动回滚 _internal 失败: %s", e)
-    # 2. 新 _internal 已就位 → 清理旧 _internal_old（杀毒锁定则留待下次）
-    elif os.path.isdir(internal_old) and os.path.isdir(internal):
-        shutil.rmtree(internal_old, ignore_errors=True)
-        logging.info("已清理旧 _internal_old")
+    # 2. 新 _internal 已就位 → 清理旧目录（杀毒锁定则留待下次）
+    if os.path.isdir(internal):
+        removed = 0
+        for old in old_dirs:
+            shutil.rmtree(old, ignore_errors=True)
+            if os.path.isdir(old):
+                logging.warning("旧版本目录仍被占用，留待下次清理: %s",
+                                os.path.basename(old))
+            else:
+                removed += 1
+        if removed:
+            logging.info("已清理旧 _internal_old（%d 个）", removed)
+
+    # 清理 exe 备份残留（旧更新流程可能留下）
+    try:
+        for name in os.listdir(app_dir):
+            if name.lower().endswith(".exe.old"):
+                try:
+                    os.remove(os.path.join(app_dir, name))
+                    logging.info("已清理 exe 备份残留: %s", name)
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
     # 3. bat 残留：仅在解压目录版本高于当前版本时询问继续更新
     if os.path.exists(bat_path):
@@ -388,10 +427,57 @@ def _ensure_elevated_launcher() -> bool:
         return False
 
 
+_instance_mutex = None
+
+
+def _acquire_single_instance() -> bool:
+    """同一程序目录只允许一个实例：更新时避免其他实例锁住 exe/_internal"""
+    global _instance_mutex
+    if not _is_frozen():
+        return True
+    try:
+        import ctypes
+        import hashlib
+        key = hashlib.md5(
+            _get_app_dir().lower().encode("utf-8")).hexdigest()[:10]
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        handle = kernel32.CreateMutexW(
+            None, False, f"SmartDefectPlatform_{key}")
+        if not handle:
+            return True
+        # ERROR_ALREADY_EXISTS：另一个实例已创建同名互斥体
+        if kernel32.GetLastError() == 183:
+            kernel32.CloseHandle(handle)
+            return False
+        _instance_mutex = handle
+        return True
+    except Exception as e:
+        logging.warning("单实例检查失败（继续启动）: %s", e)
+        return True
+
+
+def _show_already_running():
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "智能缺陷管理平台已经有一个窗口在运行。\n\n"
+            "请先关闭现有窗口再启动，避免升级时程序文件被占用。",
+            "程序已在运行", 0x40)
+    except Exception:
+        pass
+
+
 def main():
     # 先装日志，确保后续异常 / 启动信息都能落盘
     _setup_file_logging()
     _install_excepthook()
+
+    if not _acquire_single_instance():
+        logging.warning("检测到已有实例在运行，退出本次启动")
+        _show_already_running()
+        return
 
     from gui.qt_compat import QApplication, exec_app
     from gui.main_window import MainWindow

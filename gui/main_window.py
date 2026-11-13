@@ -25,6 +25,7 @@ from gui.log_handler import QtLogHandler
 from gui.workers import (
     AuthTestWorker, CollabAutoSyncWorker, ListBugsWorker, ParseBugWorker,
     SyncWorker, UpdateCheckWorker, UpdateDownloadWorker,
+    find_other_app_instances,
 )
 from gui.ui_profiles import (
     load_profiles, load_profiles_ex, save_profile, resolve_profiles,
@@ -3158,12 +3159,49 @@ class MainWindow(QMainWindow):
                 f"请重新检查更新并下载，或手动解压发布包覆盖安装。")
             return
 
+        # 更新要替换 exe/_internal：任务运行中或存在其他窗口都会造成文件占用
+        if getattr(self, "_worker", None) is not None and self._worker.isRunning():
+            QMessageBox.warning(
+                self, "更新暂缓",
+                "有任务正在执行（同步/列出缺陷/附件上传等）。\n"
+                "请等待任务完成后再点击更新，否则程序文件被占用会导致更新失败。")
+            return
+        if getattr(self, "_scheduled_chain", None):
+            QMessageBox.warning(
+                self, "更新暂缓",
+                "定时导入任务正在执行，请等待完成后再更新。")
+            return
+        try:
+            others = find_other_app_instances()
+        except Exception:
+            others = []
+        if others:
+            QMessageBox.warning(
+                self, "请先关闭其他窗口",
+                "检测到本程序还有 {0} 个窗口/实例正在运行（PID: {1}）。\n\n"
+                "更新需要替换程序文件，请先关闭这些窗口后重新点击更新，"
+                "否则会因文件占用导致升级失败。".format(
+                    len(others), "、".join(str(p) for p in others)))
+            return
+        try:
+            from src.vpn_client import terminate_active_connections
+            exe_dir = _os.path.dirname(_os.path.abspath(sys.executable))
+            killed = terminate_active_connections(exe_dir)
+            if killed:
+                logger.info("更新前已结束 %d 个 OpenConnect 进程", killed)
+                import time
+                time.sleep(1.0)
+        except Exception as e:
+            logger.warning("更新前清理 VPN 子进程失败（继续尝试更新）: %s", e)
+
         try:
             subprocess.Popen(
                 ['cmd', '/c', bat_path],
                 creationflags=(subprocess.CREATE_NEW_CONSOLE
                                | subprocess.CREATE_NEW_PROCESS_GROUP),
                 cwd=os.path.dirname(bat_path),
+                env={**_os.environ,
+                     "TB_UPDATE_EXE": _os.path.abspath(sys.executable)},
             )
         except Exception as e:
             logger.exception("启动更新脚本失败")

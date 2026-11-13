@@ -7,8 +7,19 @@ import pytest
 
 from src.vpn_client import (
     VpnClient, find_openconnect, is_reachable, parse_certificate_pin,
-    parse_host_port,
+    parse_host_port, terminate_active_connections,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_active_procs():
+    """全局进程注册表要在用例间清理，避免假进程影响 terminate 测试"""
+    import src.vpn_client as mod
+    with mod._ACTIVE_LOCK:
+        mod._ACTIVE_PROCS.clear()
+    yield
+    with mod._ACTIVE_LOCK:
+        mod._ACTIVE_PROCS.clear()
 
 
 class TestParsers:
@@ -396,6 +407,35 @@ class TestDisconnect:
         assert ok is True
         assert proc.terminated is True
         assert client._proc is None
+
+
+class TestTerminateActiveConnections:
+    """更新前必须结束残留 openconnect，否则 _internal 无法替换"""
+
+    def test_kills_registered_running_procs(self, monkeypatch):
+        import src.vpn_client as mod
+        monkeypatch.setattr(mod, "_kill_bundled_openconnect", lambda d: 0)
+        p1 = _FakeProc("oc.exe", ["x"])
+        p2 = _FakeProc("oc.exe", ["x"])
+        p2._alive = False  # 已退出，不应重复计数
+        mod._register_proc(p1)
+        mod._register_proc(p2)
+        assert terminate_active_connections("") == 1
+        assert p1._alive is False
+        # 注册表已清空
+        with mod._ACTIVE_LOCK:
+            assert mod._ACTIVE_PROCS == set()
+
+    def test_registry_cleared_by_disconnect(self, monkeypatch):
+        import src.vpn_client as mod
+        monkeypatch.setattr(mod, "is_reachable", lambda *a, **k: False)
+        client = _client()
+        proc = _FakeProc("oc.exe", ["x"], exit_code=0)
+        client._proc = proc
+        mod._register_proc(proc)
+        client.disconnect()
+        with mod._ACTIVE_LOCK:
+            assert proc not in mod._ACTIVE_PROCS
 
 
 class TestProbeTargetParsing:

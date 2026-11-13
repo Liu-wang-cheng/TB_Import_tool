@@ -39,6 +39,70 @@ _PIN_RE = re.compile(r"match server's certificate:\s*(pin-sha256:[A-Za-z0-9+/=]+
 # 不会输出实际指纹；先给一个必不匹配的指纹，让它打印真实指纹后再重试
 _DUMMY_PIN = "pin-sha256:" + "A" * 43 + "="
 
+# 本进程启动的 openconnect 子进程（更新前需要确保它们不再锁住
+# _internal/tools/vpn 下的文件）
+_ACTIVE_PROCS = set()
+_ACTIVE_LOCK = threading.Lock()
+
+
+def _register_proc(proc):
+    with _ACTIVE_LOCK:
+        _ACTIVE_PROCS.add(proc)
+
+
+def _unregister_proc(proc):
+    with _ACTIVE_LOCK:
+        _ACTIVE_PROCS.discard(proc)
+
+
+def terminate_active_connections(app_dir: str = "") -> int:
+    """结束本程序启动的 OpenConnect 进程，返回结束数量。
+
+    用于更新替换 _internal 前释放文件占用；同时清理此前崩溃残留的
+    内置 openconnect（只按本程序目录匹配，不会误杀用户自己的 VPN 进程）。
+    """
+    killed = 0
+    with _ACTIVE_LOCK:
+        procs = list(_ACTIVE_PROCS)
+        _ACTIVE_PROCS.clear()
+    for proc in procs:
+        try:
+            if proc.poll() is None:
+                proc.kill()
+                killed += 1
+        except Exception:
+            pass
+    if app_dir:
+        killed += _kill_bundled_openconnect(app_dir)
+    return killed
+
+
+def _kill_bundled_openconnect(app_dir: str) -> int:
+    app_dir = os.path.abspath(app_dir).rstrip("\\/") + os.sep
+    env = dict(os.environ)
+    env["TB_APP_DIR"] = app_dir
+    script = (
+        "$n=0; "
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -eq 'openconnect.exe' -and "
+        "$_.ExecutablePath -and "
+        "$_.ExecutablePath.StartsWith($env:TB_APP_DIR, "
+        "[System.StringComparison]::OrdinalIgnoreCase) } | "
+        "ForEach-Object { $n++; Stop-Process -Id $_.ProcessId -Force }; "
+        "Write-Output $n"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=15, env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return max(int((result.stdout or "0").strip() or 0), 0)
+    except Exception as e:
+        logger.debug("清理内置 OpenConnect 进程失败: %s", e)
+        return 0
+
 
 def _resolve_private_host(host: str) -> str:
     """把主机名/IP 解析为私有 IPv4；公网/本地回环返回空串。"""
@@ -414,6 +478,7 @@ class VpnClient:
         except OSError as e:
             return False, f"启动 OpenConnect 失败: {e}", None
         self._proc = proc
+        _register_proc(proc)
         try:
             proc.stdin.write((self.password + "\n").encode("utf-8"))
             proc.stdin.flush()
@@ -520,6 +585,8 @@ class VpnClient:
     def disconnect(self) -> tuple:
         proc = self._proc
         self._proc = None
+        if proc is not None:
+            _unregister_proc(proc)
         had_vpn = proc is not None and proc.poll() is None
         if had_vpn:
             try:
