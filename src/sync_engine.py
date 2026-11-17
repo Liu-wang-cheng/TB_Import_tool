@@ -22,6 +22,10 @@ from src.utils import apply_module_filter, resolve_assigned_to
 
 logger = logging.getLogger(__name__)
 
+# 旧版全量审核中断可能遗留上千条失败样本；超过该数量视为历史产物，
+# 不再自动重审（后续自动审核只覆盖新增样本）
+_MAX_REVIEW_RETRY_ITEMS = 300
+
 
 def _is_uuid(s) -> bool:
     """判断是否为 TB 任务 UUID（24 位 hex 字符串）"""
@@ -591,13 +595,26 @@ class SyncEngine:
     def _retry_pending_review(self, progress_callback=None) -> bool:
         """检测到上次审核失败标记时，重试审核。
 
-        标记含失败样本明细 → 只重审这些样本；否则（旧格式）全量重审。
+        标记含失败样本明细 → 只重审这些样本；否则（旧格式）抽检重审，
+        避免全量训练数据过大导致审核长时间占用。
         重试成功 → 清除标记；重试仍失败 → 保留剩余失败样本（下次再试）。
         返回是否执行了重试。
         """
         if not os.path.exists(self._review_retry_flag_path()):
             return False
         failed_items = self._read_failed_review_items()
+        if len(failed_items) > _MAX_REVIEW_RETRY_ITEMS:
+            logger.warning(
+                "上次审核遗留的失败样本过多（%d 条，超过 %d 条），"
+                "判定为旧版全量审核中断产物，本次跳过重试并清除标记；"
+                "这些样本仍保留在训练库中，后续自动审核只覆盖新增样本",
+                len(failed_items), _MAX_REVIEW_RETRY_ITEMS)
+            try:
+                os.remove(self._review_retry_flag_path())
+                logger.info("已清除超大的 AI 审核重试标记")
+            except OSError as e:
+                logger.warning("清除 AI 审核重试标记失败: %s", e)
+            return False
         if failed_items:
             logger.info("检测到上次 AI 审核失败标记，本次同步重试 %d 条失败样本...",
                         len(failed_items))
@@ -608,12 +625,11 @@ class SyncEngine:
                 msg=f"AI 审核重试（上次失败 {len(failed_items)} 条）...")
         else:
             logger.info("检测到上次 AI 审核失败标记（无样本明细），"
-                        "本次同步先重跑审核流程...")
+                        "本次同步先重跑抽检审核...")
             self._run_review(
-                lambda: self.classifier.review_training_data(
-                    max_per_category=0),
+                lambda: self.classifier.review_training_data(),
                 progress_callback,
-                msg="AI 全量审核重试（上次存在失败批次）...")
+                msg="AI 审核重试（抽检，上次存在失败批次）...")
         return True
 
     def _train_similarity_classifier(self, progress_callback=None):
@@ -680,12 +696,14 @@ class SyncEngine:
                 new_count = self.classifier._sim_classifier.sample_count
                 logger.info("TF-IDF 增量学习完成，模型已更新（共 %d 条样本）",
                              new_count)
-                # AI 全量审核训练库（不再只审核新增部分）
-                self._run_review(
-                    lambda: self.classifier.review_training_data(
-                        max_per_category=0),
-                    progress_callback,
-                    msg="AI 全量审核训练数据...")
+                # 自动触发的审核只审本次新增样本（全量数据太大，耗时且易超时）
+                new_indices = range(old_count, new_count)
+                if new_count > old_count:
+                    self._run_review(
+                        lambda: self.classifier.review_training_data(
+                            target_indices=new_indices),
+                        progress_callback,
+                        msg=f"AI 审核新增训练数据（{new_count - old_count} 条）...")
             else:
                 logger.info("增量学习: 未获取到新样本，保持现有模型")
             return
@@ -715,12 +733,11 @@ class SyncEngine:
                                   f"训练 TF-IDF 模型（{len(samples)} 条样本）...")
             self.classifier.train_similarity(samples, save=True)
             logger.info("TF-IDF 模型训练并保存完成，分类器就绪")
-            # AI 全量审核训练库
+            # 首次训练数据量大：按分类抽检审核（每类默认最多 3 条）
             self._run_review(
-                lambda: self.classifier.review_training_data(
-                    max_per_category=0),
+                lambda: self.classifier.review_training_data(),
                 progress_callback,
-                msg="AI 全量审核训练数据...")
+                msg="AI 抽检审核训练数据...")
         else:
             logger.info("TB 缺陷任务中未找到带分类的样本，"
                          "TF-IDF 不可用，将使用 LLM 和规则兜底分类")

@@ -1061,7 +1061,9 @@ class ZentaoClient:
             self._bug_raw_cache[bug_id] = bug_data
         return bug_data
 
-    def fetch_bug_detail(self, bug_id: int) -> ZentaoBug:
+    def fetch_bug_detail(self, bug_id: int,
+                         include_media: bool = True) -> ZentaoBug:
+        # include_media 仅为兼容统一接口，禅道详情 API 不返回/下载媒体
         bug_data = self._get_bug_raw(bug_id)
         return self._parse_bug(bug_data or {})
 

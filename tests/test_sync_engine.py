@@ -986,8 +986,8 @@ class TestAIReviewRetry:
         assert calls == [{"target_items": [("标题A", "A类"), ("标题B", "B类")]}]
         assert not os.path.exists(flag)
 
-    def test_retry_legacy_empty_flag_full_review(self, tmp_path, monkeypatch):
-        """旧格式空标记 → 回退全量重审（兼容 v2.8.6 之前的标记文件）"""
+    def test_retry_legacy_empty_flag_sampled_review(self, tmp_path, monkeypatch):
+        """旧格式空标记 → 抽检重审，不审核全量（全量数据太大）"""
         engine, flag = self._make_engine(tmp_path, monkeypatch)
         open(flag, "w").close()
         calls = []
@@ -996,7 +996,19 @@ class TestAIReviewRetry:
             engine.classifier.last_review_had_failure = False
         engine.classifier.review_training_data = review
         engine._retry_pending_review()
-        assert calls == [((), {"max_per_category": 0})]
+        assert calls == [((), {})]
+
+    def test_oversized_legacy_flag_skipped(self, tmp_path, monkeypatch):
+        """旧全量审核遗留上千条失败样本 → 跳过重试并清标记（避免再次长时间审核）"""
+        import json
+        engine, flag = self._make_engine(tmp_path, monkeypatch)
+        items = [[f"标题{i}", "A类"] for i in range(301)]
+        with open(flag, "w", encoding="utf-8") as f:
+            json.dump({"failed_items": items}, f)
+        engine.classifier.review_training_data = MagicMock()
+        assert engine._retry_pending_review() is False
+        engine.classifier.review_training_data.assert_not_called()
+        assert not os.path.exists(flag)
 
     def test_retry_keeps_flag_on_failure(self, tmp_path, monkeypatch):
         """重试仍失败 → 标记保留，下次同步再试"""
@@ -1027,6 +1039,56 @@ class TestAIReviewRetry:
         c.last_review_had_failure = True  # 遗留 True
         c.review_training_data()
         assert c.last_review_had_failure is False
+
+
+class TestTrainingReviewScope:
+    """自动触发的审核只覆盖新增样本（全量训练数据太大）"""
+
+    def _make_engine(self, tmp_path, monkeypatch, old_count=100,
+                     added=2):
+        from unittest.mock import MagicMock
+        from src.sync_engine import SyncEngine
+        engine = SyncEngine.__new__(SyncEngine)
+        engine.cf_ids = {"category": "cf-cat"}
+        engine.teambition = MagicMock()
+        engine.teambition.scenariofieldconfig_id = "sfc-defect"
+        engine.config = {"classifier": {"similarity": {
+            "enabled": True, "incremental_days": 7}}}
+        classifier = MagicMock()
+        classifier.load_similarity_model.return_value = True
+        classifier.last_review_had_failure = False
+        classifier.last_review_failed_items = []
+        sim = MagicMock()
+        sim.sample_count = old_count
+        sim.is_stale.return_value = True
+
+        def _add(samples):
+            sim.sample_count = old_count + added
+
+        sim.add_samples.side_effect = _add
+        classifier._sim_classifier = sim
+        engine.classifier = classifier
+        engine._fetch_defect_samples = lambda *a, **k: [
+            (f"新增{i}", "A类") for i in range(added)]
+        flag = str(tmp_path / "ai_review_retry.flag")
+        monkeypatch.setattr(engine, "_review_retry_flag_path", lambda: flag)
+        return engine
+
+    def test_incremental_reviews_only_new_indices(self, tmp_path, monkeypatch):
+        engine = self._make_engine(tmp_path, monkeypatch, old_count=100,
+                                   added=2)
+        engine._train_similarity_classifier()
+        engine.classifier.review_training_data.assert_called_once_with(
+            target_indices=range(100, 102))
+
+    def test_initial_training_uses_sampling(self, tmp_path, monkeypatch):
+        """首次训练数据量大 → 默认抽检，不传全量参数"""
+        engine = self._make_engine(tmp_path, monkeypatch)
+        engine.classifier.load_similarity_model.return_value = False
+        engine._fetch_defect_samples = lambda *a, **k: [
+            (f"样本{i}", "A类") for i in range(50)]
+        engine._train_similarity_classifier()
+        engine.classifier.review_training_data.assert_called_once_with()
 
 
 class TestClassifierPipeline:

@@ -43,7 +43,9 @@ class ZentaoAdapter:
             server_status=server_status,
         )
 
-    def fetch_bug_detail(self, bug_id: int) -> ZentaoBug:
+    def fetch_bug_detail(self, bug_id: int,
+                         include_media: bool = True) -> ZentaoBug:
+        # 禅道详情接口本身不下载媒体；参数仅用于统一 SourceClient 签名
         return self._client.fetch_bug_detail(bug_id)
 
     def check_bug_has_vlns(self, bug_id: int) -> bool:

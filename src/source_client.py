@@ -35,8 +35,9 @@ class SourceClient(Protocol):
         """根据筛选条件获取缺陷列表，返回统一 ZentaoBug"""
         ...
 
-    def fetch_bug_detail(self, bug_id: int) -> ZentaoBug:
-        """获取单条缺陷完整详情"""
+    def fetch_bug_detail(self, bug_id: int,
+                         include_media: bool = True) -> ZentaoBug:
+        """获取单条缺陷完整详情（include_media=False 时跳过媒体下载）"""
         ...
 
     def check_bug_has_vlns(self, bug_id: int) -> bool:

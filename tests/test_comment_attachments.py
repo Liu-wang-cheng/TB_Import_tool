@@ -77,6 +77,26 @@ class TestBackfillExistingMedia:
         engine._sync_attachments.assert_not_called()
 
 
+class TestSourceDetailSignature:
+    """禅道详情接口需兼容统一 SourceClient 的 include_media 参数"""
+
+    def test_zentao_adapter_accepts_include_media(self):
+        from src.zentao_adapter import ZentaoAdapter
+        client = MagicMock()
+        client.fetch_bug_detail.return_value = ZentaoBug(id=1, title="t")
+        adapter = ZentaoAdapter(client)
+        detail = adapter.fetch_bug_detail(1, include_media=False)
+        assert detail.id == 1
+        client.fetch_bug_detail.assert_called_once_with(1)
+
+    def test_zentao_client_signature_has_include_media(self):
+        import inspect
+        from src.zentao_client import ZentaoClient
+        params = inspect.signature(
+            ZentaoClient.fetch_bug_detail).parameters
+        assert "include_media" in params
+
+
 class TestPlaceholderReplacement:
     """_replace_comment_media_with_placeholders"""
 
