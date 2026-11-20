@@ -1,6 +1,6 @@
 {
   "version": "2.8.30",
-  "sha256": "ff7071d9471b6342cd88d66d668b9c03d9e39103526489ae14c4d11f8a62aef6",
+  "sha256": "dff50fc69330770136afed65fbb26c7a650069dcee838461437ca8209ed25b6b",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.30/SmartDefectPlatform.zip",
   "release_date": "2026-11-20",
   "release_notes": "v2.8.30 改进/修复：移除免 UAC 计划任务，桌面快捷方式改为直接指向程序；exe 清单 requireAdministrator，启动时由 Windows 弹 UAC，已是管理员时不再提示。根因是旧计划任务默认 72 小时运行上限，Windows 到期后静默终止进程（无应用日志、无崩溃记录，任务计划程序事件 ID 329）。更新脚本重启改为直接 start（沿用管理员权限，不弹 UAC）；旧版计划任务在程序启动时自动清理。测试 679 个通过（排除需真实服务器的网络集成测试）",
