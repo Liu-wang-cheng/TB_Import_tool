@@ -1,4 +1,4 @@
-"""免 UAC 启动：计划任务与桌面快捷方式创建逻辑"""
+"""管理员权限启动：桌面快捷方式直指 exe，并清理旧版免 UAC 计划任务"""
 import os
 from unittest.mock import MagicMock
 
@@ -12,9 +12,12 @@ def launcher(monkeypatch, tmp_path):
     monkeypatch.setattr(gm, "_is_admin", lambda: True)
     calls = []
 
+    class R:
+        returncode = 0
+
     def fake_run(args, **kwargs):
         calls.append(args)
-        return MagicMock(returncode=0)
+        return R()
 
     monkeypatch.setattr(gm.subprocess, "run", fake_run)
 
@@ -26,21 +29,18 @@ def launcher(monkeypatch, tmp_path):
     lnk_holder = {}
 
     class _FakeLnk:
-        def __init__(self):
-            self.__dict__["saved"] = False
-
         def Save(self):
-            self.__dict__["saved"] = True
+            self.saved = True
 
     def fake_dispatch(name):
         shell = MagicMock()
         def create(path):
             lnk_holder["path"] = path
             fake = _FakeLnk()
+            fake.saved = False
             lnk_holder["lnk"] = fake
             return fake
         shell.CreateShortCut.side_effect = create
-        shell.SpecialFolders = MagicMock(return_value=str(desktop))
         return shell
 
     import win32com.client
@@ -48,66 +48,70 @@ def launcher(monkeypatch, tmp_path):
     return gm, calls, lnk_holder, desktop
 
 
-class TestElevatedLauncher:
-    def test_creates_task_and_shortcut(self, launcher):
+class TestDesktopShortcut:
+    def test_creates_shortcut_pointing_to_exe(self, launcher):
         gm, calls, lnk_holder, desktop = launcher
-        assert gm._ensure_elevated_launcher() is True
-        assert len(calls) == 1
-        args = calls[0]
-        assert args[:3] == ["schtasks", "/create", "/tn"]
-        assert "/RL" in args and "HIGHEST" in args
-        assert "/IT" in args and "/F" in args
-        assert any("SmartDefectPlatform_Elevated" in str(a) for a in args)
+        assert gm._ensure_desktop_shortcut() is True
+        lnk = lnk_holder["lnk"]
+        assert lnk.TargetPath == gm.sys.executable
+        assert lnk.Arguments == ""
+        assert lnk.WorkingDirectory == os.path.dirname(gm.sys.executable)
+        assert lnk.Save is not None and lnk.saved is True
         assert lnk_holder["path"].endswith(".lnk")
-        assert lnk_holder["lnk"].saved is True
 
-    def test_skips_when_shortcut_exists(self, launcher):
+    def test_migrates_old_schtasks_shortcut(self, launcher):
+        """旧快捷方式指向 schtasks，启动后应被改写为直接指向 exe"""
         gm, calls, lnk_holder, desktop = launcher
         (desktop / gm._ELEVATED_LNK).write_text("x", encoding="utf-8")
-        assert gm._ensure_elevated_launcher() is False
-        # 任务仍会刷新（/F 幂等），但不再重复创建快捷方式
-        assert len(calls) == 1
+        assert gm._ensure_desktop_shortcut() is False
+        assert lnk_holder["lnk"].TargetPath == gm.sys.executable
+        assert lnk_holder["lnk"].saved is True
 
     def test_noop_when_not_admin(self, monkeypatch):
         import gui_main as gm
         monkeypatch.setattr(gm, "_is_frozen", lambda: True)
         monkeypatch.setattr(gm, "_is_admin", lambda: False)
-        assert gm._ensure_elevated_launcher() is False
+        assert gm._ensure_desktop_shortcut() is False
 
     def test_noop_when_not_frozen(self, monkeypatch):
         import gui_main as gm
         monkeypatch.setattr(gm, "_is_frozen", lambda: False)
         monkeypatch.setattr(gm, "_is_admin", lambda: True)
-        assert gm._ensure_elevated_launcher() is False
+        assert gm._ensure_desktop_shortcut() is False
 
-    def test_schtasks_failure_returns_false(self, monkeypatch, tmp_path):
+
+class TestLegacyTaskCleanup:
+    def test_disables_running_task_and_removes_idle_task(self, launcher):
+        gm, calls, _, _ = launcher
+        gm._cleanup_legacy_elevated_task()
+        assert len(calls) == 1
+        cmd = " ".join(calls[0])
+        assert "Disable-ScheduledTask" in cmd       # 正在运行 → 只禁用
+        assert "Unregister-ScheduledTask" in cmd    # 未运行 → 删除
+        assert gm._ELEVATED_TASK in cmd
+
+    def test_errors_are_swallowed(self, monkeypatch):
         import gui_main as gm
-        monkeypatch.setattr(gm, "_is_frozen", lambda: True)
-        monkeypatch.setattr(gm, "_is_admin", lambda: True)
 
         def boom(*a, **k):
-            raise OSError("schtasks blocked by policy")
+            raise OSError("powershell missing")
 
         monkeypatch.setattr(gm.subprocess, "run", boom)
-        assert gm._ensure_elevated_launcher() is False
+        gm._cleanup_legacy_elevated_task()  # 不抛异常
 
 
-class TestShortcutNameAndFailure:
-    def test_shortcut_uses_plain_name(self, launcher):
-        gm, calls, lnk_holder, desktop = launcher
-        gm._ensure_elevated_launcher()
-        assert os.path.basename(lnk_holder["path"]) == "智能缺陷管理平台.lnk"
-
-    def test_schtasks_nonzero_does_not_create_shortcut(self, monkeypatch,
-                                                        tmp_path):
-        import gui_main as gm
-        monkeypatch.setattr(gm, "_is_frozen", lambda: True)
-        monkeypatch.setattr(gm, "_is_admin", lambda: True)
-        monkeypatch.setattr(gm.os.path, "expanduser", lambda p: str(tmp_path))
-        monkeypatch.setattr(gm.subprocess, "run",
-                            lambda *a, **k: MagicMock(returncode=1))
-        dispatch = MagicMock()
+class TestShortcutFailure:
+    def test_dispatch_failure_returns_false(self, launcher, monkeypatch):
+        gm, _, _, _ = launcher
         import win32com.client
-        monkeypatch.setattr(win32com.client, "Dispatch", dispatch)
-        assert gm._ensure_elevated_launcher() is False
-        dispatch.assert_not_called()
+
+        def boom(name):
+            raise OSError("no desktop")
+
+        monkeypatch.setattr(win32com.client, "Dispatch", boom)
+        assert gm._ensure_desktop_shortcut() is False
+
+    def test_shortcut_uses_plain_name(self, launcher):
+        gm, _, lnk_holder, _ = launcher
+        gm._ensure_desktop_shortcut()
+        assert os.path.basename(lnk_holder["path"]) == "智能缺陷管理平台.lnk"

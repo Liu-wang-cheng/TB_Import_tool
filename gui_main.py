@@ -367,8 +367,8 @@ def _repair_update_state() -> bool:
     return False
 
 
-# 免 UAC 启动：创建"最高权限"计划任务 + 桌面快捷方式
-_ELEVATED_TASK = "SmartDefectPlatform_Elevated"
+# 管理员权限启动：exe 清单 requireAdministrator，双击即由 Windows 弹 UAC
+_ELEVATED_TASK = "SmartDefectPlatform_Elevated"  # 仅用于清理 2.8.29 及更早版本的残留任务
 _ELEVATED_LNK = "智能缺陷管理平台.lnk"
 
 
@@ -380,31 +380,42 @@ def _is_admin() -> bool:
         return False
 
 
-def _ensure_elevated_launcher() -> bool:
-    """创建/更新最高权限计划任务与桌面快捷方式。
+def _cleanup_legacy_elevated_task():
+    """清理 2.8.29 及更早版本创建的免 UAC 计划任务。
 
-    程序本身 requireAdministrator，直接双击 exe 每次都会弹 UAC；
-    通过该计划任务启动可免 UAC（首次创建时已由管理员授权）。
-    返回是否新建了快捷方式（用于首次提示）。
+    旧版通过 HIGHEST 计划任务绕 UAC，任务默认 72 小时运行上限会把程序
+    静默终止。任务正在运行时只能禁用（删除会结束当前进程）；直接启动时
+    删除任务。桌面快捷方式随后改写为直接指向 exe。
+    """
+    script = (
+        "$t = Get-ScheduledTask -TaskName 'SmartDefectPlatform_Elevated' "
+        "-ErrorAction SilentlyContinue; "
+        "if ($t) { if ($t.State -eq 'Running') { "
+        "Disable-ScheduledTask -TaskName 'SmartDefectPlatform_Elevated' | Out-Null "
+        "} else { "
+        "Unregister-ScheduledTask -TaskName 'SmartDefectPlatform_Elevated' "
+        "-Confirm:$false "
+        "} }"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as e:
+        logger.debug("清理旧版计划任务失败: %s", e)
+
+
+def _ensure_desktop_shortcut() -> bool:
+    """创建/更新直接指向 exe 的桌面快捷方式。
+
+    exe 清单已声明 requireAdministrator，Windows 启动时会弹 UAC；
+    不再创建计划任务绕 UAC。返回是否新建了快捷方式（用于首次提示）。
     """
     if not _is_frozen() or not _is_admin():
         return False
     exe = sys.executable
-    try:
-        result = subprocess.run(
-            ["schtasks", "/create", "/tn", _ELEVATED_TASK,
-             "/tr", f'"{exe}"', "/sc", "ONCE", "/st", "23:59",
-             "/RL", "HIGHEST", "/IT", "/F"],
-            capture_output=True, timeout=20,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if getattr(result, "returncode", 0) != 0:
-            logger.warning("创建免 UAC 计划任务失败（策略限制？）")
-            return False
-    except Exception as e:
-        logger.warning("创建免 UAC 计划任务失败: %s", e)
-        return False
-
     lnk_path = os.path.join(
         os.path.expanduser("~"), "Desktop", _ELEVATED_LNK)
     existed = os.path.exists(lnk_path)
@@ -412,18 +423,16 @@ def _ensure_elevated_launcher() -> bool:
         from win32com.client import Dispatch
         shell = Dispatch("WScript.Shell")
         lnk = shell.CreateShortCut(lnk_path)
-        lnk.TargetPath = os.path.join(
-            os.environ.get("WINDIR", r"C:\Windows"), "System32",
-            "schtasks.exe")
-        lnk.Arguments = f'/run /tn "{_ELEVATED_TASK}"'
+        lnk.TargetPath = exe
+        lnk.Arguments = ""
         lnk.WorkingDirectory = os.path.dirname(exe)
         lnk.IconLocation = f"{exe},0"
-        lnk.Description = "以管理员权限启动（免 UAC 提示）"
+        lnk.Description = "智能缺陷管理平台（启动时需要管理员权限）"
         lnk.Save()
-        logger.info("已创建免 UAC 启动快捷方式: %s", lnk_path)
+        logger.info("已创建/更新桌面快捷方式: %s", lnk_path)
         return not existed
     except Exception as e:
-        logger.warning("创建免 UAC 快捷方式失败: %s", e)
+        logger.warning("创建桌面快捷方式失败: %s", e)
         return False
 
 
@@ -494,20 +503,24 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("智能缺陷管理平台")
 
-    # 免 UAC 启动：首次（管理员）运行创建计划任务与快捷方式
-    launcher_created = _ensure_elevated_launcher()
+    # 安全网：正常情况 exe 清单 requireAdministrator 已保证管理员权限，
+    # 已是管理员时不再弹任何提醒
+    if _is_frozen() and not _is_admin():
+        from gui.qt_compat import QMessageBox
+        QMessageBox.warning(
+            None, "需要管理员权限",
+            "本程序需要以管理员身份运行（VPN/虚拟网卡等功能需要）。\n\n"
+            "请右键点击程序或桌面快捷方式，选择「以管理员身份运行」。")
+        return
+
+    # 2.8.30 起不再使用免 UAC 计划任务：清理旧任务，
+    # 桌面快捷方式直接指向 exe（启动时由 Windows 弹 UAC）
+    if _is_frozen() and _is_admin():
+        _cleanup_legacy_elevated_task()
+        _ensure_desktop_shortcut()
 
     window = MainWindow()
     window.show()
-
-    if launcher_created:
-        from gui.qt_compat import QMessageBox, QTimer
-        QTimer.singleShot(1500, lambda: QMessageBox.information(
-            window, "免 UAC 启动",
-            "已创建桌面快捷方式「智能缺陷管理平台」。\n\n"
-            "以后请使用该快捷方式启动，将不再弹出 UAC 提示。\n"
-            "（VPN 功能需要管理员权限，普通启动方式仍会每次询问）"))
-
     sys.exit(exec_app(app))
 
 

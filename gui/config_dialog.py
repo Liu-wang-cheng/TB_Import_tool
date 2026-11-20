@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 def resolve_config_dir(config_dir: str) -> str:
     """把相对 config_dir 解析到程序目录（不受启动时工作目录影响）。
 
-    通过免 UAC 计划任务启动时，进程工作目录可能是 System32，
+    通过桌面快捷方式等方式启动时，进程工作目录可能不是程序目录，
     相对路径会读不到 configs/，导致配置对话框整页空白。
     """
     if os.path.isabs(config_dir):

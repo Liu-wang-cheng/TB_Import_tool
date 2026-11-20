@@ -261,16 +261,10 @@ if errorlevel 1 (
 )
 echo.
 
-REM 启动新版本（优先走免 UAC 计划任务，存在且可运行时不再弹 UAC）
+REM 启动新版本：更新 bat 由管理员权限的当前进程启动，
+REM start 出的子进程继承管理员权限，不会再弹 UAC
 echo 正在启动新版本...
-schtasks /query /tn "SmartDefectPlatform_Elevated" >nul 2>&1
-if errorlevel 1 goto :plain_start
-schtasks /run /tn "SmartDefectPlatform_Elevated" >nul 2>&1
-if errorlevel 1 goto :plain_start
-goto :started
-:plain_start
 start "" "%EXE_NAME%"
-:started
 
 REM 等待新版本启动，然后清理旧目录（多次重试，杀毒扫描可能锁定）
 timeout /t 3 /nobreak >nul
@@ -322,12 +316,6 @@ goto :cleanup
 :restart_old
 echo.
 echo 正在启动现有版本...
-schtasks /query /tn "SmartDefectPlatform_Elevated" >nul 2>&1
-if errorlevel 1 goto :plain_start_old
-schtasks /run /tn "SmartDefectPlatform_Elevated" >nul 2>&1
-if errorlevel 1 goto :plain_start_old
-goto :cleanup
-:plain_start_old
 if exist "%EXE_NAME%" start "" "%EXE_NAME%"
 goto :cleanup
 

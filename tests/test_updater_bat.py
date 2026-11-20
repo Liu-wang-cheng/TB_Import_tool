@@ -96,6 +96,12 @@ class TestUpdaterBatResilience:
         assert "logs\\update.log" in bat
         assert "call :log" in bat
 
+    def test_no_scheduled_task_dependency(self):
+        """2.8.30 起不再依赖计划任务启动新版本"""
+        bat = self._bat()
+        assert "schtasks" not in bat
+        assert 'start "" "%EXE_NAME%"' in bat
+
     def test_pause_on_errors_keeps_window_visible(self):
         bat = self._bat()
         assert "timeout /t 20 /nobreak" in bat
