@@ -1072,15 +1072,24 @@ class ZentaoClient:
         return len(self.extract_vlns_numbers(bug_id)) > 0
 
     def extract_vlns_numbers(self, bug_id: int) -> List[str]:
-        """从 Bug 备注/历史记录中提取 VLNS/CPAX 编号列表（去重）"""
+        """从 Bug 当前标题和评论中提取 VLNS/CPAX 编号列表（去重）。
+
+        不扫描 actions.history 的 old/new：复制缺陷后修改标题时，编辑历史
+        会残留已从标题删除的旧 VLNS 标记，导致新缺陷被误判为已导入。
+        """
         try:
             bug_data = self._get_bug_raw(bug_id, retry_on_401=False)
             if not bug_data:
                 return []
+            matches = re.findall(
+                r'(?:VLNS|CPAX)-(\d+)', str(bug_data.get("title") or ""))
             actions = bug_data.get("actions", [])
-            if not isinstance(actions, list):
-                return []
-            matches = re.findall(r'(?:VLNS|CPAX)-(\d+)', str(actions))
+            if isinstance(actions, list):
+                for act in actions:
+                    if not isinstance(act, dict):
+                        continue
+                    comment = act.get("comment") or ""
+                    matches += re.findall(r'(?:VLNS|CPAX)-(\d+)', str(comment))
             return list(dict.fromkeys(matches))  # 去重保序
         except Exception as e:
             logger.warning(
