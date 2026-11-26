@@ -1,6 +1,6 @@
 {
   "version": "2.8.31",
-  "sha256": "dff50fc69330770136afed65fbb26c7a650069dcee838461437ca8209ed25b6b",
+  "sha256": "be77b4c5311511198720409d9541b7bad066ae1c0c59a423ae9a2b1f1b785d13",
   "download_url": "https://github.com/Liu-wang-cheng/TB_Import_tool/releases/download/v2.8.31/SmartDefectPlatform.zip",
   "release_date": "2026-11-26",
   "release_notes": "v2.8.31 修复：复制禅道缺陷后修改标题时，编辑历史中残留的旧 VLNS/CPAX 标记导致新缺陷被误判为已导入（如 Bug#67053 被误判为 67047 的重复单）。现在去重只认当前标题和评论内容，不再扫描编辑历史 old/new。测试 684 个通过（排除需真实服务器的网络集成测试）",
